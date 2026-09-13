@@ -100,17 +100,18 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions'
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
   { id: 'listings' as Page, label: 'Listings', icon: Building },
+  { id: 'analytics' as Page, label: 'Analytics', icon: BarChart3 },
+  { id: 'predictions' as Page, label: 'Predictions', icon: TrendingUp },
   { id: 'portfolio' as Page, label: 'Portfolio', icon: Briefcase },
   { id: 'watchlist' as Page, label: 'Watchlist', icon: Bookmark },
   { id: 'deals' as Page, label: 'Deals', icon: Zap },
   { id: 'alerts' as Page, label: 'Alerts', icon: Bell },
   { id: 'yield' as Page, label: 'Yield Calc', icon: Calculator },
-  // { id: 'mortgage' as Page, label: 'Mortgage', icon: ... }, // hidden per spec
 ]
 
 function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
@@ -1352,6 +1353,329 @@ function MortgageSimulator() {
   )
 }
 
+// ─── Market Analytics ────────────────────────────────────────────────────────
+
+function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
+  const [data, setData] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(true)
+  const { format } = useCurrency()
+
+  useEffect(() => {
+    safeFetch('/api/sqftlab/market/analytics', null).then(d => { setData(d); setLoading(false) })
+  }, [])
+
+  if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading market analytics...</div>
+  if (!data) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>No data available</div>
+
+  const summary = data.summary as Record<string, number>
+  const topGainers = (data.topGainers as Array<Record<string, unknown>>)?.slice(0, 5) || []
+  const topLosers = (data.topLosers as Array<Record<string, unknown>>)?.slice(0, 5) || []
+  const highestYield = (data.highestYield as Array<Record<string, unknown>>)?.slice(0, 5) || []
+  const mostActive = (data.mostActive as Array<Record<string, unknown>>)?.slice(0, 5) || []
+  const priceBuckets = (data.priceBuckets as Array<Record<string, unknown>>) || []
+
+  return (
+    <div className="max-w-[1280px] mx-auto px-4 py-6">
+      <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--ink)' }}>Market Analytics</h2>
+      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>Real-time UAE property market intelligence from DLD, ADREC, and live listings</p>
+
+      {/* KPI Row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'Communities', value: String(summary.communities || 0), color: 'var(--ink)' },
+          { label: 'Avg AED/sqft', value: format(summary.avgPsf || 0), color: 'var(--b600)' },
+          { label: 'Avg Yield', value: `${summary.avgYield || 0}%`, color: 'var(--up)' },
+          { label: '30d Change', value: `${(summary.avgPriceChange30d || 0) > 0 ? '+' : ''}${summary.avgPriceChange30d || 0}%`, color: (summary.avgPriceChange30d || 0) >= 0 ? 'var(--up)' : 'var(--down)' },
+        ].map((s, i) => (
+          <div key={i} className="p-4 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--ink-5)' }}>{s.label}</div>
+            <div className="text-xl font-bold" style={{ fontFamily: 'var(--font-data)', color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6 mb-6">
+        {/* Price Distribution */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Price Distribution (AED/sqft)</h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={priceBuckets}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.06)" />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94A3B8', fontFamily: 'JetBrains Mono' }} />
+              <YAxis tick={{ fontSize: 10, fill: '#94A3B8', fontFamily: 'JetBrains Mono' }} />
+              <Tooltip contentStyle={{ borderRadius: 14, border: '1px solid rgba(255,255,255,0.92)', fontSize: 12, background: 'rgba(255,255,255,0.74)', backdropFilter: 'blur(16px)' }} />
+              <Bar dataKey="count" fill="#2563EB" radius={[4, 4, 0, 0]} name="Communities" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Top Performers */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Top Gainers (30d)</h3>
+          <div className="space-y-2">
+            {topGainers.map((c, i) => (
+              <button key={i} onClick={() => { setSelectedCommunity(c.slug as string); setPage('community') }}
+                className="flex items-center justify-between w-full py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
+                  <span className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(c.emirate as string).replace('_', ' ')}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>+{c.priceChange30d as number}%</span>
+                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{format(c.medianAedSqft as number)}/sqft</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6 mb-6">
+        {/* Highest Yield */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Highest Rental Yield</h3>
+          <div className="space-y-2">
+            {highestYield.map((c, i) => (
+              <button key={i} onClick={() => { setSelectedCommunity(c.slug as string); setPage('community') }}
+                className="flex items-center justify-between w-full py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
+                <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
+                <div className="text-right">
+                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{c.grossYieldPct as number}%</span>
+                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{format(c.medianAnnualRentAed as number)}/yr</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Most Active */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Most Active (30d Transactions)</h3>
+          <div className="space-y-2">
+            {mostActive.map((c, i) => (
+              <button key={i} onClick={() => { setSelectedCommunity(c.slug as string); setPage('community') }}
+                className="flex items-center justify-between w-full py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
+                <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
+                <div className="text-right">
+                  <span className="text-sm font-bold" style={{ color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>{c.transactionCount30d as number} txns</span>
+                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{c.totalTransactions as number} total</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Losers */}
+      <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+        <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Underperformers (30d)</h3>
+        <div className="grid md:grid-cols-2 gap-3">
+          {topLosers.map((c, i) => (
+            <button key={i} onClick={() => { setSelectedCommunity(c.slug as string); setPage('community') }}
+              className="flex items-center justify-between py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
+                <span className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(c.emirate as string).replace('_', ' ')}</span>
+              </div>
+              <span className="text-sm font-bold" style={{ color: 'var(--down)', fontFamily: 'var(--font-data)' }}>{c.priceChange30d as number}%</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Price Predictions ──────────────────────────────────────────────────────
+
+function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
+  const [data, setData] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(true)
+  const { format } = useCurrency()
+
+  useEffect(() => {
+    safeFetch('/api/sqftlab/predictions', null).then(d => { setData(d); setLoading(false) })
+  }, [])
+
+  if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading price predictions...</div>
+  if (!data) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>No prediction data available</div>
+
+  const predictions = (data.predictions as Array<Record<string, unknown>>) || []
+  const summary = data.summary as Record<string, number>
+  const strongBuys = (data.strongBuys as Array<Record<string, unknown>>) || []
+  const topGrowth = (data.topGrowth as Array<Record<string, unknown>>) || []
+
+  const getRecColor = (rec: string) => {
+    if (rec === 'Strong Buy') return 'var(--up)'
+    if (rec === 'Buy') return 'var(--b600)'
+    if (rec === 'Hold') return 'var(--warn)'
+    if (rec === 'Sell') return 'var(--down)'
+    return 'var(--ink-5)'
+  }
+
+  const getRecBg = (rec: string) => {
+    if (rec === 'Strong Buy') return 'rgba(34,197,94,0.1)'
+    if (rec === 'Buy') return 'rgba(37,99,235,0.1)'
+    if (rec === 'Hold') return 'rgba(234,179,8,0.1)'
+    if (rec === 'Sell') return 'rgba(239,68,68,0.1)'
+    return 'var(--g3)'
+  }
+
+  return (
+    <div className="max-w-[1280px] mx-auto px-4 py-6">
+      <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--ink)' }}>Price Predictions</h2>
+      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>AI-powered 6-month and 12-month price forecasts for UAE communities</p>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'Strong Buys', value: String(summary.strongBuys || 0), color: 'var(--up)', bg: 'rgba(34,197,94,0.08)' },
+          { label: 'Buys', value: String(summary.buys || 0), color: 'var(--b600)', bg: 'rgba(37,99,235,0.08)' },
+          { label: 'Holds', value: String(summary.holds || 0), color: 'var(--warn)', bg: 'rgba(234,179,8,0.08)' },
+          { label: 'Analyzed', value: String(summary.totalAnalyzed || 0), color: 'var(--ink)', bg: 'var(--g3)' },
+        ].map((s, i) => (
+          <div key={i} className="p-4 rounded-[18px]" style={{ background: s.bg, border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--ink-5)' }}>{s.label}</div>
+            <div className="text-2xl font-bold" style={{ fontFamily: 'var(--font-data)', color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6 mb-6">
+        {/* Strong Buy Recommendations */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--up)' }}>
+            <Zap size={18} /> Top Recommendations
+          </h3>
+          <div className="space-y-3">
+            {strongBuys.map((p, i) => (
+              <button key={i} onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}
+                className="w-full p-4 rounded-[14px] text-left transition-all hover:translate-y-[-2px]"
+                style={{ background: 'var(--g3)', border: '1px solid var(--gb)' }}>
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="font-semibold" style={{ color: 'var(--ink)' }}>{p.community as string}</div>
+                    <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
+                  </div>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
+                    {p.recommendation as string}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(p.currentPsf as number)}</div>
+                    <div style={{ color: 'var(--ink-5)' }}>Current/sqft</div>
+                  </div>
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>+{p.forecastChange6m as number}%</div>
+                    <div style={{ color: 'var(--ink-5)' }}>6m forecast</div>
+                  </div>
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>{p.confidence as number}%</div>
+                    <div style={{ color: 'var(--ink-5)' }}>Confidence</div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Top Growth Forecast */}
+        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+          <h3 className="font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--b600)' }}>
+            <TrendingUp size={18} /> Highest Growth Forecast
+          </h3>
+          <div className="space-y-3">
+            {topGrowth.map((p, i) => (
+              <button key={i} onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}
+                className="w-full p-4 rounded-[14px] text-left transition-all hover:translate-y-[-2px]"
+                style={{ background: 'var(--g3)', border: '1px solid var(--gb)' }}>
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="font-semibold" style={{ color: 'var(--ink)' }}>{p.community as string}</div>
+                    <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
+                  </div>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
+                    {p.recommendation as string}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(p.currentPsf as number)}</div>
+                    <div style={{ color: 'var(--ink-5)' }}>Current/sqft</div>
+                  </div>
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>+{p.forecastChange12m as number}%</div>
+                    <div style={{ color: 'var(--ink-5)' }}>12m forecast</div>
+                  </div>
+                  <div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{p.yield as number}%</div>
+                    <div style={{ color: 'var(--ink-5)' }}>Yield</div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* All Predictions Table */}
+      <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+        <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>All Community Predictions</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b" style={{ borderColor: 'var(--ink-6)' }}>
+                <th className="pb-2 text-left font-medium" style={{ color: 'var(--ink-5)' }}>Community</th>
+                <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>Current</th>
+                <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>6m Forecast</th>
+                <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>12m Forecast</th>
+                <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>Yield</th>
+                <th className="pb-2 text-center font-medium" style={{ color: 'var(--ink-5)' }}>Confidence</th>
+                <th className="pb-2 text-center font-medium" style={{ color: 'var(--ink-5)' }}>Recommendation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {predictions.map((p, i) => (
+                <tr key={i} className="border-b hover:bg-blue-50/30 cursor-pointer" style={{ borderColor: 'var(--ink-6)' }}
+                  onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}>
+                  <td className="py-3">
+                    <div className="font-medium" style={{ color: 'var(--ink)' }}>{p.community as string}</div>
+                    <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
+                  </td>
+                  <td className="py-3 text-right" style={{ fontFamily: 'var(--font-data)' }}>{format(p.currentPsf as number)}</td>
+                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.forecastChange6m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
+                    +{p.forecastChange6m as number}%
+                  </td>
+                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.forecastChange12m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
+                    +{p.forecastChange12m as number}%
+                  </td>
+                  <td className="py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{p.yield as number}%</td>
+                  <td className="py-3 text-center">
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--g3)', fontFamily: 'var(--font-data)' }}>{p.confidence as number}%</span>
+                  </td>
+                  <td className="py-3 text-center">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
+                      {p.recommendation as string}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-4 p-4 rounded-[14px]" style={{ background: 'var(--g3)', borderLeft: '3px solid var(--warn)' }}>
+        <p className="text-xs" style={{ color: 'var(--ink-3)' }}>
+          Predictions are based on historical price momentum, rental yield, transaction volume, and neighbourhood scores.
+          These are algorithmic forecasts, not financial advice. Past performance does not guarantee future results.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 
 function AppInner() {
@@ -1375,6 +1699,8 @@ function AppInner() {
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
       {page === 'about' && <AboutPage />}
+      {page === 'analytics' && <MarketAnalytics setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'predictions' && <PricePredictions setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         © 2026 sqftLab · UAE Property Data Intelligence Platform · Data from DLD, ADREC, Bayut, PropertyFinder, Dubizzle
       </footer>

@@ -562,6 +562,242 @@ app.get('/sqftlab/alerts', async (c) => {
   return c.json({ alerts })
 })
 
+// ─── Market Analytics ────────────────────────────────────────────────────────
+
+app.get('/sqftlab/market/analytics', async (c) => {
+  const [communities, transactions, listings] = await Promise.all([
+    prisma.community.findMany({
+      orderBy: { medianAedSqft: 'desc' },
+      select: {
+        id: true, nameEn: true, slug: true, emirate: true,
+        medianAedSqft: true, medianAnnualRentAed: true, grossYieldPct: true,
+        priceChange30d: true, priceChange1y: true, transactionCount30d: true,
+        totalTransactions: true,
+      },
+    }),
+    prisma.transaction.groupBy({
+      by: ['transactionType'],
+      _count: true,
+      _avg: { priceAed: true, pricePerSqft: true },
+    }),
+    prisma.listing.groupBy({
+      by: ['purpose', 'propertyType'],
+      _count: true,
+      _avg: { priceAed: true, pricePerSqft: true },
+    }),
+  ])
+
+  const totalTransactions = communities.reduce((s, c) => s + c.totalTransactions, 0)
+  const totalTx30d = communities.reduce((s, c) => s + c.transactionCount30d, 0)
+  const avgPsf = Math.round(communities.reduce((s, c) => s + c.medianAedSqft, 0) / communities.length)
+  const avgYield = Math.round(communities.reduce((s, c) => s + c.grossYieldPct, 0) / communities.length * 100) / 100
+  const avgPriceChange30d = Math.round(communities.reduce((s, c) => s + c.priceChange30d, 0) / communities.length * 100) / 100
+  const avgPriceChange1y = Math.round(communities.reduce((s, c) => s + c.priceChange1y, 0) / communities.length * 100) / 100
+
+  const topGainers = [...communities].sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 10)
+  const topLosers = [...communities].sort((a, b) => a.priceChange30d - b.priceChange30d).slice(0, 10)
+  const highestYield = [...communities].sort((a, b) => b.grossYieldPct - a.grossYieldPct).slice(0, 10)
+  const mostActive = [...communities].sort((a, b) => b.transactionCount30d - a.transactionCount30d).slice(0, 10)
+
+  const priceBuckets = [
+    { label: '< AED 1K', min: 0, max: 1000, count: 0 },
+    { label: 'AED 1K-1.5K', min: 1000, max: 1500, count: 0 },
+    { label: 'AED 1.5K-2K', min: 1500, max: 2000, count: 0 },
+    { label: 'AED 2K-3K', min: 2000, max: 3000, count: 0 },
+    { label: 'AED 3K-5K', min: 3000, max: 5000, count: 0 },
+    { label: 'AED 5K+', min: 5000, max: Infinity, count: 0 },
+  ]
+  communities.forEach(c => {
+    const bucket = priceBuckets.find(b => c.medianAedSqft >= b.min && c.medianAedSqft < b.max)
+    if (bucket) bucket.count++
+  })
+
+  return c.json({
+    summary: {
+      communities: communities.length,
+      totalTransactions,
+      totalTx30d,
+      totalListings: listings.reduce((s, l) => s + l._count, 0),
+      avgPsf,
+      avgYield,
+      avgPriceChange30d,
+      avgPriceChange1y,
+    },
+    topGainers,
+    topLosers,
+    highestYield,
+    mostActive,
+    priceBuckets,
+    transactionTypes: transactions.map(t => ({
+      type: t.transactionType,
+      count: t._count,
+      avgPrice: Math.round(t._avg.priceAed ?? 0),
+      avgPsf: Math.round(t._avg.pricePerSqft ?? 0),
+    })),
+    listingsByType: listings.map(l => ({
+      purpose: l.purpose,
+      propertyType: l.propertyType,
+      count: l._count,
+      avgPrice: Math.round(l._avg.priceAed ?? 0),
+    })),
+  })
+})
+
+// ─── Price Predictions ──────────────────────────────────────────────────────
+
+app.get('/sqftlab/predictions', async (c) => {
+  const communities = await prisma.community.findMany({
+    orderBy: { medianAedSqft: 'desc' },
+    select: {
+      id: true, nameEn: true, slug: true, emirate: true,
+      medianAedSqft: true, medianAnnualRentAed: true, grossYieldPct: true,
+      priceChange30d: true, priceChange1y: true, transactionCount30d: true,
+      totalTransactions: true, neighbourhoodScore: true,
+    },
+  })
+
+  const predictions = communities.map(c => {
+    const momentum = c.priceChange30d * 12
+    const historicalGrowth = c.priceChange1y
+    const yieldSignal = c.grossYieldPct > 7 ? 1 : c.grossYieldPct > 5 ? 0 : -1
+    const volumeSignal = c.transactionCount30d > 100 ? 1 : c.transactionCount30d > 50 ? 0 : -1
+    const scoreSignal = c.neighbourhoodScore > 70 ? 1 : c.neighbourhoodScore > 50 ? 0 : -1
+
+    const rawScore = momentum * 0.3 + historicalGrowth * 0.4 + yieldSignal * 5 + volumeSignal * 3 + scoreSignal * 2
+    const confidence = Math.min(95, Math.max(45, 60 + c.transactionCount30d * 0.1 + (c.totalTransactions > 100 ? 10 : 0)))
+
+    const forecast6m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 0.5) * 100) / 100
+    const forecast12m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 1.0) * 100) / 100
+    const forecastChange6m = Math.round((forecast6m / c.medianAedSqft - 1) * 10000) / 100
+    const forecastChange12m = Math.round((forecast12m / c.medianAedSqft - 1) * 10000) / 100
+
+    let recommendation: string
+    if (forecastChange6m > 5 && c.grossYieldPct > 6) recommendation = 'Strong Buy'
+    else if (forecastChange6m > 2 && c.grossYieldPct > 5) recommendation = 'Buy'
+    else if (forecastChange6m > -2) recommendation = 'Hold'
+    else if (forecastChange6m > -5) recommendation = 'Sell'
+    else recommendation = 'Avoid'
+
+    const riskLevel = confidence > 75 ? 'Low' : confidence > 60 ? 'Medium' : 'High'
+
+    return {
+      community: c.nameEn,
+      slug: c.slug,
+      emirate: c.emirate,
+      currentPsf: c.medianAedSqft,
+      forecast6m,
+      forecast12m,
+      forecastChange6m,
+      forecastChange12m,
+      confidence: Math.round(confidence),
+      recommendation,
+      riskLevel,
+      momentum: Math.round(momentum * 100) / 100,
+      yield: c.grossYieldPct,
+      volume: c.transactionCount30d,
+      score: c.neighbourhoodScore,
+    }
+  })
+
+  const strongBuys = predictions.filter(p => p.recommendation === 'Strong Buy')
+  const buys = predictions.filter(p => p.recommendation === 'Buy')
+  const holds = predictions.filter(p => p.recommendation === 'Hold')
+
+  return c.json({
+    predictions,
+    summary: {
+      strongBuys: strongBuys.length,
+      buys: buys.length,
+      holds: holds.length,
+      totalAnalyzed: predictions.length,
+    },
+    strongBuys: strongBuys.slice(0, 5),
+    topGrowth: [...predictions].sort((a, b) => b.forecastChange12m - a.forecastChange12m).slice(0, 5),
+    topYield: [...predictions].sort((a, b) => b.yield - a.yield).slice(0, 5),
+  })
+})
+
+// ─── Transaction Analytics ──────────────────────────────────────────────────
+
+app.get('/sqftlab/market/transactions', async (c) => {
+  const communities = await prisma.community.findMany({
+    select: { id: true, nameEn: true, slug: true },
+  })
+
+  const transactionsByType = await prisma.transaction.groupBy({
+    by: ['transactionType'],
+    _count: true,
+    _avg: { priceAed: true, pricePerSqft: true },
+    _sum: { priceAed: true },
+  })
+
+  const transactionsByProperty = await prisma.transaction.groupBy({
+    by: ['propertyType'],
+    _count: true,
+    _avg: { priceAed: true, pricePerSqft: true },
+  })
+
+  const transactionsByBeds = await prisma.transaction.groupBy({
+    by: ['beds'],
+    _count: true,
+    _avg: { priceAed: true, pricePerSqft: true },
+    orderBy: { beds: 'asc' },
+  })
+
+  const recentTransactions = await prisma.transaction.findMany({
+    orderBy: { transactionDate: 'desc' },
+    take: 50,
+    include: { community: { select: { nameEn: true, slug: true } } },
+  })
+
+  const priceRanges = [
+    { label: '< AED 500K', min: 0, max: 500000, count: 0, totalValue: 0 },
+    { label: 'AED 500K-1M', min: 500000, max: 1000000, count: 0, totalValue: 0 },
+    { label: 'AED 1M-2M', min: 1000000, max: 2000000, count: 0, totalValue: 0 },
+    { label: 'AED 2M-5M', min: 2000000, max: 5000000, count: 0, totalValue: 0 },
+    { label: 'AED 5M-10M', min: 5000000, max: 10000000, count: 0, totalValue: 0 },
+    { label: 'AED 10M+', min: 10000000, max: Infinity, count: 0, totalValue: 0 },
+  ]
+
+  recentTransactions.forEach(t => {
+    const bucket = priceRanges.find(r => t.priceAed >= r.min && t.priceAed < r.max)
+    if (bucket) {
+      bucket.count++
+      bucket.totalValue += t.priceAed
+    }
+  })
+
+  return c.json({
+    summary: {
+      totalTransactions: recentTransactions.length,
+      totalValue: priceRanges.reduce((s, r) => s + r.totalValue, 0),
+      avgPrice: Math.round(recentTransactions.reduce((s, t) => s + t.priceAed, 0) / recentTransactions.length),
+      avgPsf: Math.round(recentTransactions.reduce((s, t) => s + t.pricePerSqft, 0) / recentTransactions.length),
+    },
+    byType: transactionsByType.map(t => ({
+      type: t.transactionType,
+      count: t._count,
+      avgPrice: Math.round(t._avg.priceAed ?? 0),
+      avgPsf: Math.round(t._avg.pricePerSqft ?? 0),
+      totalValue: Number(t._sum.priceAed ?? 0),
+    })),
+    byProperty: transactionsByProperty.map(t => ({
+      type: t.propertyType,
+      count: t._count,
+      avgPrice: Math.round(t._avg.priceAed ?? 0),
+      avgPsf: Math.round(t._avg.pricePerSqft ?? 0),
+    })),
+    byBeds: transactionsByBeds.map(t => ({
+      beds: t.beds,
+      count: t._count,
+      avgPrice: Math.round(t._avg.priceAed ?? 0),
+      avgPsf: Math.round(t._avg.pricePerSqft ?? 0),
+    })),
+    priceRanges,
+    recent: recentTransactions.slice(0, 20),
+  })
+})
+
 // ─── Stats for dashboard ─────────────────────────────────────────────────────
 
 app.get('/sqftlab/stats', async (c) => {
