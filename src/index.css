@@ -1,108 +1,43 @@
-@import "tailwindcss";
+@import "./styles/tokens.css";
 
-@custom-variant dark (&:is(.dark *));
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
 
-@plugin "tailwindcss-animate";
-
-/* ─── sqftLab Design Tokens — Blue & White Glass ──────────────────────────── */
-
-:root {
-  --background: #EFF6FF;
-  --foreground: #0F172A;
-  --card: #FFFFFF;
-  --card-foreground: #0F172A;
-  --popover: #FFFFFF;
-  --popover-foreground: #0F172A;
-  --primary: #1E40AF;
-  --primary-foreground: #FFFFFF;
-  --secondary: #DBEAFE;
-  --secondary-foreground: #1E40AF;
-  --muted: #F1F5F9;
-  --muted-foreground: #64748B;
-  --accent: #3B82F6;
-  --accent-foreground: #FFFFFF;
-  --destructive: #DC2626;
-  --border: #CBD5E1;
-  --input: #E2E8F0;
-  --ring: #3B82F6;
-  --radius: 0.75rem;
-
-  /* sqftLab brand tokens */
-  --sqftlab-blue: #1E40AF;
-  --sqftlab-blue-light: #3B82F6;
-  --sqftlab-blue-pale: #DBEAFE;
-  --sqftlab-navy: #0F172A;
-  --sqftlab-white: #FFFFFF;
-  --sqftlab-surface: #F8FAFC;
-  --sqftlab-glass: rgba(255, 255, 255, 0.80);
-  --sqftlab-glass-border: rgba(148, 163, 184, 0.20);
-  --sqftlab-success: #059669;
-  --sqftlab-danger: #DC2626;
-  --sqftlab-ink: #0F172A;
-  --sqftlab-muted: #64748B;
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+  background: var(--page);
+  background-image: var(--grad-top), var(--grad-right), var(--grad-left);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
 }
 
-@theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-}
+/* ── Glass utilities ── */
+.g1 { background: var(--g1); backdrop-filter: var(--gblur-nav); -webkit-backdrop-filter: var(--gblur-nav); border: 1px solid var(--gb); border-radius: var(--r); box-shadow: var(--sh-card); }
+.g2 { background: var(--g2); backdrop-filter: var(--gblur); -webkit-backdrop-filter: var(--gblur); border: 1px solid var(--gb); border-radius: var(--r); box-shadow: var(--sh-card); }
+.g3 { background: var(--g3); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.75); border-radius: var(--r-md); box-shadow: var(--sh-sm); }
+.g4 { background: var(--g4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.60); border-radius: var(--r-sm); }
 
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    scroll-behavior: smooth;
-  }
-}
+/* ── Data font ── */
+.mono { font-family: var(--font-data); }
 
-/* ─── Data Typography ─────────────────────────────────────────────────────
-   Spec §2.3: "Inter for UI labels, Georgia for wordmark/display only"
-   JetBrains Mono for data labels and figures (AED/sqft, yield %)
-   ──────────────────────────────────────────────────────────────────────── */
+/* ── Skeleton ── */
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.sk { background: linear-gradient(90deg, rgba(255,255,255,0.42) 25%, rgba(255,255,255,0.72) 50%, rgba(255,255,255,0.42) 75%); background-size: 200% 100%; animation: shimmer 1.6s infinite; border-radius: 6px; }
 
-.font-wordmark {
-  font-family: Georgia, 'Times New Roman', serif;
-}
+/* ── Live pulse ── */
+@keyframes pdot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.3; transform: scale(0.78); } }
+.live-dot { width: 6px; height: 6px; background: var(--up); border-radius: 50%; display: inline-block; animation: pdot 2.2s ease-in-out infinite; }
 
-.font-mono-data {
-  font-family: 'JetBrains Mono', monospace;
-}
+/* ── Toast ── */
+@keyframes toast-in { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
-/* ─── Single entrance animation ───────────────────────────────────────────
-   Spec §2.5: "one entrance animation on the heatmap (500ms opacity fade)"
-   ──────────────────────────────────────────────────────────────────────── */
+/* ── Score ring animation ── */
+@keyframes score-draw { from { stroke-dashoffset: 314; } to { stroke-dashoffset: var(--target-offset); } }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.animate-fade-in {
-  animation: fadeIn 500ms ease-out forwards;
-}
+::selection { background: rgba(37,99,235,0.14); color: var(--ink); }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(37,99,235,0.22); border-radius: 2px; }

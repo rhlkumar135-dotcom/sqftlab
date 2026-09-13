@@ -1,0 +1,1100 @@
+sqftLab.com — Full Product Specification v3.0
+
+UAE Property Data Intelligence Platform
+
+Domain: sqftlab.com · Updated: September 2026
+Stack: Next.js 14 App Router · Railway PostgreSQL + Redis · TypeScript Strict
+
+
+
+THE NORTH STAR — READ BEFORE EVERYTHING ELSE
+
+sqftLab is NOT a property listing portal.
+sqftLab is a data intelligence platform.
+
+
+The single most important feature — seen in the product screenshot —
+is the PROPERTY INTELLIGENCE REPORT. When a user looks at any property
+in the UAE, sqftLab runs this analysis automatically:
+
+
+TRANSACTION DATA → COMPS → AED/SQFT → FAIR VALUE
+  → RENTAL YIELD → TREND → INVESTMENT SCORE → VERDICT
+
+This is the pipeline that defines sqftLab. Every page, every feature,
+every design decision serves this mission: tell the user what a
+property is actually worth and whether it is a good investment —
+based on government transaction data, not agent estimates.
+
+
+Competitors (Bayut, PropertyFinder, Dubizzle) show listings.
+sqftLab runs the analysis. That is the difference.
+
+
+
+PART 1 — DESIGN SYSTEM
+
+1.1 Colour Palette
+
+:root {
+  /* ── Page ── */
+  --page:          #EEF2F7;
+  --page-2:        #E8EDF5;
+
+  /* ── Ambient gradients on body ── */
+  --grad-top:   radial-gradient(ellipse 90% 65% at 25% 0%,
+                  rgba(37,99,235,0.11) 0%, transparent 62%);
+  --grad-right: radial-gradient(ellipse 55% 50% at 88% 12%,
+                  rgba(99,102,241,0.07) 0%, transparent 58%);
+  --grad-left:  radial-gradient(ellipse 50% 42% at 8% 85%,
+                  rgba(14,165,233,0.06) 0%, transparent 52%);
+
+  /* ── Glass surfaces (4 levels) ── */
+  --g1: rgba(248,250,255,0.90);  /* nav */
+  --g2: rgba(255,255,255,0.74);  /* primary cards */
+  --g3: rgba(255,255,255,0.56);  /* sub-cards, panels */
+  --g4: rgba(255,255,255,0.36);  /* section backgrounds */
+  --gb: rgba(255,255,255,0.92);  /* borders */
+  --gblur: blur(16px);
+  --gblur-nav: blur(20px);
+
+  /* ── Brand blue ── */
+  --b900: #1E3A8A;
+  --b800: #1E40AF;
+  --b700: #1D4ED8;
+  --b600: #2563EB;   /* PRIMARY — buttons, active states, key data */
+  --b500: #3B82F6;
+  --b400: #60A5FA;
+  --b300: #93C5FD;
+  --b100: #DBEAFE;
+  --b50:  #EFF6FF;
+
+  /* ── Accent colours ── */
+  --indigo:  #6366F1;
+  --violet:  #7C3AED;
+  --sky:     #0EA5E9;
+  --teal:    #0D9488;
+
+  /* ── Semantic ── */
+  --up:      #059669;  /* positive delta, good score */
+  --up-bg:   rgba(5,150,105,0.09);
+  --down:    #DC2626;  /* negative delta, risk */
+  --down-bg: rgba(220,38,38,0.09);
+  --warn:    #D97706;  /* neutral/caution */
+  --warn-bg: rgba(217,119,6,0.09);
+
+  /* ── Intelligence score colours ── */
+  --score-a:  #059669;  /* 80–100: Strong buy */
+  --score-b:  #0D9488;  /* 65–79:  Good value */
+  --score-c:  #D97706;  /* 50–64:  Neutral */
+  --score-d:  #DC2626;  /* 0–49:   Caution */
+
+  /* ── Text hierarchy ── */
+  --ink:   #0F172A;
+  --ink-2: #1E293B;
+  --ink-3: #334155;
+  --ink-4: #64748B;
+  --ink-5: #94A3B8;
+  --ink-6: #CBD5E1;
+
+  /* ── Shadows ── */
+  --sh-xs:   0 1px 2px rgba(15,23,42,0.05);
+  --sh-sm:   0 1px 3px rgba(15,23,42,0.08), 0 4px 12px rgba(15,23,42,0.05);
+  --sh-card: 0 2px 8px rgba(15,23,42,0.07), 0 8px 32px rgba(15,23,42,0.05);
+  --sh-lift: 0 8px 32px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.06);
+  --sh-btn:  0 2px 10px rgba(37,99,235,0.30);
+  --sh-blue: 0 4px 20px rgba(37,99,235,0.22);
+
+  /* ── Typography ── */
+  --font-ui:    'Plus Jakarta Sans', sans-serif;
+  --font-data:  'JetBrains Mono', monospace;
+  --font-serif: 'Instrument Serif', serif;
+
+  /* ── Spacing ── */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px;
+  --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-10:40px;
+  --sp-12:48px; --sp-16:64px; --sp-20:80px;
+
+  /* ── Radius ── */
+  --r-sm:6px; --r-md:10px; --r:14px; --r-lg:18px; --r-pill:100px;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.16,1,0.3,1);
+  --dur-fast:150ms; --dur:250ms; --dur-slow:400ms;
+}
+
+1.2 Global Styles
+
+/* globals.css */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+
+body{
+  font-family:var(--font-ui);
+  color:var(--ink);
+  font-size:15px;
+  line-height:1.6;
+  background:var(--page);
+  background-image:var(--grad-top),var(--grad-right),var(--grad-left);
+  background-attachment:fixed;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── Glass utilities ── */
+.g1{background:var(--g1);backdrop-filter:var(--gblur-nav);-webkit-backdrop-filter:var(--gblur-nav);border:1px solid var(--gb);border-radius:var(--r);box-shadow:var(--sh-card)}
+.g2{background:var(--g2);backdrop-filter:var(--gblur);-webkit-backdrop-filter:var(--gblur);border:1px solid var(--gb);border-radius:var(--r);box-shadow:var(--sh-card)}
+.g3{background:var(--g3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.75);border-radius:var(--r-md);box-shadow:var(--sh-sm)}
+.g4{background:var(--g4);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.60);border-radius:var(--r-sm)}
+
+/* ── Data font — ALL numbers ── */
+.mono{font-family:var(--font-data)}
+
+/* ── Skeleton ── */
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.sk{background:linear-gradient(90deg,rgba(255,255,255,0.42) 25%,rgba(255,255,255,0.72) 50%,rgba(255,255,255,0.42) 75%);background-size:200% 100%;animation:shimmer 1.6s infinite;border-radius:6px}
+
+/* ── Live pulse ── */
+@keyframes pdot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.3;transform:scale(0.78)}}
+.live-dot{width:6px;height:6px;background:var(--up);border-radius:50%;display:inline-block;animation:pdot 2.2s ease-in-out infinite}
+
+/* ── Score ring animation ── */
+@keyframes score-draw{from{stroke-dashoffset:314}to{stroke-dashoffset:var(--target-offset)}}
+
+::selection{background:rgba(37,99,235,0.14);color:var(--ink)}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(37,99,235,0.22);border-radius:2px}
+
+
+PART 2 — THE PROPERTY INTELLIGENCE REPORT
+
+The Core Feature of sqftLab
+
+This is the feature shown in the screenshot. Every property in sqftLab
+runs through this 8-step pipeline and produces a one-page intelligence
+report. This is what makes sqftLab a data platform, not a portal.
+
+
+2.1 The Pipeline
+
+STEP 1: TRANSACTION DATA
+  Pull all DLD-registered transactions within 500m or same sub-community,
+  same property type, last 24 months. Show: count, date range, source.
+  "Based on 47 registered DLD transactions in Downtown Dubai,
+   1–3 bed apartments, Jan 2024–Sep 2026"
+
+STEP 2: COMPS (Comparable Sales)
+  Top 5 most similar transactions:
+  - Same sub-district
+  - ±20% of subject property's sqft
+  - Last 12 months
+  - Same type (apartment/villa/etc)
+  Show each comp: date, size, price, PSF, floor (if available)
+  Highlight which comps are above/below subject price
+
+STEP 3: AED/SQFT ANALYSIS
+  Subject property PSF vs:
+  - District 30-day avg PSF
+  - District 12-month avg PSF
+  - City avg PSF (Dubai or AD)
+  - Asset class avg PSF (apartments vs villas)
+  Show as a horizontal bar position within the range
+
+STEP 4: FAIR VALUE
+  Calculated from comps + district PSF avg:
+  Fair value range: AED X,XXX,XXX – AED Y,YYY,YYY
+  vs Asking price: AED Z,ZZZ,ZZZ
+  Verdict: "Below fair value" / "Within fair value" / "Above fair value"
+  % premium or discount to fair value
+
+STEP 5: RENTAL YIELD
+  Gross yield: avg district annual rent / asking price
+  Net yield: (avg rent – service charges – mgmt fee) / asking price
+  vs District avg yield
+  vs Abu Dhabi / Dubai average
+  Ejari-sourced contracted rents (not listing estimates)
+
+STEP 6: PRICE TREND
+  Subject property's district PSF trend: 12M chart
+  Is the district trending up/down/flat?
+  Momentum score for the district
+  Comparison: property PSF vs trend line
+
+STEP 7: INVESTMENT SCORE (0–100)
+  Weighted composite of:
+    PSF vs fair value       (25%)
+    Rental yield            (25%)
+    Price momentum          (20%)
+    Neighbourhood score     (15%)
+    Developer track record  (15% — off-plan only)
+  Display as circular score ring with colour coding:
+    80–100: Strong buy  (green)
+    65–79:  Good value  (teal)
+    50–64:  Neutral     (amber)
+    0–49:   Caution     (red)
+
+STEP 8: VERDICT
+  One-sentence plain-English conclusion:
+  "This 2-bed in Downtown Dubai is priced 8% below the district
+   average PSF of AED 2,240. Based on 47 comparable DLD transactions,
+   fair value is AED 1.28M–1.44M. At AED 1.32M, this is within fair
+   value range with a strong 6.2% gross yield. Investment score: 74/100."
+  + 3 bullet risk flags (if any):
+    ⚠ Service charge above district average
+    ⚠ District PSF trend declining 3M
+    ✓ Developer has 94% on-time delivery rate
+
+2.2 Property Intelligence Page Layout (/property/[id])
+
+HEADER (full width):
+  Property address / unit reference
+  Source badge (Bayut / PF / Dubizzle) + "Price verified against DLD data"
+  Last updated: [timestamp]
+
+MAIN CONTENT (two column):
+
+LEFT (62%):
+  ── Section: Transaction Data ──
+  Glass card. Header: "Transaction intelligence" with transaction count pill.
+  Sub: "Based on X DLD-registered transactions · Source: Dubai Pulse API"
+  Table: last 5 transactions in same sub-area (date, type, sqft, price, PSF)
+  "View all X comps →" expands to show full comp set
+
+  ── Section: AED/sqft Analysis ──
+  Glass card. Header: "Price per sqft"
+  Horizontal position indicator:
+    |──────────●──────────|
+    City low  Subject  City high
+  Shows: Subject PSF | District avg | City avg | Delta to avg
+
+  ── Section: Fair Value Range ──
+  Glass card. Blue left border.
+  "Fair value range: AED X,XXX,XXX – AED Y,YYY,YYY"
+  vs "Asking: AED Z,ZZZ,ZZZ"
+  Verdict badge: "9% below fair value" in green pill
+
+  ── Section: Rental Yield ──
+  Glass card.
+  Gross yield: X.X%  |  Net yield: Y.Y%
+  vs district avg: Z.Z%
+  Source: "Based on X Ejari-registered tenancies in [district] · 12M"
+  Monthly rental equivalent: AED X,XXX/month
+
+  ── Section: Price Trend ──
+  Glass card.
+  Recharts sparkline: district PSF 12M
+  Labels: "District trending ▲ X.X% (12M)"
+  Subject PSF plotted as horizontal reference line on the chart
+
+  ── Section: Verdict ──
+  Glass card. Prominent. Blue gradient left border.
+  Full one-paragraph verdict text (auto-generated from the data)
+  Risk flags list (⚠ or ✓ prefix)
+  Disclaimer: "Analysis based on DLD transaction records. Not financial advice."
+
+RIGHT (38%):
+  ── Investment Score ──
+  Large circular SVG score ring (200px)
+  Score number in JetBrains Mono 500, 48px, centre
+  Score label below: "Strong buy" / "Good value" / "Neutral" / "Caution"
+  Colour: var(--score-a/b/c/d)
+  Animated: stroke draws from 0 on page load
+
+  ── Score Breakdown ──
+  5 component scores as mini bars:
+    PSF vs value    [██████████] 22/25
+    Rental yield    [████████  ] 19/25
+    Price momentum  [████████  ] 16/20
+    Neighbourhood   [████████  ] 12/15
+    Developer       [██████████] 15/15
+
+  ── Quick Stats ──
+  Glass card. 4 items:
+    Asking price     AED X,XXX,XXX
+    Price per sqft   AED X,XXX
+    vs District avg  ▲/▼ X.X%
+    vs Fair value    ▲/▼ X.X%
+
+  ── Neighbourhood Score ──
+  4 mini arc indicators (60px each):
+    Transport | Schools | Healthcare | Lifestyle
+  From OSM POI data
+
+  ── Similar Properties ──
+  2 compact cards showing other properties in same district
+  with their investment scores as a badge
+
+2.3 Intelligence Score Component
+
+// src/components/InvestmentScore/index.tsx
+
+interface ScoreProps {
+  score: number        // 0-100
+  breakdown: {
+    psf: number        // 0-25
+    yield: number      // 0-25
+    momentum: number   // 0-20
+    neighbourhood: number  // 0-15
+    developer: number  // 0-15
+  }
+}
+
+// Score ring: SVG circle with animated stroke
+// circumference = 2π × 50 = 314
+// strokeDashoffset = 314 - (314 × score/100)
+// Animate from 314 → target on mount
+
+function scoreColour(score: number): string {
+  if (score >= 80) return 'var(--score-a)'   // green
+  if (score >= 65) return 'var(--score-b)'   // teal
+  if (score >= 50) return 'var(--score-c)'   // amber
+  return 'var(--score-d)'                     // red
+}
+
+function scoreLabel(score: number): string {
+  if (score >= 80) return 'Strong buy'
+  if (score >= 65) return 'Good value'
+  if (score >= 50) return 'Neutral'
+  return 'Caution'
+}
+
+2.4 Verdict Auto-Generation
+
+// src/lib/verdict.ts
+
+export function generateVerdict(data: PropertyIntelligence): string {
+  const {
+    district, beds, propertyType, askingPrice,
+    fairValueLow, fairValueHigh, psfVsDistrictDelta,
+    grossYield, investmentScore, transactionCount,
+    districtTrend12m
+  } = data
+
+  const fairValueMid = (fairValueLow + fairValueHigh) / 2
+  const vsAsk = ((askingPrice - fairValueMid) / fairValueMid) * 100
+  const position = vsAsk < -5
+    ? `priced ${Math.abs(vsAsk).toFixed(0)}% below fair value`
+    : vsAsk > 5
+    ? `priced ${vsAsk.toFixed(0)}% above fair value`
+    : 'within fair value range'
+
+  return `This ${beds}-bed ${propertyType} in ${district} is ${position}. ` +
+    `Based on ${transactionCount} comparable DLD transactions, fair value is ` +
+    `AED ${fmtM(fairValueLow)}–${fmtM(fairValueHigh)}. ` +
+    `At AED ${fmtM(askingPrice)}, it offers a ${grossYield.toFixed(1)}% gross yield ` +
+    `against a district average PSF trend of ${districtTrend12m > 0 ? '+' : ''}` +
+    `${districtTrend12m.toFixed(1)}% over 12 months. ` +
+    `Investment score: ${investmentScore}/100.`
+}
+
+2.5 Risk Flags
+
+export function getRiskFlags(data: PropertyIntelligence): RiskFlag[] {
+  const flags: RiskFlag[] = []
+
+  if (data.serviceCharge > data.districtAvgServiceCharge * 1.15)
+    flags.push({ type: 'warn', text: 'Service charge above district average' })
+
+  if (data.districtMomentum < 45)
+    flags.push({ type: 'warn', text: 'District PSF momentum is below neutral' })
+
+  if (data.psfVsDistrictDelta > 15)
+    flags.push({ type: 'warn', text: 'Asking PSF significantly above district avg' })
+
+  if (data.developerOnTimeRate && data.developerOnTimeRate > 88)
+    flags.push({ type: 'ok', text: `Developer has ${data.developerOnTimeRate}% on-time delivery rate` })
+
+  if (data.grossYield > data.cityAvgYield + 1)
+    flags.push({ type: 'ok', text: 'Yield above city average — strong income potential' })
+
+  if (data.transactionCount < 5)
+    flags.push({ type: 'warn', text: 'Fewer than 5 recent comps — lower data confidence' })
+
+  return flags
+}
+
+
+PART 3 — NAVIGATION
+
+3.1 Brand — sqftLab (not sqrtLab)
+
+Every occurrence of sqrtLab must be replaced:
+
+
+grep -r "sqrtLab\|sqrtlab\|sqrt-lab\|SQRTLAB" src/ public/ \
+  --include="*.tsx" --include="*.ts" --include="*.css" \
+  --include="*.json" --include="*.md"
+# Must return zero results after replacement
+
+3.2 Nav Spec
+
+Height: 60px · Sticky top-0 · z-index 100
+Background: var(--g1) · backdrop-filter: var(--gblur-nav)
+Border-bottom: 1px solid rgba(255,255,255,0.90)
+Brand strip: 1.5px gradient line at very top of nav
+  background: linear-gradient(90deg, #2563EB, #6366F1, #0EA5E9)
+  height: 1.5px · position: absolute top-0 left-0 right-0
+
+LEFT: sqftLab logo mark + wordmark + BETA badge
+CENTER: 8 nav links (Mortgage hidden)
+RIGHT: Live dot + timestamp · Sign in · Get access pill
+
+Logo SVG mark (32×32) — floorplan + measurement grid:
+
+
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="8"
+    fill="rgba(255,255,255,0.92)"
+    stroke="rgba(37,99,235,0.2)" stroke-width="0.75"/>
+  <rect x="6" y="6" width="20" height="20" rx="2"
+    fill="none" stroke="#2563EB" stroke-width="0.9"
+    stroke-opacity="0.18" stroke-dasharray="2.5 2"/>
+  <line x1="6" y1="16" x2="9" y2="16"
+    stroke="#2563EB" stroke-width="1" stroke-linecap="round"
+    stroke-opacity="0.45"/>
+  <line x1="16" y1="6" x2="16" y2="9"
+    stroke="#2563EB" stroke-width="1" stroke-linecap="round"
+    stroke-opacity="0.45"/>
+  <line x1="26" y1="16" x2="23" y2="16"
+    stroke="#2563EB" stroke-width="1" stroke-linecap="round"
+    stroke-opacity="0.45"/>
+  <line x1="16" y1="26" x2="16" y2="23"
+    stroke="#2563EB" stroke-width="1" stroke-linecap="round"
+    stroke-opacity="0.45"/>
+  <path d="M10 22 L10 13 L16 13 L16 18 L22 18 L22 22 Z"
+    fill="#2563EB" fill-opacity="0.12"
+    stroke="#2563EB" stroke-width="1.5"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="16" cy="13" r="2" fill="#2563EB"/>
+  <circle cx="22" cy="18" r="1.5" fill="#6366F1"/>
+</svg>
+
+Nav items (Mortgage hidden, comment in code):
+
+
+const NAV = [
+  { label:'Heatmap',    href:'/heatmap',    icon: MapPin     },
+  { label:'Listings',   href:'/listings',   icon: Building   },
+  { label:'Portfolio',  href:'/portfolio',  icon: BarChart3  },
+  { label:'Watchlist',  href:'/watchlist',  icon: Bookmark   },
+  { label:'Deals',      href:'/deals',      icon: Zap        },
+  { label:'Alerts',     href:'/alerts',     icon: Bell       },
+  { label:'Yield Calc', href:'/calculator', icon: Calculator },
+  // { label:'Mortgage', href:'/mortgage',  icon: Percent }, // hidden
+]
+
+
+PART 4 — HERO SECTION
+
+4.1 Two-Line Full-Width Headline
+
+<div className="hero-tag">
+  <span className="live-dot"/>
+  Live UAE property intelligence · refreshed every 60 seconds
+</div>
+
+<h1 className="hero-h">
+  <span className="hero-h1">
+    Dubai Pulse. ADREC. Every live listing.
+  </span>
+  <span className="hero-h2">
+    One platform that tells you exactly what a property
+    is worth — before anyone else does.
+  </span>
+</h1>
+
+.hero-h { font-size:clamp(26px,4vw,66px); line-height:1.06;
+          letter-spacing:-0.026em; width:100%; margin:0 }
+.hero-h1 { display:block; color:var(--ink); font-weight:800;
+           font-family:var(--font-ui); white-space:nowrap }
+.hero-h2 { display:block; color:var(--b600);
+           font-family:var(--font-serif); font-style:italic;
+           font-weight:400; font-size:1.04em; white-space:nowrap }
+@media(max-width:820px){
+  .hero-h1,.hero-h2{white-space:normal;
+    font-size:clamp(22px,6.5vw,40px)}
+}
+
+4.2 Intelligence Preview Strip (below CTAs)
+
+Show what the Property Intelligence Report looks like in one compact strip.
+This is the "aha moment" for first-time visitors.
+
+
+┌─────────────────────────────────────────────────────────────┐
+│  Property intelligence preview · Downtown Dubai 2-bed       │
+│                                                             │
+│  Txn data    Comps      AED/sqft   Fair value               │
+│  47 DLD  →   5 comps →  AED 2,180 → AED 1.28M–1.44M        │
+│                                                             │
+│  Yield     Trend       Inv. score   Verdict                 │
+│  6.2%    → ▲ 4.1%   →  74/100    → Good value ✓            │
+└─────────────────────────────────────────────────────────────┘
+  Search any UAE property address to get your full report →
+
+Implement as an animated glass card with:
+
+
+
+The 8 pipeline steps visible as a horizontal flow
+
+Numbers populated from real DB data (most-analysed recent property)
+
+"Search any UAE property →" input below it
+
+This replaces the generic search bar
+
+
+
+PART 5 — PAYMENT KILL SWITCH (GLOBAL — HIGHEST PRIORITY)
+
+5.1 The Rule
+
+NOTHING PROCESSES PAYMENT. Anywhere on the site.
+This is not just about hiding the pricing page.
+Every upgrade button, every Pro/Elite CTA, every payment link
+must be intercepted and silenced.
+
+
+5.2 Kill Switch File
+
+// src/lib/payments.ts
+// THIS IS THE SINGLE SOURCE OF TRUTH FOR PAYMENT STATE
+
+export const PAYMENTS_ENABLED = false  // ← flip to true when ready
+
+export type ToastFn = (msg: string) => void
+let _toast: ToastFn | null = null
+
+export function registerToast(fn: ToastFn) { _toast = fn }
+
+export function handlePaymentAttempt(
+  e?: React.MouseEvent | React.TouchEvent | Event
+) {
+  if (e) {
+    e.preventDefault()
+    e.stopPropagation()
+    if ('nativeEvent' in e) e.nativeEvent.stopImmediatePropagation()
+  }
+  _toast?.('Paid plans launching soon — you\'ll be the first to know.')
+  // Log the attempt for analytics (not to Stripe)
+  console.info('[sqftLab] Payment attempt blocked — PAYMENTS_ENABLED=false')
+  return false
+}
+
+// Use this wrapper on ALL payment CTAs:
+// onClick={PAYMENTS_ENABLED ? realCheckoutFn : handlePaymentAttempt}
+
+5.3 Every Location That Must Be Blocked
+
+BLOCK ALL OF THESE:
+
+1. /pricing page — Pro CTA, Elite CTA
+2. /plans page (if it exists)
+3. Any "Upgrade to Pro" button anywhere
+4. Any "Get Elite" button anywhere
+5. Any "Start free trial" button for paid tiers
+6. Any "Subscribe" button
+7. Any route /api/checkout
+8. Any route /api/create-payment-intent
+9. Any route /api/subscribe
+10. Any "Upgrade" button in the nav
+11. Any feature gate "Upgrade to unlock" CTA
+12. Any email with a payment link
+13. Any Stripe redirect
+14. Portfolio page — if it has an upgrade CTA
+15. Calculator page — if results are blurred with upgrade CTA
+
+FOR EVERY BUTTON: onClick={PAYMENTS_ENABLED ? handler : handlePaymentAttempt}
+FOR EVERY LINK:   onClick={!PAYMENTS_ENABLED ? handlePaymentAttempt : undefined}
+
+5.4 Toast Component (required for kill switch feedback)
+
+// src/components/Toast/index.tsx
+'use client'
+import { useState, useEffect } from 'react'
+import { registerToast } from '@/lib/payments'
+
+interface ToastState {
+  message: string
+  visible: boolean
+}
+
+export function ToastProvider({ children }: { children: React.ReactNode }) {
+  const [toast, setToast] = useState<ToastState>({ message: '', visible: false })
+
+  useEffect(() => {
+    registerToast((msg) => {
+      setToast({ message: msg, visible: true })
+      setTimeout(() => setToast(t => ({ ...t, visible: false })), 4200)
+    })
+  }, [])
+
+  return (
+    <>
+      {children}
+      {toast.visible && (
+        <div className="toast g2" role="alert" aria-live="polite">
+          <div className="toast-icon">◉</div>
+          <span className="toast-msg">{toast.message}</span>
+          <button
+            onClick={() => setToast(t => ({ ...t, visible: false }))}
+            className="toast-close" aria-label="Dismiss"
+          >×</button>
+        </div>
+      )}
+    </>
+  )
+}
+
+.toast {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  min-width: 300px;
+  max-width: 420px;
+  border-left: 3px solid var(--b600) !important;
+  font-size: 14px;
+  font-weight: 500;
+  animation: toast-in 280ms var(--ease);
+}
+@keyframes toast-in {
+  from { transform: translateY(16px); opacity: 0 }
+  to   { transform: translateY(0);   opacity: 1 }
+}
+.toast-icon { color: var(--b600); font-size: 16px }
+.toast-msg  { color: var(--ink-2); flex: 1 }
+.toast-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--ink-5); font-size: 18px; line-height: 1;
+  padding: 0; transition: color var(--dur-fast)
+}
+.toast-close:hover { color: var(--ink-3) }
+
+Wrap the app root in <ToastProvider> in src/app/layout.tsx.
+
+
+5.5 API Route Protection
+
+// src/app/api/checkout/route.ts
+import { PAYMENTS_ENABLED } from '@/lib/payments'
+
+export async function POST() {
+  if (!PAYMENTS_ENABLED) {
+    return Response.json(
+      { error: 'Payment processing is not yet available.' },
+      { status: 503 }
+    )
+  }
+  // ... real checkout logic
+}
+
+Apply the same guard to: /api/subscribe, /api/create-payment-intent,
+/api/webhooks/stripe (log but don't process).
+
+
+
+PART 6 — PRICING PAGE (DISPLAY ONLY)
+
+Three tiers, glass cards. Buttons show "Coming soon". Nothing charges.
+
+
+6.1 Tier Definitions
+
+FREE — AED 0/month
+  ✓ Homepage intelligence overview
+  ✓ District heat map (PSF view)
+  ✓ 5 property intelligence reports/day
+  ✓ 3-month price trend
+  ✓ Transaction data count
+  ✓ Basic neighbourhood score
+  ✗ Full comps analysis
+  ✗ Fair value calculation
+  ✗ Rental yield intelligence
+  ✗ Investment score
+  ✗ Verdict auto-generation
+  ✗ Yield calculator
+  ✗ Deal alerts
+
+PRO — AED 49/month · AED 39/month annual
+  ✓ Everything in Free
+  ✓ Unlimited property reports
+  ✓ Full comps (up to 20 transactions)
+  ✓ Fair value range calculation
+  ✓ Rental yield with Ejari data
+  ✓ Investment score (0–100)
+  ✓ Verdict generation
+  ✓ 12-month price trends
+  ✓ CPI inflation-adjusted charts
+  ✓ Yield calculator with district data
+  ✓ Neighbourhood scores (all 4)
+  ✓ FX price conversion (AED/USD/GBP/INR)
+  ✓ CSV export
+  ✗ AI price forecast
+  ✗ Deal alerts (email)
+  ✗ API access
+
+ELITE — AED 149/month · AED 119/month annual
+  ✓ Everything in Pro
+  ✓ AI price forecast (6-month LSTM)
+  ✓ Deal alerts via email
+  ✓ Developer risk tracker
+  ✓ Portfolio performance analytics
+  ✓ PDF market reports
+  ✓ REST API (rate-limited)
+  ✓ Ejari rent index direct access
+  ✓ Priority 60-second data refresh
+
+6.2 Pricing Card Buttons
+
+// FREE tier:
+<a href="/sign-up" className="btn-primary w-full">
+  Get started free
+</a>
+
+// PRO tier:
+<button
+  className="btn-outline w-full coming-soon"
+  onClick={handlePaymentAttempt}
+>
+  Coming soon
+</button>
+<p className="coming-soon-sub">
+  <a href="/waitlist">Join the waitlist →</a>
+</p>
+
+// ELITE tier: same as Pro
+
+6.3 Feature Gate UI (blurred results)
+
+When a Free user hits a Pro feature (e.g. Investment Score):
+
+
+function FeatureGate({ feature, children }) {
+  const { tier } = useAuth()
+  const isPro = tier === 'pro' || tier === 'elite'
+
+  if (isPro) return children
+
+  return (
+    <div className="feature-gate-wrap">
+      <div className="feature-gate-blur" aria-hidden="true">
+        {children}
+      </div>
+      <div className="feature-gate-overlay g2">
+        <div className="gate-icon">🔒</div>
+        <div className="gate-title">{feature}</div>
+        <div className="gate-sub">Available on Pro and Elite</div>
+        <button
+          className="btn-primary gate-btn"
+          onClick={handlePaymentAttempt}
+        >
+          Coming soon
+        </button>
+      </div>
+    </div>
+  )
+}
+
+.feature-gate-wrap { position: relative; overflow: hidden }
+.feature-gate-blur { filter: blur(6px); user-select: none; pointer-events: none }
+.feature-gate-overlay {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 8px; text-align: center; padding: 24px
+}
+
+
+PART 7 — DATA INTELLIGENCE FEATURES
+
+7.1 KPI Strip (4 Glass Cards)
+
+Section bg: rgba(255,255,255,0.40) + blur(10px)
+Borders: 1px solid rgba(255,255,255,0.70) top and bottom
+Padding: 28px 5vw · Grid: 4 cols · Gap: 12px
+
+Card 1: AVG PRICE PSF · DUBAI
+  Value: JetBrains Mono 500, 28px, var(--ink)
+  Delta: vs 30-day prior, colour-coded
+  Sparkline: 32px SVG, #2563EB stroke, rgba(37,99,235,0.07) area
+  Source: "X,XXX DLD transactions · 30 days" Mono 9px var(--ink-5)
+
+Card 2: YTD TRANSACTIONS
+  Violet sparkline (#6366F1)
+
+Card 3: AVG RENTAL YIELD
+  Sky sparkline (#0EA5E9)
+  Source: "Ejari data where available"
+
+Card 4: MOMENTUM INDEX
+  Gradient progress bar (not sparkline)
+  Signal: "◆ Strong bullish" in var(--warn)
+
+7.2 District Heat Map
+
+Default view: SVG 7-column grid
+  Cell colour = momentum score → rgba(37,99,235, 0.07–0.30)
+  Cell: score number (Mono 11px) + short name (9px)
+  Tooltip on hover: full name, PSF, 3M change, volume, yield
+  Layer toggle: PSF | Yield | Momentum | Deals | Volume
+
+
+Map view (lazy load): Mapbox GL choropleth
+  Districts as filled polygons, intensity = selected metric
+  Click → intelligence side panel
+
+
+7.3 Intelligence Panels (3 Charts)
+
+Panel 1 (full width) — PSF Trend
+  Recharts ComposedChart: Area + Line
+  Gradient line: #2563EB → #6366F1
+  Glass custom tooltip
+  Period: 1M | 3M | 6M | 12M
+  Toggle: Nominal / CPI-adjusted (uses UAE FCSC data from DB)
+
+
+Panel 2 (half width) — Transaction Volume
+  BarChart: Sales (blue) | Mortgage (indigo) | Off-plan (sky)
+  Source note under chart
+
+
+Panel 3 (half width) — Yield vs PSF Scatter
+  Each point = one district
+  X: PSF · Y: Yield · Size: volume · Colour: momentum
+  Quadrant guides at median X and median Y
+  This chart = sqftLab's most unique intelligence visual
+
+
+7.4 Deals Strip (Intelligence, Not Listings)
+
+Horizontal scroll. Each card:
+
+
+
+Asking PSF vs district avg PSF (from DLD data)
+
+Discount badge: "▼ X% below market data"
+
+Source: property listing site
+
+This is intelligence ON the listing, not the listing itself
+
+
+Section header note (required):
+  "Prices compared against DLD-registered transaction data,
+   not other listing prices. This is real market intelligence."
+
+
+7.5 FX Currency Toggle
+
+Pills in ticker: AED · USD · GBP · INR
+Converts all prices globally via CurrencyContext
+Exchange rates from ExchangeRate table (already fetched every min)
+Canonical label always stays AED:
+  "AED 1,200,000  (USD 326,740)"
+Primary value in selected currency, AED in smaller text
+
+
+7.6 Data Source Labels (Trust Layer)
+
+Under EVERY metric:
+
+
+<DataLabel
+  source="Dubai Pulse (DLD)"
+  count={4218}
+  period="30 days"
+  lastUpdated={computedAt}
+/>
+// Renders: "Based on 4,218 DLD transactions · 30 days · Updated 2 min ago  ⓘ"
+// Font: JetBrains Mono 9px, var(--ink-5)
+// ⓘ tooltip: methodology explanation
+
+
+PART 8 — NEW PAGES
+
+8.1 /property/[id] — Intelligence Report
+
+(Full spec in Part 2 above)
+
+
+8.2 /heatmap — Full Intelligence Dashboard
+
+Two-column. LEFT: district map/grid with layer toggle.
+RIGHT: district detail panel on click (KPIs, sparkline, scores, deals count).
+
+
+8.3 /intelligence — Pro Tier Analytics
+
+Section 1: Market overview (6 KPIs, breadth indicator, top gainers/losers)
+Section 2: Multi-district PSF chart (toggle districts on/off, export PNG)
+Section 3: Yield vs PSF scatter
+Section 4: Transaction flow (money into/out of districts)
+Section 5: Economic context (CPI vs PSF, AED/USD impact, World Bank GDP)
+
+8.4 /deals — Mispricing Intelligence
+
+Header: "X properties priced below DLD transaction averages today"
+Filter sidebar: district, type, min discount %, max price, beds
+Deal cards: PSF vs market, discount badge, methodology note
+Page note: "Not financial advice. Verify with a registered surveyor."
+
+
+8.5 /calculator — Yield Intelligence (Pro)
+
+Left: inputs (district → auto-fills Ejari rent, costs)
+Right: gross yield, net yield, cash flow, breakeven, 5yr projection
+Gate: blurred results for Free tier with "Coming soon" CTA
+
+
+8.6 /about — Data Methodology
+
+Section 1: "Intelligence, not listings." — what sqftLab is
+Section 2: Data sources table (all 8 sources, free ✓ column)
+Section 3: Methodology per metric (accordion, Radix)
+Section 4: Live data freshness (from MarketSummary.computedAt)
+Section 5: "What sqftLab does NOT do" (no transactions, no agents,
+           no referral fees, no advertising)
+
+8.7 /pricing — Display Only (Part 6 above)
+
+8.8 /district/[slug] — District Intelligence (SSG, top 25)
+
+Left: breadcrumb, heading, KPIs, PSF trend chart, comps table, active listings
+Right: neighbourhood scores, nearby POIs, district comparison widget
+
+
+8.9 /waitlist — Collect emails for paid launch
+
+Simple glass card. Email input + submit. Saves to DB.
+"We'll notify you when Pro and Elite launch."
+No payment. No Stripe. Just email capture.
+
+
+
+PART 9 — ANIMATIONS
+
+Install: npm install framer-motion
+Easing: [0.16, 1, 0.3, 1] everywhere. No exceptions.
+
+
+Page load:   nav fadein 400ms · hero tag 500ms · headline words stagger 60ms
+On scroll:   KPI count-up 1200ms · cards y32→0 stagger 80ms · chart draw 1400ms
+Hover:       cards translateY(-4px) 300ms · buttons translateY(-1px) 200ms
+Score ring:  stroke draws from 0 → target on mount, 800ms easeOut
+Intelligence pipeline: steps highlight sequentially on load, 150ms stagger
+
+
+PART 10 — SEO & METADATA
+
+export const metadata = {
+  metadataBase: new URL('https://sqftlab.com'),
+  title: {
+    default: 'sqftLab — UAE Property Data Intelligence',
+    template: '%s · sqftLab',
+  },
+  description:
+    'Transaction data. Comps. AED/sqft. Fair value. Rental yield. ' +
+    'Investment score. The full intelligence report on any UAE property — ' +
+    'from Dubai Pulse, ADREC and Ejari. Free.',
+  keywords: ['UAE property data', 'Dubai PSF', 'DLD transactions',
+    'property intelligence UAE', 'fair value property Dubai',
+    'rental yield UAE', 'investment score property'],
+}
+
+
+PART 11 — VERIFICATION CHECKLIST
+
+Brand:
+
+
+
+ grep sqrtLab returns zero
+
+ Page title: "sqftLab — UAE Property Data Intelligence"
+
+ Logo reads sqftLab · BETA badge present
+
+
+Nav:
+
+
+
+ Mortgage hidden (commented in code)
+
+ 7 items visible: Heatmap, Listings, Portfolio, Watchlist, Deals, Alerts, Yield Calc
+
+
+Payment kill switch (CRITICAL):
+
+
+
+ PAYMENTS_ENABLED = false in src/lib/payments.ts
+
+ Pro CTA says "Coming soon"
+
+ Elite CTA says "Coming soon"
+
+ Clicking either shows toast (no Stripe network calls)
+
+ /api/checkout returns 503 with message
+
+ Zero requests to stripe.com in Network tab on any payment click
+
+ Feature gates show blurred content + "Coming soon" CTA
+
+
+Intelligence report:
+
+
+
+ /property/[id] route exists
+
+ Shows all 8 pipeline steps
+
+ Investment score ring animates on load
+
+ Verdict paragraph auto-generates from data
+
+ Risk flags list populated
+
+
+Design:
+
+
+
+ Page bg: cool blue-grey #EEF2F7 + 3 gradients
+
+ ALL numbers: JetBrains Mono
+
+ ALL cards: glass (rgba white + backdrop-filter)
+
+ No dark or pure-white backgrounds
+
+ DataLabel visible under every key metric
+
+
+Build:
+
+
+
+ npx tsc --noEmit → zero errors
+
+ npm run build → success
+
+ No console errors in browser
+
+
+
+sqftLab.com — Full Specification v3.0
+UAE Property Data Intelligence Platform · September 2026
+

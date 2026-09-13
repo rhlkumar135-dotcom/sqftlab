@@ -1,0 +1,793 @@
+sqftLab — Agent Action Guide v2.0
+
+Premium Build Summary: What to Tell Your Agent
+
+One file. Paste the spec first, then one task at a time.
+
+
+
+BEFORE EVERY SESSION — PASTE THIS FIRST
+
+
+"You are working on sqftLab.com — a UAE property DATA INTELLIGENCE platform.
+It is NOT a listing portal. It aggregates government transaction data (DLD,
+ADREC, Ejari), economic data (CPI, FX, World Bank), and geospatial data (OSM)
+into intelligence reports. The core feature is an 8-step property analysis:
+Transaction data → Comps → AED/sqft → Fair value → Rental yield → Trend →
+Investment score → Verdict.
+
+
+Read sqftlab_full_spec_v3.md fully before writing any code.
+Then execute the task below. Run npx tsc --noEmit after every change."
+
+
+
+
+TASK EXECUTION ORDER
+
+🔴 Critical first  01  Brand rename + design tokens         ~2h
+🔴 Critical first  02  Nav redesign + Mortgage hidden        ~1.5h
+🔴 Critical first  03  Payment kill switch (global)          ~1h
+🔴 Critical first  04  Hero section 2-line redesign          ~1h
+🟡 Core feature    05  Property intelligence report page     ~5h
+🟡 Core feature    06  Investment score component            ~2h
+🟡 Core feature    07  KPI strip + live data                 ~2h
+🟡 Core feature    08  Intelligence panels (3 charts)        ~3h
+🟡 Core feature    09  Deals strip (intelligence layer)      ~2h
+🟠 High value      10  /heatmap full dashboard               ~3h
+🟠 High value      11  /deals mispricing page                ~2h
+🟠 High value      12  /calculator yield intelligence        ~2h
+🟠 High value      13  /about methodology page               ~1.5h
+🟠 High value      14  /pricing display-only                 ~1.5h
+🟠 High value      15  /waitlist page                        ~0.5h
+🟢 Enhancement     16  FX currency toggle                    ~1.5h
+🟢 Enhancement     17  Data source labels                    ~1h
+🟢 Enhancement     18  /district/[slug] pages                ~3h
+🔴 Final           19  TypeScript + build + deploy           ~2h
+
+Total: ~38 hours
+
+
+TASK 01 — Brand Rename + Design Tokens
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md fully.
+
+PART A: Find and replace sqrtLab with sqftLab everywhere.
+Run: grep -r "sqrtLab\|sqrtlab\|sqrt-lab\|SQRTLAB" src/ public/
+Replace ALL occurrences. Re-run grep — must return zero.
+Update page title to "sqftLab — UAE Property Data Intelligence".
+
+PART B: Create src/styles/tokens.css with the complete CSS token
+system from Part 1.1 of the spec (all colour variables, spacing,
+radius, shadows, motion, font variables).
+
+PART C: Create src/app/globals.css with:
+- Import tokens.css
+- Import Google Fonts: Plus Jakarta Sans, JetBrains Mono, Instrument Serif
+- Body background: #EEF2F7 + 3 ambient radial gradients (--grad-top, --grad-right, --grad-left)
+- .g1 .g2 .g3 .g4 glass utility classes (from Part 1.2)
+- .mono class for JetBrains Mono
+- .sk skeleton shimmer animation
+- .live-dot pulse animation
+- ::selection, scrollbar, font-smoothing
+
+Verify: grep returns zero. Body has blue-grey background. Fonts load.
+
+
+TASK 02 — Navigation: Glass + Mortgage Hidden
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 3.
+
+1. Find the Nav component. Hide Mortgage — comment it out, keep the route.
+   Final nav: Heatmap, Listings, Portfolio, Watchlist, Deals, Alerts, Yield Calc
+
+2. Apply the Level 1 glass recipe to nav:
+   background: var(--g1) · backdrop-filter: var(--gblur-nav)
+   border-bottom: 1px solid var(--gb) · height: 60px · sticky top-0
+
+3. Add 1.5px brand gradient strip at the very top of the nav:
+   linear-gradient(90deg, #2563EB, #6366F1, #0EA5E9)
+
+4. Replace the logo with the sqftLab floorplan SVG mark from the spec (Part 3.2).
+   Wordmark: "sqft" in var(--ink), "Lab" in var(--b600). Keep BETA badge.
+
+5. Nav links: Plus Jakarta Sans 500, 13px, var(--ink-4).
+   Hover: var(--ink) + rgba(255,255,255,0.08) background.
+   Active: var(--b600), underline slides in from left.
+
+6. Right side: live dot (green pulse) + timestamp Mono 9px · Sign in ghost · Get access pill.
+
+Verify: Mortgage not visible. /mortgage route still loads. Glass blur working.
+7 nav items. Logo reads sqftLab.
+
+
+TASK 03 — Payment Kill Switch (Do This Before Anything Else UI-Related)
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 5. This is the highest priority task.
+
+1. Create src/lib/payments.ts exactly as in the spec:
+   - PAYMENTS_ENABLED = false (hardcoded, not from env)
+   - handlePaymentAttempt() that: preventDefault, stopPropagation,
+     nativeEvent.stopImmediatePropagation, calls registered toast fn
+
+2. Create src/components/Toast/index.tsx as in the spec (Part 5.4).
+   Wrap app root in <ToastProvider> in src/app/layout.tsx.
+
+3. Find EVERY payment-related button/link across the ENTIRE codebase:
+   - /pricing Pro CTA
+   - /pricing Elite CTA
+   - Any "Upgrade to Pro" button
+   - Any "Get Elite" button
+   - Any "Subscribe" button
+   - Any "Start trial" for paid tiers
+   - Feature gate upgrade CTAs
+   Wrap each: onClick={PAYMENTS_ENABLED ? realFn : handlePaymentAttempt}
+
+4. Button labels: Pro = "Coming soon" · Elite = "Coming soon"
+
+5. Add to /api/checkout/route.ts (and any other payment API routes):
+   if (!PAYMENTS_ENABLED) return Response.json({error:'...'},{status:503})
+
+6. Search for any Stripe imports that may throw errors.
+   Guard them: if (!PAYMENTS_ENABLED) { /* skip */ }
+
+Verify:
+- Click Pro CTA → toast shows, zero Stripe network calls
+- Click Elite CTA → same
+- /api/checkout returns 503
+- Network tab: no stripe.com requests on any payment click
+- Free "Get started" still works normally
+
+
+TASK 04 — Hero Section: 2-Line + Intelligence Preview
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Parts 4 and 4.2.
+
+1. Apply glass page background (already in globals.css from Task 01).
+   Hero inherits it — no separate background colour.
+
+2. Add live tag above headline:
+   Pill, glass bg, green pulse dot, "Live UAE property intelligence · refreshed every 60 seconds"
+
+3. Set headline to exactly 2 lines on desktop using clamp(26px, 4vw, 66px)
+   + white-space:nowrap on each line span.
+   Line 1: "Dubai Pulse. ADREC. Every live listing." — Plus Jakarta Sans 800, var(--ink)
+   Line 2: "One platform that tells you exactly what a property is worth — before anyone else does."
+           — Instrument Serif italic, var(--b600)
+
+4. Below headline: two CTAs
+   "Explore Heatmap →" — var(--b600) pill, shadow-btn
+   "View Plans" — glass outline button, payment kill switch applied
+
+5. Below CTAs: Intelligence preview strip (Part 4.2 of spec)
+   Glass card showing the 8-step pipeline with real example data:
+   Transaction data → Comps → AED/sqft → Fair value → Rental yield →
+   Trend → Investment score → Verdict
+   With a search input: "Search any UAE property address for your intelligence report →"
+   This replaces the generic search bar.
+
+6. Mobile < 820px: white-space normal, stacked CTAs, strip scrolls horizontally.
+
+Verify: 2 lines at 1280px. Mobile wraps cleanly. Preview strip visible.
+Payment kill switch on "View Plans". No Stripe calls.
+
+
+TASK 05 — Property Intelligence Report Page
+
+Paste this to your agent — this is the core feature:
+
+
+Read sqftlab_full_spec_v3.md — Part 2 fully. This is sqftLab's main feature.
+
+Build /property/[id] page. Dynamic route. Data from DB.
+
+The page runs this pipeline for any property:
+Transaction data → Comps → AED/sqft → Fair value →
+Rental yield → Trend → Investment score → Verdict
+
+TWO-COLUMN LAYOUT (desktop):
+LEFT (62%): Sequential intelligence sections as glass cards:
+  1. Transaction Data card
+     - Count of DLD transactions used (from Transaction table)
+     - Last 5 comps table: date, type, sqft, price, PSF — all in JetBrains Mono
+     - "View all X comps" expandable
+     - Source label: "Dubai Pulse (DLD) · X transactions · 30–24 months"
+
+  2. AED/sqft Analysis card
+     - Horizontal position indicator (SVG bar)
+       Subject PSF marked within city-low to city-high range
+     - Shows: subject PSF | district 30d avg | city avg | delta to avg
+     - All numbers JetBrains Mono
+
+  3. Fair Value card (blue left border — prominent)
+     - Fair value range: AED X – AED Y (calculated from comps median)
+     - vs Asking: AED Z
+     - Verdict badge: "X% below fair value" green OR "X% above" red pill
+
+  4. Rental Yield card
+     - Gross yield % | Net yield % (side by side, large Mono)
+     - vs district average yield
+     - Source: "X Ejari-registered tenancies in [district] · 12M"
+     - Monthly rental equivalent
+
+  5. Price Trend card
+     - Recharts sparkline: district PSF 12M (blue gradient line)
+     - Subject PSF as horizontal reference line
+     - Label: "District ▲/▼ X.X% over 12 months"
+
+  6. Verdict card (glass, prominent blue gradient left border)
+     - Auto-generated paragraph from generateVerdict() function in src/lib/verdict.ts
+     - Risk flags list (3–4 items with ⚠ or ✓ prefix)
+     - Disclaimer text
+
+RIGHT (38%):
+  1. Investment Score (circular SVG ring, 200px)
+     - Score 0–100 animated on mount (stroke draws)
+     - Colour: score-a/b/c/d from spec
+     - Label: "Strong buy" / "Good value" / "Neutral" / "Caution"
+
+  2. Score breakdown (5 rows with mini bars)
+     PSF vs value (25) | Yield (25) | Momentum (20) | Neighbourhood (15) | Developer (15)
+
+  3. Quick stats glass card: asking price, PSF, vs district avg, vs fair value
+
+  4. Neighbourhood scores (4 SVG arc indicators from OSM POI data)
+
+  5. Similar properties (2 compact cards with investment score badges)
+
+Create these functions in src/lib/intelligence.ts:
+  - computeComps(listingId, district, sqft, type) → Transaction[]
+  - computeFairValue(comps, districtPsf) → { low, high }
+  - computeInvestmentScore(data) → { total, breakdown }
+  - generateVerdict(data) → string
+  - getRiskFlags(data) → RiskFlag[]
+
+Create API route: GET /api/intelligence/[id]
+  Returns the full intelligence object for one listing.
+
+Apply FeatureGate to: Investment score, Verdict, Fair value
+  (Free users see blurred results + "Coming soon" — not upgrade)
+
+Verify:
+- /property/some-id loads with real data
+- Score ring animates
+- Comps table shows real DLD transactions
+- Verdict paragraph generated
+- Risk flags listed
+- Feature gate blurs for non-Pro users
+- Zero Stripe calls anywhere on this page
+
+
+TASK 06 — Investment Score Ring Component
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 2.3.
+
+Build src/components/InvestmentScore/index.tsx.
+
+1. SVG circular ring: viewBox 0 0 120 120
+   Outer track circle: cx=60 cy=60 r=50, stroke var(--ink-6) 0.5px
+   Score arc: same dimensions, stroke = scoreColour(score), width 8px
+   strokeDasharray="314" strokeDashoffset computed from score
+   Animate: stroke draws from offset=314 to target over 800ms on mount
+   Use CSS @keyframes score-draw with stroke-dashoffset
+
+2. Centre: score number in JetBrains Mono 500 48px, colour = scoreColour(score)
+   Below number: score label in Plus Jakarta Sans 500 12px
+
+3. scoreColour(score): 80+ = var(--score-a) green · 65+ = var(--score-b) teal
+                        50+ = var(--score-c) amber · below = var(--score-d) red
+   scoreLabel(score): "Strong buy" / "Good value" / "Neutral" / "Caution"
+
+4. Score breakdown panel below the ring (5 mini bars):
+   Each row: label | bar | X/max
+   Bar: 100px wide, 5px height, filled proportionally
+   Fill colour: scoreColour(componentScore * 100/componentMax)
+
+5. Sizes: default 200px diameter · sm: 120px · lg: 260px (prop)
+
+6. Export named components: InvestmentScore, ScoreBreakdown, ScoreBadge
+   ScoreBadge is a compact pill (used on listing cards):
+     Shows score + label in a coloured glass pill
+
+Verify: ring draws on mount. 5 breakdown bars. Three sizes work.
+Badge renders inline on listing cards.
+
+
+TASK 07 — KPI Strip with Live Data
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 7.1.
+
+Build src/components/KPIStrip/index.tsx.
+
+Section container:
+  background: rgba(255,255,255,0.40) + backdrop-filter:blur(10px)
+  border-top/bottom: 1px solid rgba(255,255,255,0.70)
+  padding: 28px 5vw
+  display: grid, 4 columns, 12px gap
+
+Each KPI glass card (var(--g2), padding 20px):
+  Label: JetBrains Mono 9px UPPERCASE, letter-spacing 0.16em, var(--ink-5)
+  Value: JetBrains Mono 500, 28px, var(--ink)
+  Delta: 11px font-weight 500, var(--up) or var(--down)
+  Sparkline: SVG 32px height, 1.5px stroke, 7% opacity area fill
+  DataLabel: "X transactions · source · Updated X min ago" — Mono 9px var(--ink-5)
+
+Cards:
+  1. AVG PRICE PSF · DUBAI — blue sparkline (#2563EB)
+  2. YTD TRANSACTIONS — indigo sparkline (#6366F1)
+  3. AVG RENTAL YIELD — sky sparkline (#0EA5E9)
+  4. MOMENTUM INDEX — gradient progress bar + signal label in var(--warn)
+
+Data source: /api/market
+Refresh: every 60 seconds (setInterval in a custom useMarketData hook)
+
+Framer Motion: each value counts up from 0 when scrolled into view.
+  Use IntersectionObserver + animate(0 → realValue, { duration: 1.2 })
+Show .sk skeleton while loading. Never show 0 as final state.
+
+Mobile < 768px: 2 columns. Mobile < 480px: 1 column.
+
+Verify: real data from DB. Count-up fires on scroll. Sparklines render.
+Skeletons show before data. Mono font on all numbers. DataLabel present.
+
+
+TASK 08 — Intelligence Panels (3 Charts)
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 7.3.
+
+Install: npm install recharts
+
+Build three intelligence panels below the KPI strip.
+
+Panel 1 (full width glass card): PSF Trend
+  Recharts ComposedChart + ResponsiveContainer
+  Area + Line for district PSF data
+  SVG linearGradient: id="chartLine" #2563EB → #6366F1 (x1=0 x2=100%)
+  Area fill: same gradient at 8% opacity
+  NO default Recharts styling. Custom everything:
+    CartesianGrid: horizontal only, stroke rgba(15,23,42,0.06), strokeDasharray none
+    XAxis: JetBrains Mono 9px, var(--ink-5), no axis line, no tick line
+    YAxis: same styling, tickFormatter: (v) => "AED " + v.toLocaleString()
+    Tooltip: custom component (glass card, Mono font — see spec)
+  Live endpoint dot: custom dot component on last data point, r=4 fill #6366F1 + outer ring
+  Period pills: 1M | 3M | 6M | 12M — above chart right side
+    Active: var(--b600) solid · Inactive: glass border
+    Click: refetch from /api/districts with period param
+  Toggle row below pills: "Nominal" | "Inflation-adjusted (CPI)"
+    CPI-adjusted: fetch CPI data from DB, show as dashed overlay line
+
+Panel 2 (left half): Transaction Volume
+  BarChart: months on X, volume on Y
+  Three bar groups: Sales (#2563EB), Mortgage (#6366F1), Off-plan (#0EA5E9)
+  Source note: "Source: Dubai Land Department · Dubai Pulse API"
+
+Panel 3 (right half): Yield vs PSF Scatter
+  ScatterChart: PSF on X, Yield % on Y
+  Each point = one district
+  Point radius: proportional to log(volume)
+  Point colour: momentum score blue scale
+  Quadrant guide lines at median X and Y (dashed, rgba blue 0.15)
+  Tooltip: district name + PSF + yield + volume in glass card
+
+Panels 2 + 3 sit side-by-side with 16px gap (50/50).
+Mobile: Panel 1 full width, 2 and 3 stacked.
+
+Verify: All 3 charts render with real data. Tooltips are glass-styled.
+Period toggle works. CPI toggle shows overlay. No default Recharts colours.
+
+
+TASK 09 — Deals Strip (Intelligence Layer)
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 7.4.
+
+Build the Today's Deals section — a horizontal scroll of glass cards.
+IMPORTANT: Frame this as intelligence, not as a listing browser.
+
+Section header:
+  Eyebrow: "MARKET MISPRICING INTELLIGENCE" — Mono 9px UPPERCASE, var(--b600)
+  Heading: "Properties priced below DLD transaction averages" — 28px 700
+  Sub: "Compared against X,XXX DLD-registered sales in each district.
+        Not compared against other listing prices."
+
+Create API endpoint: GET /api/deals
+  Query: SELECT l.*, dm.avgPricePsf as districtPsf
+         FROM Listing l
+         JOIN DistrictMetrics dm ON l.district = dm.district
+         WHERE l.pricePsf < (dm.avgPricePsf * 0.88)
+           AND dm.period = '30d' AND l.isActive = true
+         ORDER BY ((dm.avgPricePsf - l.pricePsf) / dm.avgPricePsf) DESC
+         LIMIT 10
+
+Deal card (glass, 220px wide, flex-shrink: 0):
+  Image: 150px height, object-fit cover, lazy, blue placeholder SVG if fails
+  Source badge top-right: "Bayut" / "PF" / "Dubizzle" — glass pill Mono 8px
+  Type badge top-left: property type — glass pill
+  District: Mono 9px UPPERCASE, var(--ink-5)
+  Price: Mono 500 18px, var(--b600) — "AED X,XXX,XXX"
+  Discount: "▼ X% below market data" — var(--up-bg) background, var(--up) text
+  PSF comparison: "AED X,XXX psf · Area avg AED X,XXX" — Mono 10px var(--ink-4)
+  Beds + Sqft: 11px sans
+  "View original →" external link in new tab
+
+Required disclaimer below strip (glass card, amber left border):
+  "sqftLab compares listing prices against DLD-registered transaction data —
+   not against other listings. A property appearing here may warrant investigation
+   but does not confirm undervaluation. Always conduct due diligence."
+
+Verify: Cards scroll horizontally. Discount badge shows real %. Source labels correct.
+Disclaimer visible. Images load with fallback. External links open new tab.
+
+
+TASK 10 — /heatmap Full Dashboard
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 8.2.
+
+Upgrade /heatmap to a two-column intelligence dashboard.
+
+LEFT (60%): District grid + layer toggle
+  Enhanced SVG heat map (7-column grid)
+  Layer toggle pills: PSF | Yield % | Momentum | Deals | Volume
+  Each layer changes what metric drives cell colour intensity
+  Cells: glass-tinted rectangles, score Mono 11px, district name 9px
+  Hover: scale(1.06) + border var(--b600) + tooltip (glass card)
+  Tooltip: full district name, selected metric value, delta, volume
+
+  Below toggle: "Switch to map view" link
+  Map view: lazy-loads Mapbox GL choropleth (only when clicked)
+  If NEXT_PUBLIC_MAPBOX_TOKEN not set: show placeholder with "Coming soon"
+
+RIGHT (40%): District detail panel (updates on cell click)
+  Default: most active district
+  Content:
+    District name (700, 24px) + transaction count pill
+    4 KPI pills: PSF | Yield | Volume | Momentum (all Mono)
+    Mini sparkline: 8-week PSF trend
+    Neighbourhood scores: 4 SVG arcs (Transport / Schools / Healthcare / Lifestyle)
+    Active deals: "X listings below market today" green badge + "View deals →"
+    "Full district report →" → /district/[slug]
+
+Data: /api/districts endpoint for grid · /api/districts/[name] for panel
+
+Verify: Grid renders real data. Layer toggle changes colours.
+Clicking cell updates right panel. Neighbourhood scores from POI table.
+
+
+TASK 11 — /about Methodology Page
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 8.6.
+
+Build /about page. This is a trust page — the most important non-feature page.
+
+Section 1: Hero statement
+  "Intelligence, not listings." — Plus Jakarta Sans 800, 48px, var(--ink)
+  Subheading: 3 short paragraphs explaining what sqftLab is, why official
+  transaction data matters over listing estimates, who it is for.
+
+Section 2: Data sources table (glass card)
+  Columns: Source | What it provides | Coverage | Update frequency | Cost
+  8 rows. All cost = "✓ AED 0" in var(--up)
+  Sources: Dubai Pulse, ADREC, Ejari, OSM, ExchangeRate-API, UAE FCSC, World Bank, Dubizzle/Bayut/PF (scraped)
+
+Section 3: Methodology accordion (Radix UI Accordion)
+  Install: npm install @radix-ui/react-accordion
+  5 items. Each expands to show how the metric is calculated:
+    - Average PSF
+    - Investment Score
+    - Fair Value Range
+    - Rental Yield
+    - Neighbourhood Score
+  Use glass card styling on each item. Smooth expand animation.
+
+Section 4: Live data freshness
+  "sqftLab data last updated: X minutes ago" — reads from /api/market
+  Auto-updates every 30 seconds without page reload
+
+Section 5: "What sqftLab does NOT do" (glass card, blue left border)
+  4 items with "✓" prefix:
+    We do not facilitate property transactions
+    We do not employ or recommend estate agents
+    We do not receive referral fees
+    We do not sell advertising or sponsored listings
+
+Verify: Accordion opens/closes smoothly. Live timestamp updates.
+"What we don't do" section visible. Data sources table complete.
+
+
+TASK 12 — /pricing Page: Display Only
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 6. Payment kill switch must already be installed.
+
+Build /pricing page with 3 glass tier cards. NOTHING processes payment.
+
+Layout: 3 cards centered, max-width 960px, side by side with 20px gap.
+
+FREE card:
+  Price: AED 0
+  Features from spec Part 6.1
+  CTA: "Get started →" → /sign-up (WORKS — no payment)
+
+PRO card (highlighted — blue top border 2px, slightly bigger shadow):
+  "Most popular" badge — var(--b600) pill, absolute top-center
+  Price: AED 49/mo · AED 39/mo annual
+  Features from spec Part 6.1
+  CTA: "Coming soon" button → toast (PAYMENT KILL SWITCH)
+  Below: "Join the waitlist →" → /waitlist (12px link, var(--ink-4))
+
+ELITE card:
+  Price: AED 149/mo · AED 119/mo annual
+  Features from spec Part 6.1
+  CTA: "Coming soon" button → toast
+  Below: "Join the waitlist →"
+
+Annual/monthly toggle above cards:
+  Pill-style toggle. Annual shows "Save 20%" green badge.
+  Price values animate when toggled (Framer Motion layout animation).
+
+FAQ accordion below (Radix UI):
+  5 questions — include "When will paid plans launch?" with honest answer.
+
+Verify: Free CTA works. Pro/Elite show toast on click.
+Zero Stripe network calls. Annual toggle changes prices.
+Feature list complete. "Coming soon" text on Pro/Elite.
+
+
+TASK 13 — /waitlist Page
+
+Paste this to your agent:
+
+
+Build /waitlist page. Simple. No payment. Just email capture.
+
+Glass card, centered, max-width 480px, vertically centered on page.
+
+Content:
+  sqftLab logo mark (64px)
+  Heading: "Be first when Pro launches" (700, 28px)
+  Sub: "We'll notify you the moment paid plans go live.
+        No spam. Unsubscribe anytime." (var(--ink-4), 14px)
+  Email input: glass style, placeholder "your@email.com"
+  Submit button: "Join waitlist →" var(--b600) pill
+  On submit: POST to /api/waitlist (save email to DB, show success state)
+
+Success state (replace form):
+  "✓ You're on the list" (var(--up), 18px)
+  "We'll email [address] when Pro launches." (var(--ink-4))
+
+Create Waitlist model in schema.prisma:
+  model Waitlist {
+    id        String   @id @default(cuid())
+    email     String   @unique
+    createdAt DateTime @default(now())
+    source    String?  // "pricing_page" | "feature_gate" | "direct"
+  }
+Run: npx prisma db push
+
+Create POST /api/waitlist: validate email, upsert to DB, return 200.
+
+Verify: Email saves to DB. Success state shows. Duplicate email handled gracefully.
+Zero Stripe calls. No payment of any kind.
+
+
+TASK 14 — FX Currency Toggle
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 7.5.
+
+Build global currency toggle. Exchange rates already fetched every minute.
+
+1. Create src/contexts/CurrencyContext.tsx:
+   State: currency ('AED' | 'USD' | 'GBP' | 'INR')
+   State: rates (from /api/market → fx object)
+   convert(aedAmount): returns converted number
+   format(aedAmount): returns "AED 1,200,000" or "USD 326,740" etc
+   Store selection in localStorage
+
+2. Build <PriceDisplay amount={aedValue} /> component:
+   Reads from CurrencyContext, converts, shows formatted value.
+   If non-AED selected: show converted value + "(AED X,XXX,XXX)" smaller below.
+   Primary data anchor is always AED.
+
+3. Add toggle to nav right side (or ticker strip right):
+   Pills: AED · USD · GBP · INR
+   Active: var(--b600) glass · Inactive: var(--g3) var(--ink-4)
+   Font: Mono 10px
+
+4. Replace ALL hardcoded AED price displays with <PriceDisplay>:
+   - Property cards
+   - Deal cards
+   - KPI strip (PSF card)
+   - District detail pages
+   - Calculator inputs
+
+Verify: Toggle in nav. USD converts all prices. AED shows canonical.
+Persists on refresh. KPI PSF card converts. Property cards convert.
+
+
+TASK 15 — Data Source Labels (Trust Layer)
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 7.6.
+
+Build src/components/DataLabel/index.tsx.
+
+Props: source, count, period, lastUpdated, methodology
+
+Renders: "Based on 4,218 DLD transactions · 30 days · Updated 2 min ago  ⓘ"
+Font: JetBrains Mono 9px, var(--ink-5), display flex gap-4
+
+ⓘ icon: hover shows tooltip (glass card, 220px wide, Mono 11px)
+Tooltip shows the methodology string.
+
+relativeTime(iso): returns "just now" / "2 min ago" / "X hrs ago"
+Updates every 30s via setInterval.
+
+Add DataLabel under:
+  1. Every KPI strip card
+  2. PSF trend chart header
+  3. Yield scatter chart header
+  4. Every district detail page heading
+  5. Heat map section header
+  6. Every deal card ("vs X DLD transactions in [district]")
+  7. Property intelligence report — each section
+
+Verify: DataLabel visible under KPI cards. Relative time updates.
+Tooltip shows on ⓘ hover. Mono font. All 7 locations have the label.
+
+
+TASK 16 — /district/[slug] Pages
+
+Paste this to your agent:
+
+
+Read sqftlab_full_spec_v3.md — Part 8.8.
+
+Build dynamic route /district/[slug].
+Slug: district name lowercased, spaces → hyphens.
+
+generateStaticParams(): top 25 districts by transaction volume from DB.
+generateMetadata(params): title, description with real PSF and transaction count.
+Others: ISR revalidate: 3600
+
+LEFT (65%):
+  Breadcrumb · Heading · "X transactions · 30d" sub
+  4 inline KPI pills: PSF | 3M Change | Volume | Active Listings
+  PriceChart component (12M, period pills)
+  Intelligence note card (blue left border):
+    "Based on [X] DLD-registered sales in [District] between [date] and [date].
+     Source: Dubai Pulse API."
+  Recent transactions table (last 20 from Transaction table):
+    Columns: Date | Type | Sqft | Price | PSF — all Mono
+    This is REAL transaction data, not listing data.
+  Active listings section: 6 PropertyCards (2-col) with market comparison badges
+
+RIGHT (35%):
+  Neighbourhood scores: 4 SVG arc indicators from POI table
+  Nearby POIs: tabs Metro|Schools|Hospitals|Malls, list with Haversine distance
+  Comparison card: dropdown to pick second district, shows PSF/yield/momentum diff
+
+Verify: Top 25 pre-rendered at build. Real DLD data in transactions table.
+Neighbourhood scores from OSM. Metadata SEO correct.
+Intelligence note shows date range and count.
+
+
+TASK 17 — Final TypeScript + Build + Deploy
+
+Paste this to your agent:
+
+
+Final cleanup and deployment for sqftLab.com.
+
+STEP 1 — TypeScript:
+  npx tsc --noEmit
+  Fix ALL errors. Zero tolerance.
+  Key areas: CurrencyContext types, Prisma return types (no 'any'),
+  Recharts chart types, Framer Motion props, IntelligenceScore types.
+
+STEP 2 — Lint:
+  npm run lint
+  Fix all errors and warnings.
+
+STEP 3 — Bundle check:
+  Any page > 400kb needs code splitting:
+  - Recharts: dynamic import
+  - Mapbox GL: dynamic import
+  - Framer Motion: only import what's used
+
+STEP 4 — Build:
+  npm run build
+  Must succeed with zero errors.
+
+STEP 5 — Verify these 20 things locally:
+  □ Homepage loads < 2 seconds
+  □ Property intelligence report at /property/[any-id] shows real data
+  □ Investment score ring animates
+  □ Verdict paragraph generates
+  □ KPI strip shows real numbers, count-up works
+  □ 3 charts render with real data
+  □ Deals strip shows real deals (scraper must have run)
+  □ Currency toggle converts all prices
+  □ Clicking Pro CTA → toast, zero Stripe requests
+  □ Clicking Elite CTA → toast, zero Stripe requests
+  □ /api/checkout → 503 response
+  □ BETA badge in nav
+  □ Logo reads sqftLab (grep sqrtLab = zero)
+  □ Mortgage not in nav
+  □ /mortgage route still loads directly
+  □ /about page loads with live timestamp
+  □ /pricing shows "Coming soon" on Pro/Elite
+  □ /waitlist saves email to DB
+  □ DataLabel visible under KPI cards
+  □ Mobile 375px: no horizontal scroll
+
+STEP 6 — Railway deployment:
+  Environment variables:
+    DATABASE_URL      (auto from Railway Postgres plugin)
+    REDIS_URL         (auto from Railway Redis plugin)
+    IMAGE_DIR         = /data/images
+    NODE_ENV          = production
+    NEXTAUTH_SECRET   = (openssl rand -hex 32)
+    NEXTAUTH_URL      = https://sqftlab.com
+    RESEND_API_KEY    = re_...
+    SENTRY_DSN        = https://...
+    PAYMENTS_ENABLED  = false  ← confirm this is false in prod
+
+  After deploy: npx prisma db push in Railway shell
+  Verify: /api/market returns real data. ScraperLog has successes.
+
+
+QUICK CHEAT SHEET — KEY RULES FOR EVERY SESSION
+
+1. sqftLab (not sqrtLab) — verify with grep every session
+2. ALL numbers → JetBrains Mono font — no exceptions
+3. ALL backgrounds → glass (rgba white + backdrop-filter)
+4. PAYMENTS_ENABLED = false — verify in payments.ts
+5. Mortgage hidden in nav — but /mortgage route works directly
+6. Property Intelligence Report is the core feature
+   Pipeline: Txn data → Comps → PSF → Fair value → Yield → Trend → Score → Verdict
+7. Every metric needs a DataLabel showing source + count + timestamp
+8. sqftLab = data intelligence platform, NOT a listing portal
+   Copy rule: never say "find a property" — say "analyse a property"
+9. Feature gates show "Coming soon" NOT "Upgrade" (payment disabled)
+10. Free tier gets real intelligence — just limited (5 reports/day)
+
+
+sqftLab.com — Agent Action Guide v2.0
+UAE Property Data Intelligence Platform · September 2026
+

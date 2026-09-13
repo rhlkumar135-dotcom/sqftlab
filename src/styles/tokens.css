@@ -1,0 +1,89 @@
+/* sqftLab Design System — Part 1.1 of Spec */
+/* All colour, spacing, radius, shadow, motion, font variables */
+
+:root {
+  /* ── Page ── */
+  --page:          #EEF2F7;
+  --page-2:        #E8EDF5;
+
+  /* ── Ambient gradients on body ── */
+  --grad-top:   radial-gradient(ellipse 90% 65% at 25% 0%,
+                  rgba(37,99,235,0.11) 0%, transparent 62%);
+  --grad-right: radial-gradient(ellipse 55% 50% at 88% 12%,
+                  rgba(99,102,241,0.07) 0%, transparent 58%);
+  --grad-left:  radial-gradient(ellipse 50% 42% at 8% 85%,
+                  rgba(14,165,233,0.06) 0%, transparent 52%);
+
+  /* ── Glass surfaces (4 levels) ── */
+  --g1: rgba(248,250,255,0.90);  /* nav */
+  --g2: rgba(255,255,255,0.74);  /* primary cards */
+  --g3: rgba(255,255,255,0.56);  /* sub-cards, panels */
+  --g4: rgba(255,255,255,0.36);  /* section backgrounds */
+  --gb: rgba(255,255,255,0.92);  /* borders */
+  --gblur: blur(16px);
+  --gblur-nav: blur(20px);
+
+  /* ── Brand blue ── */
+  --b900: #1E3A8A;
+  --b800: #1E40AF;
+  --b700: #1D4ED8;
+  --b600: #2563EB;   /* PRIMARY — buttons, active states, key data */
+  --b500: #3B82F6;
+  --b400: #60A5FA;
+  --b300: #93C5FD;
+  --b100: #DBEAFE;
+  --b50:  #EFF6FF;
+
+  /* ── Accent colours ── */
+  --indigo:  #6366F1;
+  --violet:  #7C3AED;
+  --sky:     #0EA5E9;
+  --teal:    #0D9488;
+
+  /* ── Semantic ── */
+  --up:      #059669;  /* positive delta, good score */
+  --up-bg:   rgba(5,150,105,0.09);
+  --down:    #DC2626;  /* negative delta, risk */
+  --down-bg: rgba(220,38,38,0.09);
+  --warn:    #D97706;  /* neutral/caution */
+  --warn-bg: rgba(217,119,6,0.09);
+
+  /* ── Intelligence score colours ── */
+  --score-a:  #059669;  /* 80–100: Strong buy */
+  --score-b:  #0D9488;  /* 65–79:  Good value */
+  --score-c:  #D97706;  /* 50–64:  Neutral */
+  --score-d:  #DC2626;  /* 0–49:   Caution */
+
+  /* ── Text hierarchy ── */
+  --ink:   #0F172A;
+  --ink-2: #1E293B;
+  --ink-3: #334155;
+  --ink-4: #64748B;
+  --ink-5: #94A3B8;
+  --ink-6: #CBD5E1;
+
+  /* ── Shadows ── */
+  --sh-xs:   0 1px 2px rgba(15,23,42,0.05);
+  --sh-sm:   0 1px 3px rgba(15,23,42,0.08), 0 4px 12px rgba(15,23,42,0.05);
+  --sh-card: 0 2px 8px rgba(15,23,42,0.07), 0 8px 32px rgba(15,23,42,0.05);
+  --sh-lift: 0 8px 32px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.06);
+  --sh-btn:  0 2px 10px rgba(37,99,235,0.30);
+  --sh-blue: 0 4px 20px rgba(37,99,235,0.22);
+
+  /* ── Typography ── */
+  --font-ui:    'Plus Jakarta Sans', sans-serif;
+  --font-data:  'JetBrains Mono', monospace;
+  --font-serif: 'Instrument Serif', serif;
+
+  /* ── Spacing ── */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px;
+  --sp-5:20px; --sp-6:24px; --sp-8:32px; --sp-10:40px;
+  --sp-12:48px; --sp-16:64px; --sp-20:80px;
+
+  /* ── Radius ── */
+  --r-sm:6px; --r-md:10px; --r:14px; --r-lg:18px; --r-pill:100px;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.16,1,0.3,1);
+  --dur-fast:150ms; --dur:250ms; --dur-slow:400ms;
+}
