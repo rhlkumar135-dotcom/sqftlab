@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 // SHOGO:CUSTOM-END
 
@@ -109,6 +109,7 @@ model Listing {
   isDeal          Boolean  @default(false) @map("is_deal")
   title           String?
   imageUrl        String?  @map("image_url")
+  sourceUrl       String?  @map("source_url")
 
   community Community @relation(fields: [communityId], references: [id])
 

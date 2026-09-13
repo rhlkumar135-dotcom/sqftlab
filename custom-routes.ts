@@ -316,6 +316,7 @@ function pfParse(property: any, source: string, purpose: string) {
     listedAt: new Date(property.listed_date ?? Date.now()),
     districtName: loc.name ?? 'Unknown',
     locationSlug: loc.slug ?? (loc.name ?? 'unknown').toLowerCase().replace(/\s+/g, '-'),
+    sourceUrl: `https://www.propertyfinder.ae/en/property/${property.id ?? ''}.html`,
   }
 }
 
@@ -337,7 +338,7 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
 
 app.get('/sqftlab/scrape', async (c) => {
   const secret = c.req.query('secret')
-  if (secret !== 'sqrtlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
+  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
 
   const startedAt = Date.now()
   let totalSaved = 0
@@ -368,12 +369,14 @@ app.get('/sqftlab/scrape', async (c) => {
                   furnished: parsed.furnished, completion: parsed.completion,
                   agentName: parsed.agentName, agencyName: parsed.agencyName,
                   title: parsed.title, imageUrl: parsed.imageUrl,
+                  sourceUrl: parsed.sourceUrl,
                   latitude: parsed.latitude, longitude: parsed.longitude,
                   listedAt: parsed.listedAt, isDeal: false,
                 },
                 update: {
                   priceAed: parsed.priceAed, pricePerSqft: parsed.pricePerSqft,
                   title: parsed.title, imageUrl: parsed.imageUrl,
+                  sourceUrl: parsed.sourceUrl,
                   agentName: parsed.agentName, agencyName: parsed.agencyName,
                   scrapedAt: new Date(),
                 },

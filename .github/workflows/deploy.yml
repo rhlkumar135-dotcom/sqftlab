@@ -1,0 +1,44 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+  RAILWAY_SERVICE_NAME: ${{ secrets.RAILWAY_SERVICE_NAME }}
+  RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Link to Railway project
+        run: railway link --project ${{ env.RAILWAY_PROJECT_ID }} --token ${{ env.RAILWAY_TOKEN }}
+
+      - name: Deploy
+        run: railway up --service ${{ env.RAILWAY_SERVICE_NAME }} --token ${{ env.RAILWAY_TOKEN }} --no-wait
+
+      - name: Set environment variables
+        run: |
+          railway variables set DATABASE_URL="\${{Postgres.DATABASE_URL}}" NODE_ENV=production --token ${{ env.RAILWAY_TOKEN }}
+
+      - name: Verify deployment
+        run: |
+          echo "Deployment triggered. Check Railway dashboard for status."
+          sleep 30
+          RAILWAY_URL=$(railway status --token ${{ env.RAILWAY_TOKEN }} | grep -oP 'https://[^\s]+' | head -1)
+          if [ -n "$RAILWAY_URL" ]; then
+            echo "Live at: $RAILWAY_URL"
+            curl -sf "$RAILWAY_URL/api/sqftlab/stats" && echo "✅ API healthy" || echo "⏳ Still starting..."
+          fi

@@ -1,47 +1,45 @@
 @import "tailwindcss";
-@import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @plugin "tailwindcss-animate";
 
-/* ─── sqrtLab Design Tokens ────────────────────────────────────────────────
-   Source: Khashn_UAE_PropTech_Documentation_v1.docx §2.2
-   Philosophy: "precise, restrained, confident — private banking interface"
-   The single bold choice: gold on midnight. Everything else serves that pair.
-   ──────────────────────────────────────────────────────────────────────── */
+/* ─── sqftLab Design Tokens — Blue & White Glass ──────────────────────────── */
 
 :root {
-  --background: #F8F6F2;
-  --foreground: #0A0A0A;
+  --background: #EFF6FF;
+  --foreground: #0F172A;
   --card: #FFFFFF;
-  --card-foreground: #0A0A0A;
+  --card-foreground: #0F172A;
   --popover: #FFFFFF;
-  --popover-foreground: #0A0A0A;
-  --primary: #0A2540;
+  --popover-foreground: #0F172A;
+  --primary: #1E40AF;
   --primary-foreground: #FFFFFF;
-  --secondary: #F5F0E8;
-  --secondary-foreground: #0A2540;
-  --muted: #F5F0E8;
-  --muted-foreground: #6B6860;
-  --accent: #C8A96E;
-  --accent-foreground: #0A2540;
-  --destructive: #B91C1C;
-  --border: #C9C5BB;
-  --input: #C9C5BB;
-  --ring: #C8A96E;
-  --radius: 0.5rem;
+  --secondary: #DBEAFE;
+  --secondary-foreground: #1E40AF;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent: #3B82F6;
+  --accent-foreground: #FFFFFF;
+  --destructive: #DC2626;
+  --border: #CBD5E1;
+  --input: #E2E8F0;
+  --ring: #3B82F6;
+  --radius: 0.75rem;
 
-  /* sqrtLab brand tokens */
-  --sqrtlab-navy: #0A2540;
-  --sqrtlab-gold: #C8A96E;
-  --sqrtlab-teal: #0E7C6E;
-  --sqrtlab-sand: #F5F0E8;
-  --sqrtlab-danger: #B91C1C;
-  --sqrtlab-surface: #FFFFFF;
-  --sqrtlab-surface-2: #F8F6F2;
-  --sqrtlab-ink: #0A0A0A;
-  --sqrtlab-muted: #6B6860;
+  /* sqftLab brand tokens */
+  --sqftlab-blue: #1E40AF;
+  --sqftlab-blue-light: #3B82F6;
+  --sqftlab-blue-pale: #DBEAFE;
+  --sqftlab-navy: #0F172A;
+  --sqftlab-white: #FFFFFF;
+  --sqftlab-surface: #F8FAFC;
+  --sqftlab-glass: rgba(255, 255, 255, 0.80);
+  --sqftlab-glass-border: rgba(148, 163, 184, 0.20);
+  --sqftlab-success: #059669;
+  --sqftlab-danger: #DC2626;
+  --sqftlab-ink: #0F172A;
+  --sqftlab-muted: #64748B;
 }
 
 @theme inline {
