@@ -1,5 +1,5 @@
 #!/bin/bash
-# Railway build script — swaps schema to postgresql and regenerates everything
+# Railway build script — swaps schema to postgresql and regenerates
 set -ex
 
 echo "=== sqftLab Railway Build ==="
@@ -16,14 +16,12 @@ fi
 
 # Install deps (skip postinstall to avoid generating with wrong provider)
 echo "Installing dependencies..."
-bun install --ignore-scripts
+bun install --frozen-lockfile 2>/dev/null || bun install
 
 # Clean and regenerate Prisma client with correct provider
 echo "Regenerating Prisma client..."
 rm -rf src/generated/prisma
 bun x prisma generate
-echo "Generated files:"
-ls -la src/generated/prisma/ 2>/dev/null || echo "NO GENERATED FILES!"
 
 # Run Shogo generate
 echo "Running Shogo generate..."

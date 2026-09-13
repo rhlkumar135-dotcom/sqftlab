@@ -4,8 +4,5 @@ nixPkgs = ["bun"]
 [phases.install]
 cmds = ["bun install --frozen-lockfile"]
 
-[phases.build]
-cmds = ["bun x prisma generate", "bun run build"]
-
 [start]
 cmd = "bash scripts/railway-setup.sh"

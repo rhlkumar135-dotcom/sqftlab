@@ -3,11 +3,20 @@
 set -e
 
 echo "=== sqftLab Railway Startup ==="
+echo "DATABASE_URL set: $([ -n "$DATABASE_URL" ] && echo YES || echo NO)"
 
-echo "Step 1: Generating Prisma client for PostgreSQL..."
+# If DATABASE_URL is set and schema is still sqlite, swap it
+if [ -n "$DATABASE_URL" ]; then
+  if grep -q 'provider = "sqlite"' prisma/schema.prisma; then
+    echo "Swapping schema to PostgreSQL..."
+    sed -i 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
+  fi
+fi
+
+echo "Step 1: Generating Prisma client..."
 bun x prisma generate
 
-echo "Step 2: Running Shogo SDK generate (routes/hooks/types)..."
+echo "Step 2: Running Shogo SDK generate..."
 bun run generate || echo "Shogo generate completed with warnings"
 
 echo "Step 3: Pushing schema to database..."
