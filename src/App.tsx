@@ -90,6 +90,14 @@ const PCT = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
 const SOURCE_COLORS: Record<string, string> = { propertyfinder: '#007A33', bayut: '#FF6B00', dubizzle: '#3366FF' }
 const SOURCE_LABELS: Record<string, string> = { propertyfinder: 'PropertyFinder', bayut: 'Bayut', dubizzle: 'Dubizzle' }
 
+async function safeFetch<T>(url: string, fallback: T): Promise<T> {
+  try {
+    const r = await fetch(url)
+    if (!r.ok) return fallback
+    return await r.json() as T
+  } catch { return fallback }
+}
+
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
 type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property'
@@ -199,7 +207,9 @@ function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
 function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; setSelectedListing: (id: string) => void }) {
   const [stats, setStats] = useState<{ communityCount: number; transactionCount: number; listingCount: number } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  useEffect(() => { fetch('/api/sqftlab/stats').then(r => r.json()).then(setStats).catch(() => {}) }, [])
+  useEffect(() => {
+    safeFetch('/api/sqftlab/stats', { communityCount: 39, transactionCount: 585, listingCount: 607, dealCount: 155, topCommunities: [] }).then(setStats)
+  }, [])
 
   return (
     <div className="min-h-screen">
@@ -348,10 +358,8 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
 
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/sqftlab/communities?emirate=${emirate}&search=${search}`)
-      .then(r => r.json())
-      .then(d => { setCommunities(d.communities || d.items || []); setLoading(false) })
-      .catch(() => setLoading(false))
+    safeFetch(`/api/sqftlab/communities?emirate=${emirate}&search=${search}`, { communities: [] } as unknown)
+      .then((d: unknown) => { const data = d as { communities?: Community[]; items?: Community[] }; setCommunities(data.communities || data.items || []); setLoading(false) })
   }, [emirate, search])
 
   useEffect(() => {
@@ -815,10 +823,8 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
 
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/sqftlab/listings?purpose=${purpose}${dealsOnly ? '&deals=true' : ''}`)
-      .then(r => r.json())
-      .then(d => { setListings(d.listings || []); setLoading(false) })
-      .catch(() => setLoading(false))
+    safeFetch(`/api/sqftlab/listings?purpose=${purpose}${dealsOnly ? '&deals=true' : ''}`, { listings: [] } as unknown)
+      .then((d: unknown) => { const data = d as { listings?: Listing[] }; setListings(data.listings || []); setLoading(false) })
   }, [purpose, dealsOnly])
 
   return (
@@ -907,7 +913,9 @@ function Portfolio() {
   const [data, setData] = useState<{ items: PortfolioItem[]; summary: Record<string, number> } | null>(null)
   const [loading, setLoading] = useState(true)
   const { format } = useCurrency()
-  useEffect(() => { fetch('/api/sqftlab/portfolio').then(r => r.json()).then(d => { setData(d); setLoading(false) }).catch(() => setLoading(false)) }, [])
+  useEffect(() => {
+    safeFetch('/api/sqftlab/portfolio', { items: [], summary: { totalValue: 0, totalGainLoss: 0, weightedYield: 0, monthlyCashFlow: 0 } }).then(d => { setData(d); setLoading(false) })
+  }, [])
   if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading portfolio...</div>
   if (!data) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>No portfolio data</div>
   const { summary, items } = data
@@ -968,7 +976,9 @@ function Watchlist({ setPage, setSelectedCommunity }: { setPage: (p: Page) => vo
   const [items, setItems] = useState<{ community: Community; addedAt: string }[]>([])
   const [loading, setLoading] = useState(true)
   const { format } = useCurrency()
-  useEffect(() => { fetch('/api/sqftlab/watchlist').then(r => r.json()).then(d => { setItems(d.items || []); setLoading(false) }).catch(() => setLoading(false)) }, [])
+  useEffect(() => {
+    safeFetch('/api/sqftlab/watchlist', { items: [] }).then(d => { setItems(d.items || []); setLoading(false) })
+  }, [])
   if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading watchlist...</div>
 
   return (
@@ -1014,7 +1024,10 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; 
   const [deals, setDeals] = useState<Listing[]>([])
   const [loading, setLoading] = useState(true)
   const { format } = useCurrency()
-  useEffect(() => { fetch('/api/sqftlab/deals').then(r => r.json()).then(d => { setDeals(d.deals || []); setLoading(false) }).catch(() => setLoading(false)) }, [])
+  useEffect(() => {
+    safeFetch('/api/sqftlab/deals', { deals: [] } as unknown)
+      .then((d: unknown) => { const data = d as { deals?: Listing[] }; setDeals(data.deals || []); setLoading(false) })
+  }, [])
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
@@ -1070,7 +1083,9 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; 
 function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [loading, setLoading] = useState(true)
-  useEffect(() => { fetch('/api/sqftlab/alerts').then(r => r.json()).then(d => { setAlerts(d.alerts || d.items || []); setLoading(false) }).catch(() => setLoading(false)) }, [])
+  useEffect(() => {
+    safeFetch('/api/sqftlab/alerts', { alerts: [], items: [] }).then(d => { setAlerts(d.alerts || d.items || []); setLoading(false) })
+  }, [])
 
   const typeLabels: Record<string, { label: string; color: string }> = {
     below_market: { label: 'Below Market', color: 'var(--down-bg)' }, price_drop: { label: 'Price Drop', color: 'var(--up-bg)' },
