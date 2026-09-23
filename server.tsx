@@ -26,6 +26,20 @@ app.use('*', async (c, next) => {
 // Health check endpoint
 app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
 
+// The Shogo preview proxy mounts the app under /p/<projectId>/ and rewrites the
+// built asset URLs to that prefix. Strip it before routing so those assets and
+// /api/* both resolve instead of falling through to the SPA shell.
+app.use('*', async (c, next) => {
+  const url = new URL(c.req.url)
+  const m = url.pathname.match(/^\/p\/[0-9a-fA-F-]{36}(\/.*)?$/)
+  if (m) {
+    const rest = m[1] || '/'
+    const rewritten = new URL(rest + url.search, url.origin)
+    return app.fetch(new Request(rewritten, c.req.raw))
+  }
+  await next()
+})
+
 // CRUD routes (available after schema.prisma has models)
 try {
   const { createAllRoutes } = await import('./src/generated')
