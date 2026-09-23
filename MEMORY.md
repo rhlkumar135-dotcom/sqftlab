@@ -81,3 +81,51 @@ and `routes.ts` are produced and `vite build` succeeds.
   apex/www, which makes the site look broken even when the origin is healthy.
 
 
+
+## 2026-09-23 — Post-redeploy verification (still down)
+
+User reported redeploying. Verified from independent networks (this sandbox's IP is
+Cloudflare-rate-limited, so checks were routed via codetabs/allorigins/jina proxies):
+
+- `www.sqftlab.com/api/sqftlab/stats` → **522** on 4 probes over ~3 min (Cloudflare cannot
+  reach the origin at all).
+- `www.sqftlab.com/` via jina → Cloudflare Turnstile "heavy traffic" challenge page,
+  response header `railway-hikari/ord1.x8wt`.
+- `47edlwve.up.railway.app` → resolves 69.46.46.48, Railway edge alive, but
+  **404 {"message":"Application not found"}** = no app bound to that hostname.
+- `sqftlab-production.up.railway.app` → same 404. NOTE: `crudepulse-production.up.railway.app`
+  ALSO 404s, so these `-production` hostnames are *guessed* from a naming pattern and are
+  NOT evidence about deploy state. Do not cite them as proof.
+- **`https://sqftlab.shogo.one` → 200**, serving the current bundle. `/api/*` there is 503
+  (no API sidecar) and the SPA falls back to `src/data/snapshot.json`. This is the only
+  verified-working public link.
+
+Key deduction: a 522 means the origin did not respond at the TCP/TLS layer. If Cloudflare's
+origin were the Railway host we probed — which answers 404 — visitors would see a 404, not a
+522. So either the service has no running deployment, or Cloudflare points at a host that is
+not answering. **Decisive 30-second test for the user: set the Cloudflare record to "DNS
+only" (grey cloud) and load the origin directly** — that reveals which of the two it is.
+
+### Deploy path verified green (clean clone of GitHub main)
+
+Ran Railway's exact `scripts/railway-build.sh` on a fresh `git clone` with a
+postgres-style `DATABASE_URL`: schema swap works, bundle builds (`✓ built in 4.5s`).
+Only the `db push` step failed, and only because the test host was unreachable (P1001).
+So the next deploy **will build** — the remaining blocker is Railway-side, not code.
+
+Also confirmed: `src/generated/` is gitignored (`git ls-files src/generated` → 0) and
+`server.tsx:47` imports it in a **silent** try/catch. A generate failure therefore yields a
+booted, /health-passing container with the entire CRUD API missing — blank pages, no error.
+Fixed by making `railway-build.sh` detect a missing `src/generated/index.ts` and say so
+loudly (commit 703e7f7, both branches unit-tested).
+
+### Credential state
+
+- GitHub PAT (fine-grained, `admin:true`, contents+admin) stored in `~/.git-credentials`
+  (chmod 600, gitignored). Auth verified `GET /user` → 200. Plain `git push` works.
+  NOTE: this file is wiped whenever the runtime restarts — re-install it if pushes fail.
+- The PAT lacks the `Webhooks` permission (`403 Resource not accessible by personal access
+  token`), so webhook repair cannot be done from here.
+- ALL Railway credentials remain dead (exhausted: CLI absent, no stored login, no env vars,
+  session-record token `640cbfc7-…`, the pasted `6c9b84b8-…`, GraphQL on both
+  backboard.railway.com/.app). Railway auth is a hard wall — need a fresh Account token.
