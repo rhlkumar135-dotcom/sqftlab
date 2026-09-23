@@ -1813,7 +1813,7 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
     { label: 'AVG GROSS YIELD', value: `${o.avgYield}%`, sub: 'Ejari where available' },
     { label: 'MOMENTUM INDEX', value: `${o.momentumIndex > 0 ? '+' : ''}${o.momentumIndex}%`, sub: '30-day mean change' },
     { label: 'DLD TRANSACTIONS', value: o.transactionCount.toLocaleString(), sub: 'registered register' },
-    { label: 'VALUE TRANSPACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration' },
+    { label: 'VALUE TRANSACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration' },
     { label: 'ACTIVE LISTINGS', value: o.activeListings.toLocaleString(), sub: 'all portals' },
   ]
 
