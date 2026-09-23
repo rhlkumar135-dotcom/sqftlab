@@ -3,7 +3,20 @@
 set -e
 
 echo "=== sqftLab Railway Startup ==="
-echo "DATABASE_URL set: $([ -n "$DATABASE_URL" ] && echo YES || echo NO)"
+
+# Surface a misconfigured database immediately in the deploy logs. The literal
+# "${{...}}" form means the value was pasted as a string instead of resolved as
+# a Railway reference — the connection will fail on every query.
+if [ -z "$DATABASE_URL" ]; then
+  echo "WARN: DATABASE_URL is unset — falling back to SQLite; data will not persist."
+elif printf '%s' "$DATABASE_URL" | grep -q '^\${{'; then
+  echo "ERROR: DATABASE_URL is an UNRESOLVED placeholder: $DATABASE_URL"
+  echo "       In Railway, set it via 'Add Reference' → the Postgres service's DATABASE_URL,"
+  echo "       or use \${{Postgres.DATABASE_URL}} as a *reference*, not a literal string."
+else
+  # Print host/db only — never the credentials.
+  echo "DATABASE_URL host: $(printf '%s' "$DATABASE_URL" | sed -E 's#^[a-z]+://([^@]*@)?([^/]+)/.*#\2#')"
+fi
 
 # If DATABASE_URL is set and schema is still sqlite, swap it
 if [ -n "$DATABASE_URL" ]; then

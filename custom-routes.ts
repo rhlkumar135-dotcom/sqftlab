@@ -3,6 +3,38 @@ import { prisma } from './src/lib/db'
 
 const app = new Hono()
 
+// ─── Health & diagnostics ─────────────────────────────────────────────────────
+
+// Report the *shape* of DATABASE_URL without leaking credentials. The literal
+// "${{Postgres.DATABASE_URL}}" string is the classic Railway misconfiguration:
+// the placeholder was written as a value instead of resolved as a reference.
+function redactDbUrl(raw?: string) {
+  if (!raw) return 'unset'
+  if (raw.startsWith('${{')) return `UNRESOLVED_PLACEHOLDER:${raw}`
+  try {
+    const u = new URL(raw)
+    return `${u.protocol}//${u.username ? '***@' : ''}${u.host}${u.pathname}`
+  } catch {
+    return `malformed:${raw.slice(0, 16)}`
+  }
+}
+
+// Readiness probe — reports real DB connectivity plus the resolved error, so a
+// misconfigured database surfaces as readable JSON instead of an empty site.
+app.get('/health/db', async (c) => {
+  const url = redactDbUrl(process.env.DATABASE_URL)
+  try {
+    const communities = await prisma.community.count()
+    const listings = await prisma.listing.count()
+    return c.json({ ok: true, db: 'connected', url, communities, listings })
+  } catch (e) {
+    return c.json(
+      { ok: false, db: 'unreachable', url, error: e instanceof Error ? e.message : String(e) },
+      503,
+    )
+  }
+})
+
 // ─── Communities ──────────────────────────────────────────────────────────────
 
 app.get('/sqftlab/communities', async (c) => {
