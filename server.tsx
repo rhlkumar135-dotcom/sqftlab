@@ -58,6 +58,14 @@ const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 
+// Any unmatched /api/* path is an API error, not a client-side route. Registered
+// after every real API route, it only sees genuine misses — without it those
+// requests fell through to the SPA catch-all below and returned HTML with a 200,
+// so an API caller would parse the app shell as a successful response.
+app.all('/api/*', (c) =>
+  c.json({ error: `No API route matches ${c.req.method} ${c.req.path}` }, 404),
+)
+
 // Serve static files in production
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))

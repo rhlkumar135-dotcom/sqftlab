@@ -6,6 +6,9 @@ import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
 import { InvestmentScore, ScoreBadge } from '@/components/InvestmentScore'
 import { DataLabel } from '@/components/DataLabel'
+import { Sparkline } from '@/components/Sparkline'
+import { FeatureGate } from '@/components/FeatureGate'
+import { getRiskFlags } from '@/lib/verdict'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -768,9 +771,15 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
               Investment score: {investmentScore}/100.
             </p>
             <div className="mt-3 space-y-1">
-              {communityPsf > 0 && psfDelta < -5 && <div className="text-xs" style={{ color: 'var(--up)' }}>✓ PSF below district average — potential value opportunity</div>}
-              {grossYield > 6 && <div className="text-xs" style={{ color: 'var(--up)' }}>✓ Yield above city average — strong income potential</div>}
-              {psfDelta > 15 && <div className="text-xs" style={{ color: 'var(--warn)' }}>⚠ Asking PSF significantly above district avg</div>}
+              {getRiskFlags({
+                psfVsDistrictDelta: psfDelta,
+                grossYield,
+                districtAvgServiceCharge: undefined,
+              }).map((f) => (
+                <div key={f.text} className="text-xs" style={{ color: f.type === 'ok' ? 'var(--up)' : 'var(--warn)' }}>
+                  {f.type === 'ok' ? '✓' : '⚠'} {f.text}
+                </div>
+              ))}
             </div>
             <p className="text-[10px] mt-3" style={{ color: 'var(--ink-5)' }}>Analysis based on DLD transaction records. Not financial advice.</p>
           </div>
@@ -1175,6 +1184,7 @@ function YieldCalculator() {
         </div>
 
         {result && (
+          <FeatureGate feature="Yield calculator — full results">
           <div className="rounded-[18px] p-5 space-y-3" style={{ background: 'linear-gradient(135deg, var(--b800), var(--b900))', color: '#fff' }}>
             <h3 className="font-semibold mb-3" style={{ color: 'var(--b300)' }}>Results</h3>
             {[
@@ -1192,6 +1202,7 @@ function YieldCalculator() {
               </div>
             ))}
           </div>
+          </FeatureGate>
         )}
       </div>
     </div>
@@ -1808,10 +1819,38 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
   const o = data.overview
   const totalBreadth = o.breadth.gainers + o.breadth.flat + o.breadth.losers || 1
 
-  const kpis = [
-    { label: 'AVG PRICE PSF', value: `AED ${o.avgPsf.toLocaleString()}`, sub: `${o.districtsTracked} districts` },
+  // Real city-wide PSF trend for the sparkline: the mean of the districts that
+  // actually reported in each month, so thin months don't drag the line to zero.
+  const psfTrend = data.series
+    .map((row) => {
+      const vals = Object.entries(row)
+        .filter(([k, v]) => k !== 'month' && typeof v === 'number' && v > 0)
+        .map(([, v]) => v as number)
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : NaN
+    })
+    .filter((n) => Number.isFinite(n))
+
+  // Momentum is shown as a bar rather than a sparkline (spec Part 7.1), mapping
+  // the ±% index onto a 0–100 band centred at neutral.
+  const momentumBar = Math.min(100, Math.max(0, 50 + o.momentumIndex * 5))
+
+  const kpis: {
+    label: string
+    value: string
+    sub: string
+    spark?: number[]
+    bar?: number
+    signal?: string
+  }[] = [
+    { label: 'AVG PRICE PSF', value: `AED ${o.avgPsf.toLocaleString()}`, sub: `${o.districtsTracked} districts`, spark: psfTrend },
     { label: 'AVG GROSS YIELD', value: `${o.avgYield}%`, sub: 'Ejari where available' },
-    { label: 'MOMENTUM INDEX', value: `${o.momentumIndex > 0 ? '+' : ''}${o.momentumIndex}%`, sub: '30-day mean change' },
+    {
+      label: 'MOMENTUM INDEX',
+      value: `${o.momentumIndex > 0 ? '+' : ''}${o.momentumIndex}%`,
+      sub: '30-day mean change',
+      bar: momentumBar,
+      signal: o.momentumIndex > 2 ? '◆ Strong bullish' : undefined,
+    },
     { label: 'DLD TRANSACTIONS', value: o.transactionCount.toLocaleString(), sub: 'registered register' },
     { label: 'VALUE TRANSACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration' },
     { label: 'ACTIVE LISTINGS', value: o.activeListings.toLocaleString(), sub: 'all portals' },
@@ -1835,6 +1874,17 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
             <div className="text-[10px] font-semibold tracking-wider mb-1.5" style={{ color: 'var(--ink-5)' }}>{k.label}</div>
             <div className="text-xl font-bold" style={{ color: 'var(--ink)', fontFamily: 'var(--font-data)' }}>{k.value}</div>
             <div className="text-[10px] mt-1" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>{k.sub}</div>
+            {k.spark && k.spark.length > 1 && (
+              <div className="mt-2"><Sparkline data={k.spark} /></div>
+            )}
+            {k.bar != null && (
+              <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(37,99,235,0.12)' }}>
+                <div className="h-full rounded-full" style={{ width: `${k.bar}%`, background: 'linear-gradient(90deg,#2563EB,#6366F1,#0EA5E9)' }} />
+              </div>
+            )}
+            {k.signal && (
+              <div className="text-[10px] mt-1 font-semibold" style={{ color: 'var(--warn)' }}>{k.signal}</div>
+            )}
           </div>
         ))}
       </div>

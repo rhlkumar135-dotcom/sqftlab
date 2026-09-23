@@ -1035,4 +1035,27 @@ app.get('/sqftlab/waitlist', async (c) => {
   return c.json({ count })
 })
 
+// ─── Payment kill switch (spec Part 5.5) ──────────────────────────────────────
+// Mirrors PAYMENTS_ENABLED in src/lib/payments.ts. Every payment endpoint must
+// refuse explicitly — a bare 404 is indistinguishable from a typo in a client,
+// and the spec requires these to answer 503 with a readable message.
+const PAYMENTS_BLOCKED = {
+  error: 'Payment processing is not yet available.',
+  paymentsEnabled: false,
+} as const
+
+for (const path of ['/checkout', '/subscribe', '/create-payment-intent']) {
+  app.all(path, (c) => c.json(PAYMENTS_BLOCKED, 503))
+}
+
+// Stripe webhooks are accepted and logged, never processed, so a delayed event
+// cannot start a subscription behind the kill switch.
+app.post('/webhooks/stripe', async (c) => {
+  const body = await c.req.text().catch(() => '')
+  console.info(
+    `[sqftLab] Stripe webhook ignored (PAYMENTS_ENABLED=false) — ${body.length} bytes`,
+  )
+  return c.json({ received: true, processed: false })
+})
+
 export default app
