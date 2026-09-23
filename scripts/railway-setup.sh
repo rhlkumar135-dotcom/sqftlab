@@ -20,7 +20,7 @@ echo "Step 2: Running Shogo SDK generate..."
 bun run generate || echo "Shogo generate completed with warnings"
 
 echo "Step 3: Pushing schema to database..."
-bun x prisma db push --accept-data-loss 2>&1 || echo "Schema push done (with warnings)"
+bun x prisma db push 2>&1 || echo "Schema push done (with warnings)"
 
 echo "Step 4: Seeding database..."
 bun run scripts/seed-pg.ts 2>&1 || echo "Seed completed (data may already exist)"
