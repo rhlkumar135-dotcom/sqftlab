@@ -19,6 +19,18 @@ Long-lived facts and learnings are stored here.
   (`curl localhost:3101/api/health/db`). Port 3001 is the SDK-generated server; port 8080
   is static-only (no API) — don't use it to test data.
 
+## sqftLab — live hosting
+
+- **The site IS live at https://sqftlab.shogo.one** (republished 2026-09-23, verified in a real browser:
+  200 listing cards with images + external source links, 30 deal cards, Leaflet map with ~35-40
+  markers, analytics charts, zero console errors). Re-publish with the `publish` tool, no subdomain.
+- **That deployment has no backend** — every `/api/*` returns the SPA shell. So `src/data/snapshot.json`
+  (built by `scripts/build-snapshot.py`) is baked into the bundle and `safeFetch` falls back to it,
+  which is why the live site shows the real register instead of placeholders. **Regenerate the
+  snapshot and re-publish whenever the data changes**, or the live data goes stale.
+- `preview_project` errors for this project and reports no fallback URL — do not hand out a
+  localhost link. The working local full-stack server is port 3101 (SPA + `/api` on one origin).
+
 ## sqftLab — deploy state (as of 2026-09-23)
 
 **Railway identifiers (recovered from the session record):**
