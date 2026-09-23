@@ -21,20 +21,51 @@ Long-lived facts and learnings are stored here.
 
 ## sqftLab — deploy state (as of 2026-09-23)
 
-- **Railway never auto-deploys.** The GitHub repo has **0 webhooks** and **0 Actions
-  secrets**, so neither Railway's GitHub integration nor the `deploy.yml` workflow can
-  fire. Pushing to `main` does NOT cause a deploy. Fix: Railway → service → Settings →
-  Source → reconnect the repo (this installs Railway's own webhook), or add a
-  `RAILWAY_TOKEN` repo secret so the workflow can deploy.
-- **`www.sqftlab.com` was returning a persistent Cloudflare 522** (origin unreachable),
-  verified from neutral IPs via a third-party proxy — not a caching artifact. The old
-  origin `47edlwve.up.railway.app` returned Railway's own `404 Application not found`,
-  so the Cloudflare CNAME target is likely stale. Check the service's current public
-  domain in Railway against the Cloudflare DNS record.
-- **Fixed a latent deploy-killer:** `railway.toml` pointed the healthcheck at
-  `/api/sqftlab/stats`, which runs six Prisma queries. A DB hiccup returned 500, and with
-  `restartPolicyMaxRetries = 5` Railway stopped the container → total outage. The
-  healthcheck now uses `/health` (liveness, no DB); `/api/health/db` reports DB state.
+**Railway identifiers (recovered from the session record):**
+- Project **`Property analytics`** — `5923bb05-5109-4262-a62c-3976dbc39ea6`
+- Environment **`production`** — `0269eab3-675f-4fa2-813b-f4c8bb7789bb`
+- Service **`sqftlab`** — `a992bc5a-4bd3-47c9-b4c5-a4f768941a88`
+  (domain seen: `sqftlab-production.up.railway.app`)
+- Service **`crudepulse`** — `0ecd7203-f1a8-4f69-847b-66b0a9365c5c` (domain `www.crudepulses.com`).
+  **Never touch this service** — the user asked for sqftlab-only changes.
+- Last sqftlab deployment `20214406-2f74-4c1d-8e9c-f16d79391c3f` → **status FAILED, stopped: true**.
+  Build logs: `https://railway.com/project/5923bb05-5109-4262-a62c-3976dbc39ea6/service/a992bc5a-4bd3-47c9-b4c5-a4f768941a88`
+- **No Railway credential works.** Every token on disk is expired: `640cbfc7-…` (the only
+  `RAILWAY_TOKEN` value in the session record) returns `Not Authorized`; the UUID the user
+  pasted fails as both account and project token; GraphQL on both `backboard.railway.com`
+  and `backboard.railway.app` rejects all of them. Do not burn more turns hunting.
+
+**Why the site is down (514/522 chain, fully diagnosed):**
+1. The sqftlab deployment FAILED and Railway stopped the container.
+2. With no running deployment, Railway's edge returns `404 {"message":"Application not found"}`
+   for *both* `sqftlab-production.up.railway.app` and `47edlwve.up.railway.app`.
+3. Cloudflare therefore cannot reach an origin → **persistent 522** on `www.sqftlab.com`.
+   This is NOT a stale-code problem; pushing more commits changes nothing.
+
+**Bugs fixed that would block any redeploy:**
+- `railway.toml` healthcheck pointed at `/api/sqftlab/stats` (six Prisma queries). With
+  `restartPolicyMaxRetries = 5` a DB error fails the healthcheck → Railway stops the service
+  → total outage. Now uses `/health` (liveness, no DB); `/api/health/db` reports DB state.
+- `railway-build.sh` / `railway-setup.sh` swapped the schema to postgresql whenever
+  `DATABASE_URL` was merely *non-empty* — so a SQLite path or a literal `${{...}}` placeholder
+  produced `provider = "postgresql"` against a non-postgres URL, killing every Prisma call
+  with **P1013**. Both now test for an actual `postgres://` / `postgresql://` URL.
+- Unmatched `/api/*` returned the SPA shell with a 200; now a JSON 404.
+- `/api/checkout`, `/api/subscribe`, `/api/create-payment-intent` were 404 (spec Part 5.5 /
+  Part 11 require 503 + message); Stripe webhooks now log-and-ignore.
+
+**Verified fact about building from GitHub:** `src/generated/` is **gitignored (0 files tracked)**
+and `server.tsx:45` imports `./src/generated` inside a **silent `try/catch`**. A clean clone has
+no `src/generated`, so if the build's generate step ever fails the CRUD API silently disappears
+and the server still boots — a failure mode that looks like "empty pages", not a crash.
+`railway-build.sh` regenerates it (`bun run generate`), verified on a clean clone: `index.ts`
+and `routes.ts` are produced and `vite build` succeeds.
+
+- **Railway never auto-deploys.** The GitHub repo has **0 webhooks** and **0 Actions secrets**,
+  so neither Railway's GitHub integration nor the `deploy.yml` workflow can fire. Pushing to
+  `main` does NOT cause a deploy. Fix: Railway → sqftlab service → Settings → Source →
+  reconnect the repo (this installs Railway's own webhook), or add a `RAILWAY_TOKEN` secret.
 - **Cloudflare serves an interactive "heavy traffic" challenge to every visitor** on the
   apex/www, which makes the site look broken even when the origin is healthy.
+
 

@@ -18,13 +18,17 @@ else
   echo "DATABASE_URL host: $(printf '%s' "$DATABASE_URL" | sed -E 's#^[a-z]+://([^@]*@)?([^/]+)/.*#\2#')"
 fi
 
-# If DATABASE_URL is set and schema is still sqlite, swap it
-if [ -n "$DATABASE_URL" ]; then
-  if grep -q 'provider = "sqlite"' prisma/schema.prisma; then
-    echo "Swapping schema to PostgreSQL..."
-    sed -i 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
-  fi
-fi
+# Swap only for a genuine postgres URL. A non-empty value is not enough: a SQLite
+# path or a literal placeholder would swap the provider while prisma.config.ts
+# still resolved a non-postgres URL, breaking every Prisma call with P1013.
+case "${DATABASE_URL:-}" in
+  postgresql://*|postgres://*)
+    if grep -q 'provider = "sqlite"' prisma/schema.prisma; then
+      echo "Swapping schema to PostgreSQL..."
+      sed -i 's/provider = "sqlite"/provider = "postgresql"/' prisma/schema.prisma
+    fi
+    ;;
+esac
 
 echo "Step 1: Generating Prisma client..."
 bun x prisma generate
