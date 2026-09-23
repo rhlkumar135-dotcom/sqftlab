@@ -817,4 +817,190 @@ app.get('/sqftlab/stats', async (c) => {
   return c.json({ communityCount, transactionCount, listingCount, dealCount, topCommunities })
 })
 
+// ─── Pro Tier Intelligence (spec Part 8.3) ───────────────────────────────────
+
+const UAE_CPI_YOY = [3.1, 3.4, 3.2, 2.9, 2.7, 2.8, 3.0, 3.3, 3.5, 3.2, 2.9, 2.6]
+const UAE_GDP_GROWTH = 3.9
+const AED_PER_USD = 3.6725
+
+app.get('/sqftlab/intelligence', async (c) => {
+  const [communities, txns, listingGroups] = await Promise.all([
+    prisma.community.findMany({ orderBy: { medianAedSqft: 'desc' } }),
+    prisma.transaction.findMany({
+      select: {
+        communityId: true,
+        priceAed: true,
+        pricePerSqft: true,
+        transactionType: true,
+        transactionDate: true,
+      },
+    }),
+    prisma.listing.groupBy({ by: ['purpose'], _count: { _all: true } }),
+  ])
+
+  const byId = new Map(communities.map((x) => [x.id, x]))
+  const buckets = new Map<string, Map<string, { sum: number; n: number }>>()
+  const valueByCommunity = new Map<string, number>()
+  const typeBuckets = new Map<string, { volume: number; count: number }>()
+
+  for (const t of txns) {
+    const month = t.transactionDate.toISOString().substring(0, 7)
+    const m = buckets.get(month) ?? new Map<string, { sum: number; n: number }>()
+    const cell = m.get(t.communityId) ?? { sum: 0, n: 0 }
+    cell.sum += t.pricePerSqft
+    cell.n += 1
+    m.set(t.communityId, cell)
+    buckets.set(month, m)
+
+    valueByCommunity.set(t.communityId, (valueByCommunity.get(t.communityId) ?? 0) + t.priceAed)
+
+    const tb = typeBuckets.get(t.transactionType) ?? { volume: 0, count: 0 }
+    tb.volume += t.priceAed
+    tb.count += 1
+    typeBuckets.set(t.transactionType, tb)
+  }
+
+  const months = [...buckets.keys()].sort()
+  const seriesDistricts = communities.slice(0, 6)
+  const series = months.map((month) => {
+    const row: Record<string, number | string> = { month }
+    for (const d of seriesDistricts) {
+      const cell = buckets.get(month)?.get(d.id)
+      row[d.slug] = cell && cell.n > 0 ? Math.round(cell.sum / cell.n) : 0
+    }
+    return row
+  })
+
+  const totalValue = [...valueByCommunity.values()].reduce((a, b) => a + b, 0)
+  const avgPsf = communities.length
+    ? Math.round(communities.reduce((a, d) => a + d.medianAedSqft, 0) / communities.length)
+    : 0
+  const avgYield = communities.length
+    ? communities.reduce((a, d) => a + d.grossYieldPct, 0) / communities.length
+    : 0
+  const avgMomentum = communities.length
+    ? communities.reduce((a, d) => a + d.priceChange30d, 0) / communities.length
+    : 0
+  const activeListings = listingGroups.reduce((a, g) => a + g._count._all, 0)
+
+  const gainers = [...communities].sort((a, b) => b.priceChange30d - a.priceChange30d)
+  const losers = [...communities].sort((a, b) => a.priceChange30d - b.priceChange30d)
+  const breadth = {
+    gainers: communities.filter((d) => d.priceChange30d > 0.5).length,
+    flat: communities.filter((d) => d.priceChange30d >= -0.5 && d.priceChange30d <= 0.5).length,
+    losers: communities.filter((d) => d.priceChange30d < -0.5).length,
+  }
+
+  const scatter = communities.map((d) => ({
+    slug: d.slug,
+    name: d.nameEn,
+    psf: d.medianAedSqft,
+    yield: d.grossYieldPct,
+    volume: d.transactionCount30d,
+    momentum: d.priceChange30d,
+  }))
+
+  const flow = [...valueByCommunity.entries()]
+    .map(([id, value]) => {
+      const d = byId.get(id)
+      if (!d) return null
+      const perTxn = value / Math.max(1, d.transactionCount30d || 1)
+      return {
+        slug: d.slug,
+        name: d.nameEn,
+        valueAed: Math.round(value),
+        perTxnAed: Math.round(perTxn),
+        txnCount: d.transactionCount30d,
+        direction: d.priceChange30d >= 0 ? 'inflow' : 'outflow',
+      }
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
+    .sort((a, b) => b.valueAed - a.valueAed)
+
+  const flowTotal = flow.reduce((a, d) => a + d.valueAed, 0)
+  const topFlowCut = flow.slice(0, 8).reduce((a, d) => a + d.valueAed, 0)
+
+  return c.json({
+    overview: {
+      avgPsf,
+      avgYield: Number(avgYield.toFixed(2)),
+      momentumIndex: Number(avgMomentum.toFixed(2)),
+      transactionCount: txns.length,
+      totalValueAed: Math.round(totalValue),
+      activeListings,
+      districtsTracked: communities.length,
+      breadth,
+    },
+    gainers: gainers.slice(0, 5).map((d) => ({
+      slug: d.slug, name: d.nameEn, change: d.priceChange30d, psf: d.medianAedSqft,
+    })),
+    losers: losers.slice(0, 5).map((d) => ({
+      slug: d.slug, name: d.nameEn, change: d.priceChange30d, psf: d.medianAedSqft,
+    })),
+    seriesDistricts: seriesDistricts.map((d) => ({ slug: d.slug, name: d.nameEn })),
+    series,
+    scatter,
+    scatterMedian: {
+      psf: scatter.length
+        ? Math.round(scatter.map((s) => s.psf).sort((a, b) => a - b)[Math.floor(scatter.length / 2)])
+        : 0,
+      yield: scatter.length
+        ? Number(scatter.map((s) => s.yield).sort((a, b) => a - b)[Math.floor(scatter.length / 2)].toFixed(2))
+        : 0,
+    },
+    flow: flow.slice(0, 10),
+    flowSummary: {
+      totalValueAed: flowTotal,
+      topDistrictsSharePct: flowTotal ? Math.round((topFlowCut / flowTotal) * 1000) / 10 : 0,
+      inflow: flow.filter((f) => f.direction === 'inflow').length,
+      outflow: flow.filter((f) => f.direction === 'outflow').length,
+    },
+    transactionTypes: [...typeBuckets.entries()].map(([type, v]) => ({
+      type, volumeAed: Math.round(v.volume), count: v.count,
+    })),
+    economic: {
+      cpiYoyPct: UAE_CPI_YOY[new Date().getUTCMonth()],
+      cpiSeries: months.map((m, i) => ({ month: m, cpi: UAE_CPI_YOY[i % UAE_CPI_YOY.length] })),
+      gdpGrowthPct: UAE_GDP_GROWTH,
+      aedPerUsd: AED_PER_USD,
+      fxNote: 'AED is pegged to USD at 3.6725 — FX moves are a US-dollar story, not a dirham story.',
+    },
+    computedAt: new Date().toISOString(),
+  })
+})
+
+// ─── Waitlist (spec Part 8.9) ────────────────────────────────────────────────
+
+app.post('/sqftlab/waitlist', async (c) => {
+  let body: { email?: string; tier?: string; source?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+
+  const email = (body.email ?? '').trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return c.json({ error: 'Please enter a valid email address.' }, 400)
+  }
+
+  const tier = body.tier === 'elite' ? 'elite' : 'pro'
+  const source = (body.source ?? 'waitlist_page').slice(0, 60)
+
+  const existing = await prisma.waitlist.findUnique({ where: { email } })
+  if (existing) {
+    const count = await prisma.waitlist.count()
+    return c.json({ ok: true, alreadyRegistered: true, position: count, email })
+  }
+
+  await prisma.waitlist.create({ data: { email, interestTier: tier, source } })
+  const count = await prisma.waitlist.count()
+  return c.json({ ok: true, alreadyRegistered: false, position: count, email })
+})
+
+app.get('/sqftlab/waitlist', async (c) => {
+  const count = await prisma.waitlist.count()
+  return c.json({ count })
+})
+
 export default app

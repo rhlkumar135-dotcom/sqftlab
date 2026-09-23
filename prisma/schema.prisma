@@ -182,3 +182,13 @@ model Alert {
   @@index([userId])
   @@map("alerts")
 }
+
+model Waitlist {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  source       String   @default("waitlist_page")
+  interestTier String   @default("pro") @map("interest_tier") // pro, elite
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("waitlist")
+}

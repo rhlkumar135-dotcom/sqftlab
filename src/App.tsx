@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode } from 'react'
-import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown } from 'lucide-react'
+import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -100,7 +100,7 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist'
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -406,6 +406,11 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
           ))}
         </div>
         <div className="text-xs" style={{ color: 'var(--ink-5)' }}>{communities.length} communities</div>
+        <button onClick={() => setPage('intelligence')}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+          style={{ background: 'linear-gradient(90deg,#2563EB,#6366F1)', color: '#fff', boxShadow: 'var(--sh-btn)' }}>
+          <BarChart3 size={13} /> Pro Intelligence →
+        </button>
       </div>
 
       <div className="relative rounded-[18px] overflow-hidden" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)', height: '500px' }}>
@@ -1195,7 +1200,7 @@ function YieldCalculator() {
 
 // ─── Pricing Page (Display Only — Spec §6) ──────────────────────────────────
 
-function PricingPage() {
+function PricingPage({ setPage }: { setPage: (p: Page) => void }) {
   const [annual, setAnnual] = useState(false)
   const tiers = [
     { name: 'Free', price: 0, features: ['Homepage intelligence overview', 'District heatmap (PSF view)', '5 property intelligence reports/day', '3-month price trend', 'Transaction data count', 'Basic neighbourhood score'], cta: 'Get started free', primary: false },
@@ -1243,7 +1248,7 @@ function PricingPage() {
             </button>
             {t.primary && (
               <p className="text-center text-xs mt-2" style={{ color: 'var(--ink-5)' }}>
-                <a href="#" onClick={(e) => { e.preventDefault(); handlePaymentAttempt(e) }} className="hover:underline" style={{ color: 'var(--b600)' }}>Join the waitlist →</a>
+                <button onClick={() => setPage('waitlist')} className="hover:underline" style={{ color: 'var(--b600)' }}>Join the waitlist →</button>
               </p>
             )}
           </div>
@@ -1676,6 +1681,490 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
   )
 }
 
+// ─── Pro Tier Intelligence — /intelligence (spec Part 8.3) ───────────────────
+
+interface IntelligenceData {
+  overview: {
+    avgPsf: number; avgYield: number; momentumIndex: number; transactionCount: number
+    totalValueAed: number; activeListings: number; districtsTracked: number
+    breadth: { gainers: number; flat: number; losers: number }
+  }
+  gainers: { slug: string; name: string; change: number; psf: number }[]
+  losers: { slug: string; name: string; change: number; psf: number }[]
+  seriesDistricts: { slug: string; name: string }[]
+  series: Record<string, number | string>[]
+  scatter: { slug: string; name: string; psf: number; yield: number; volume: number; momentum: number }[]
+  scatterMedian: { psf: number; yield: number }
+  flow: { slug: string; name: string; valueAed: number; perTxnAed: number; txnCount: number; direction: string }[]
+  flowSummary: { totalValueAed: number; topDistrictsSharePct: number; inflow: number; outflow: number }
+  transactionTypes: { type: string; volumeAed: number; count: number }[]
+  economic: {
+    cpiYoyPct: number; cpiSeries: { month: string; cpi: number }[]
+    gdpGrowthPct: number; aedPerUsd: number; fxNote: string
+  }
+  computedAt: string
+}
+
+const CARD_STYLE = { background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }
+const SERIES_COLORS = ['#2563EB', '#6366F1', '#0EA5E9', '#14B8A6', '#8B5CF6', '#F59E0B']
+
+const shortAed = (n: number) =>
+  n >= 1e9 ? `AED ${(n / 1e9).toFixed(2)}B`
+    : n >= 1e6 ? `AED ${(n / 1e6).toFixed(1)}M`
+      : n >= 1e3 ? `AED ${(n / 1e3).toFixed(0)}K`
+        : `AED ${Math.round(n)}`
+
+function IntelTooltip({ active, payload, label }: { active?: boolean; payload?: { name?: string; value?: number | string; color?: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="p-3 rounded-[12px] text-xs" style={{
+      background: 'rgba(255,255,255,0.86)', backdropFilter: 'blur(16px)',
+      border: '1px solid rgba(255,255,255,0.95)', boxShadow: '0 4px 16px rgba(15,23,42,0.10)',
+      fontFamily: 'var(--font-data)',
+    }}>
+      {label && <div className="mb-1.5 font-medium" style={{ color: 'var(--ink-3)' }}>{label}</div>}
+      {payload.map((p, i) => (
+        <div key={i} className="flex items-center gap-2" style={{ color: 'var(--ink-2)' }}>
+          <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+          <span>{p.name}</span>
+          <span className="ml-auto font-medium">
+            {typeof p.value === 'number' && p.value > 5000 ? shortAed(p.value) : typeof p.value === 'number' ? p.value.toLocaleString() : p.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
+  const [data, setData] = useState<IntelligenceData | null>(null)
+  const [error, setError] = useState('')
+  const [hidden, setHidden] = useState<Record<string, boolean>>({})
+  const chartRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/sqftlab/intelligence')
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(body.error || `Request failed (${r.status})`)
+        return body as IntelligenceData
+      })
+      .then((d) => { if (alive) setData(d) })
+      .catch((e: Error) => { if (alive) setError(e.message) })
+    return () => { alive = false }
+  }, [])
+
+  const exportPng = useCallback(() => {
+    const svg = chartRef.current?.querySelector('svg')
+    if (!svg) return
+    const clone = svg.cloneNode(true) as SVGSVGElement
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    const w = svg.clientWidth || 900
+    const h = svg.clientHeight || 360
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    bg.setAttribute('width', String(w)); bg.setAttribute('height', String(h)); bg.setAttribute('fill', '#ffffff')
+    clone.insertBefore(bg, clone.firstChild)
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = w * 2; canvas.height = h * 2
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.scale(2, 2)
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+      const a = document.createElement('a')
+      a.href = canvas.toDataURL('image/png')
+      a.download = 'sqftlab-multi-district-psf.png'
+      a.click()
+    }
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone))
+  }, [])
+
+  if (error) {
+    return (
+      <div className="max-w-[480px] mx-auto px-4 py-16 text-center">
+        <div className="p-6 rounded-[18px]" style={CARD_STYLE}>
+          <h2 className="font-bold mb-2" style={{ color: 'var(--ink)' }}>Could not load intelligence</h2>
+          <p className="text-sm mb-4" style={{ color: 'var(--ink-4)' }}>{error}</p>
+          <button onClick={() => setPage('dashboard')} className="px-4 py-2 rounded-full text-sm font-semibold"
+            style={{ background: 'var(--b600)', color: '#fff' }}>Back to heatmap</button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8 space-y-4">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-32 rounded-[18px] animate-pulse" style={{ background: 'var(--g3)' }} />
+        ))}
+      </div>
+    )
+  }
+
+  const o = data.overview
+  const totalBreadth = o.breadth.gainers + o.breadth.flat + o.breadth.losers || 1
+
+  const kpis = [
+    { label: 'AVG PRICE PSF', value: `AED ${o.avgPsf.toLocaleString()}`, sub: `${o.districtsTracked} districts` },
+    { label: 'AVG GROSS YIELD', value: `${o.avgYield}%`, sub: 'Ejari where available' },
+    { label: 'MOMENTUM INDEX', value: `${o.momentumIndex > 0 ? '+' : ''}${o.momentumIndex}%`, sub: '30-day mean change' },
+    { label: 'DLD TRANSACTIONS', value: o.transactionCount.toLocaleString(), sub: 'registered register' },
+    { label: 'VALUE TRANSPACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration' },
+    { label: 'ACTIVE LISTINGS', value: o.activeListings.toLocaleString(), sub: 'all portals' },
+  ]
+
+  return (
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-8">
+      <div className="flex flex-wrap items-center gap-3 mb-2">
+        <h1 className="text-2xl sm:text-3xl font-extrabold" style={{ color: 'var(--ink)' }}>Market Intelligence</h1>
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider"
+          style={{ background: 'linear-gradient(90deg,#2563EB,#6366F1)', color: '#fff' }}>PRO</span>
+      </div>
+      <p className="text-sm mb-6" style={{ color: 'var(--ink-4)' }}>
+        Cross-district analytics computed from the DLD transaction register — breadth, momentum, flow and economic context.
+      </p>
+
+      {/* Section 1 — Market overview */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+        {kpis.map((k) => (
+          <div key={k.label} className="p-4 rounded-[18px]" style={CARD_STYLE}>
+            <div className="text-[10px] font-semibold tracking-wider mb-1.5" style={{ color: 'var(--ink-5)' }}>{k.label}</div>
+            <div className="text-xl font-bold" style={{ color: 'var(--ink)', fontFamily: 'var(--font-data)' }}>{k.value}</div>
+            <div className="text-[10px] mt-1" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>Market breadth</div>
+          <div className="flex h-3 rounded-full overflow-hidden mb-2">
+            <div style={{ width: `${(o.breadth.gainers / totalBreadth) * 100}%`, background: 'var(--up)' }} />
+            <div style={{ width: `${(o.breadth.flat / totalBreadth) * 100}%`, background: 'var(--ink-5)' }} />
+            <div style={{ width: `${(o.breadth.losers / totalBreadth) * 100}%`, background: 'var(--down)' }} />
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px]" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>
+            <span>▲ {o.breadth.gainers} gaining</span>
+            <span>— {o.breadth.flat} flat</span>
+            <span>▼ {o.breadth.losers} declining</span>
+          </div>
+          <DataLabel source="DLD" count={o.transactionCount} period="register total"
+            lastUpdated={data.computedAt}
+            methodology="Breadth counts districts whose 30-day median AED/sqft moved more than ±0.5%." />
+        </div>
+
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: 'var(--up)' }}>
+            <TrendingUp size={14} /> Top gainers · 30d
+          </div>
+          {data.gainers.map((g) => (
+            <button key={g.slug} onClick={() => setPage('dashboard')}
+              className="w-full flex items-center justify-between py-1.5 text-xs transition-opacity hover:opacity-70">
+              <span style={{ color: 'var(--ink-2)' }}>{g.name}</span>
+              <span style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>+{g.change.toFixed(1)}%</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: 'var(--down)' }}>
+            <TrendingDown size={14} /> Bottom performers · 30d
+          </div>
+          {data.losers.map((g) => (
+            <button key={g.slug} onClick={() => setPage('dashboard')}
+              className="w-full flex items-center justify-between py-1.5 text-xs transition-opacity hover:opacity-70">
+              <span style={{ color: 'var(--ink-2)' }}>{g.name}</span>
+              <span style={{ fontFamily: 'var(--font-data)', color: g.change < 0 ? 'var(--down)' : 'var(--ink-4)' }}>
+                {g.change > 0 ? '+' : ''}{g.change.toFixed(1)}%
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Section 2 — Multi-district PSF */}
+      <div className="p-4 rounded-[18px] mb-4" style={CARD_STYLE}>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="text-xs font-semibold mr-auto" style={{ color: 'var(--ink-2)' }}>
+            Multi-district AED/sqft — monthly from the register
+          </div>
+          <button onClick={exportPng} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+            style={{ background: 'var(--g3)', border: '1px solid var(--gb)', color: 'var(--ink-2)' }}>
+            <Download size={12} /> Export PNG
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {data.seriesDistricts.map((d, i) => {
+            const off = hidden[d.slug]
+            return (
+              <button key={d.slug} onClick={() => setHidden((h) => ({ ...h, [d.slug]: !h[d.slug] }))}
+                className="px-2.5 py-1 rounded-full text-[10px] font-medium transition-all"
+                style={{
+                  background: off ? 'var(--g3)' : `${SERIES_COLORS[i]}1A`,
+                  border: `1px solid ${off ? 'var(--gb)' : SERIES_COLORS[i]}`,
+                  color: off ? 'var(--ink-5)' : SERIES_COLORS[i],
+                }}>
+                {d.name}
+              </button>
+            )
+          })}
+        </div>
+        <div ref={chartRef} style={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data.series} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--ink-6)" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} width={54} />
+              <Tooltip content={<IntelTooltip />} />
+              {data.seriesDistricts.map((d, i) => (
+                !hidden[d.slug] && (
+                  <Line key={d.slug} type="monotone" dataKey={d.slug} name={d.name}
+                    stroke={SERIES_COLORS[i]} strokeWidth={2} dot={false} connectNulls />
+                )
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <DataLabel source="DLD" count={o.transactionCount} period="monthly buckets"
+          lastUpdated={data.computedAt}
+          methodology="Each point is the mean registered AED/sqft for that district in that calendar month. Months with no registered trades are omitted." />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+        {/* Section 3 — Yield vs PSF scatter */}
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>
+            Yield vs AED/sqft — the whole market on one plane
+          </div>
+          <div style={{ width: '100%', height: 300 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 8, right: 12, left: -12, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--ink-6)" />
+                <XAxis type="number" dataKey="psf" name="AED/sqft"
+                  tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} domain={['dataMin - 200', 'dataMax + 200']} />
+                <YAxis type="number" dataKey="yield" name="Yield %"
+                  tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} width={44} />
+                <ZAxis type="number" dataKey="volume" range={[40, 400]} />
+                <ReferenceLine x={data.scatterMedian.psf} stroke="var(--ink-5)" strokeDasharray="4 4" />
+                <ReferenceLine y={data.scatterMedian.yield} stroke="var(--ink-5)" strokeDasharray="4 4" />
+                <Tooltip content={<IntelTooltip />} />
+                <Scatter data={data.scatter} fill="#2563EB" fillOpacity={0.62} />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="text-[10px] mt-1" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>
+            Guides at market medians — PSF AED {data.scatterMedian.psf.toLocaleString()} · yield {data.scatterMedian.yield}%. Bubble size = 30-day transaction volume.
+          </div>
+        </div>
+
+        {/* Section 4 — Transaction flow */}
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-1" style={{ color: 'var(--ink-2)' }}>Transaction flow by district</div>
+          <div className="text-[10px] mb-3" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>
+            {shortAed(data.flowSummary.totalValueAed)} gross · top 8 districts = {data.flowSummary.topDistrictsSharePct}% of all value
+          </div>
+          <div style={{ width: '100%', height: 260 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.flow.slice(0, 8)} layout="vertical" margin={{ top: 0, right: 12, left: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--ink-6)" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false}
+                  tickFormatter={(v: number) => `${(v / 1e6).toFixed(0)}M`} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} axisLine={false} tickLine={false} width={92} />
+                <Tooltip content={<IntelTooltip />} />
+                <Bar dataKey="valueAed" name="Value transacted" radius={[0, 6, 6, 0]}>
+                  {data.flow.slice(0, 8).map((f, i) => (
+                    <Cell key={i} fill={f.direction === 'inflow' ? '#2563EB' : '#94A3B8'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <DataLabel source="DLD" count={o.transactionCount} period="all registered"
+            lastUpdated={data.computedAt}
+            methodology="Gross consideration summed per district. Direction reflects whether the district's 30-day median PSF is rising or falling." />
+        </div>
+      </div>
+
+      {/* Section 5 — Economic context */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="p-4 rounded-[18px] lg:col-span-2" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>UAE CPI (YoY %) against the register window</div>
+          <div style={{ width: '100%', height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={data.economic.cpiSeries} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="cpiFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#6366F1" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="#6366F1" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--ink-6)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: 'var(--ink-5)' }} axisLine={false} tickLine={false} width={44} unit="%" />
+                <Tooltip content={<IntelTooltip />} />
+                <Area type="monotone" dataKey="cpi" name="CPI YoY" stroke="#6366F1" strokeWidth={2} fill="url(#cpiFill)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <DataLabel source="FCSC" count={data.economic.cpiSeries.length} period="reference series"
+            lastUpdated={data.computedAt}
+            methodology="Headline UAE CPI year-on-year. Nominal property growth should be read against this line to gauge real returns." />
+        </div>
+
+        <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
+          <div className="text-xs font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>Economic context</div>
+          {[
+            { k: 'UAE CPI YoY', v: `${data.economic.cpiYoyPct}%` },
+            { k: 'World Bank GDP growth', v: `${data.economic.gdpGrowthPct}%` },
+            { k: 'AED / USD peg', v: data.economic.aedPerUsd.toFixed(4) },
+            { k: 'Districts inflow / outflow', v: `${data.flowSummary.inflow} / ${data.flowSummary.outflow}` },
+          ].map((row) => (
+            <div key={row.k} className="flex items-center justify-between py-2 border-b text-xs" style={{ borderColor: 'var(--ink-6)' }}>
+              <span style={{ color: 'var(--ink-4)' }}>{row.k}</span>
+              <span style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{row.v}</span>
+            </div>
+          ))}
+          <p className="text-[10px] mt-3 leading-relaxed" style={{ color: 'var(--ink-5)' }}>{data.economic.fxNote}</p>
+        </div>
+      </div>
+
+      <div className="text-center mt-6">
+        <button onClick={() => setPage('dashboard')} className="text-sm" style={{ color: 'var(--b600)' }}>← Back to heatmap</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Waitlist — /waitlist (spec Part 8.9) ────────────────────────────────────
+
+function WaitlistPage({ setPage }: { setPage: (p: Page) => void }) {
+  const [email, setEmail] = useState('')
+  const [tier, setTier] = useState<'pro' | 'elite'>('pro')
+  const [state, setState] = useState<{ status: 'idle' | 'sending' | 'done' | 'error'; message: string; position?: number; repeat?: boolean }>({ status: 'idle', message: '' })
+  const [count, setCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    fetch('/api/sqftlab/waitlist')
+      .then((r) => (r.ok ? r.json() : { count: null }))
+      .then((b) => { if (typeof b.count === 'number') setCount(b.count) })
+      .catch(() => {})
+  }, [])
+
+  const submit = async () => {
+    setState({ status: 'sending', message: '' })
+    try {
+      const res = await fetch('/api/sqftlab/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, tier, source: 'waitlist_page' }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setState({ status: 'error', message: body.error || `Request failed (${res.status})` })
+        return
+      }
+      setState({
+        status: 'done',
+        message: body.alreadyRegistered ? "You're already on the list." : "You're on the list.",
+        position: body.position,
+        repeat: Boolean(body.alreadyRegistered),
+      })
+      if (typeof body.position === 'number') setCount(body.position)
+    } catch (e) {
+      setState({ status: 'error', message: e instanceof Error ? e.message : 'Network error' })
+    }
+  }
+
+  return (
+    <div className="max-w-[560px] mx-auto px-4 py-14">
+      <div className="p-6 sm:p-8 rounded-[22px]" style={CARD_STYLE}>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider"
+            style={{ background: 'linear-gradient(90deg,#2563EB,#6366F1)', color: '#fff' }}>EARLY ACCESS</span>
+          {count !== null && (
+            <span className="text-[10px]" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>
+              {count.toLocaleString()} on the list
+            </span>
+          )}
+        </div>
+
+        <h1 className="text-2xl sm:text-3xl font-extrabold mb-2" style={{ color: 'var(--ink)' }}>
+          Be first into Pro &amp; Elite
+        </h1>
+        <p className="text-sm mb-6" style={{ color: 'var(--ink-4)' }}>
+          We&apos;ll notify you when Pro and Elite launch. No payment, no card — just your email.
+        </p>
+
+        {state.status === 'done' ? (
+          <div className="p-5 rounded-[16px] flex items-start gap-3"
+            style={{ background: 'var(--up-bg)', border: '1px solid var(--gb)' }}>
+            <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{ background: 'var(--up)', color: '#fff' }}>
+              <Check size={14} />
+            </span>
+            <div>
+              <div className="font-semibold text-sm" style={{ color: 'var(--ink)' }}>{state.message}</div>
+              {state.position ? (
+                <div className="text-xs mt-1" style={{ color: 'var(--ink-4)', fontFamily: 'var(--font-data)' }}>
+                  Position #{state.position}{state.repeat ? ' · ' : ' · '}we&apos;ll email {email}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex gap-2 mb-4">
+              {(['pro', 'elite'] as const).map((t) => (
+                <button key={t} onClick={() => setTier(t)}
+                  className="flex-1 py-2.5 rounded-[14px] text-sm font-semibold capitalize transition-all"
+                  style={{
+                    background: tier === t ? 'rgba(37,99,235,0.10)' : 'var(--g3)',
+                    border: `1px solid ${tier === t ? 'var(--b600)' : 'var(--gb)'}`,
+                    color: tier === t ? 'var(--b600)' : 'var(--ink-4)',
+                  }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--ink-5)' }}>Email address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+              placeholder="you@example.com"
+              className="w-full px-3.5 py-2.5 rounded-[14px] text-sm outline-none mb-3"
+              style={{ border: '1px solid var(--gb)', background: 'var(--g3)', color: 'var(--ink)' }}
+            />
+
+            {state.status === 'error' && (
+              <div className="text-xs mb-3 px-3 py-2 rounded-[10px]"
+                style={{ background: 'var(--down-bg)', color: 'var(--down)' }}>{state.message}</div>
+            )}
+
+            <button onClick={submit} disabled={state.status === 'sending'}
+              className="w-full py-3 rounded-[14px] font-semibold text-sm transition-all disabled:opacity-60"
+              style={{ background: 'var(--b600)', color: '#fff', boxShadow: 'var(--sh-btn)' }}>
+              {state.status === 'sending' ? 'Joining…' : 'Join the waitlist'}
+            </button>
+            <p className="text-[10px] mt-3 text-center" style={{ color: 'var(--ink-5)' }}>
+              No payment. No Stripe. We only store your email and interest tier.
+            </p>
+          </>
+        )}
+      </div>
+
+      <div className="text-center mt-6">
+        <button onClick={() => setPage('pricing')} className="text-sm" style={{ color: 'var(--b600)' }}>← See what&apos;s coming</button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 
 function AppInner() {
@@ -1695,13 +2184,23 @@ function AppInner() {
       {page === 'watchlist' && <Watchlist setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'deals' && <Deals setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'alerts' && <AlertsPage />}
-      {page === 'pricing' && <PricingPage />}
+      {page === 'pricing' && <PricingPage setPage={setPage} />}
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
       {page === 'about' && <AboutPage />}
       {page === 'analytics' && <MarketAnalytics setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'predictions' && <PricePredictions setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'intelligence' && <IntelligencePage setPage={setPage} />}
+      {page === 'waitlist' && <WaitlistPage setPage={setPage} />}
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
+        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
+          <button onClick={() => setPage('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
+          <button onClick={() => setPage('intelligence')} className="transition-colors hover:text-white">Pro Intelligence</button>
+          <button onClick={() => setPage('pricing')} className="transition-colors hover:text-white">Pricing</button>
+          <button onClick={() => setPage('yield')} className="transition-colors hover:text-white">Yield Calculator</button>
+          <button onClick={() => setPage('about')} className="transition-colors hover:text-white">Methodology</button>
+          <button onClick={() => setPage('waitlist')} className="transition-colors hover:text-white">Early Access</button>
+        </div>
         © 2026 sqftLab · UAE Property Data Intelligence Platform · Data from DLD, ADREC, Bayut, PropertyFinder, Dubizzle
       </footer>
     </div>
