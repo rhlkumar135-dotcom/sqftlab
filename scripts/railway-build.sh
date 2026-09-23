@@ -36,7 +36,28 @@ bun x prisma generate
 
 # Run Shogo generate
 echo "Running Shogo generate..."
-bun run generate || echo "Shogo generate failed (non-fatal)"
+set +e
+bun run generate
+GENERATE_STATUS=$?
+set -e
+
+# src/generated/ is gitignored, so it only exists if this step wrote it. server.tsx
+# imports it inside a silent try/catch, which means a failure here produces a
+# container that boots and passes its healthcheck while the entire CRUD API is
+# missing — the symptom is blank data pages, not a crash. Say so loudly instead.
+if [ ! -f src/generated/index.ts ]; then
+  echo "############################################################"
+  echo "WARNING: src/generated/index.ts is MISSING (generate exit $GENERATE_STATUS)."
+  echo "The server will boot and /health will pass, but every generated"
+  echo "CRUD route will be absent — data pages will fall back to defaults."
+  echo "Most common cause: 'prisma db push' could not reach DATABASE_URL."
+  echo "Check that DATABASE_URL is a reference to the Postgres service."
+  echo "############################################################"
+elif [ "$GENERATE_STATUS" -ne 0 ]; then
+  echo "NOTE: generate exited $GENERATE_STATUS but routes were produced — continuing."
+else
+  echo "Generated routes present."
+fi
 
 # Build the frontend
 echo "Building frontend..."
