@@ -5,11 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-  RAILWAY_SERVICE_NAME: ${{ secrets.RAILWAY_SERVICE_NAME }}
-  RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -17,28 +12,52 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Check Railway secrets
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_NAME: ${{ secrets.RAILWAY_SERVICE_NAME }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          missing=""
+          [ -z "$RAILWAY_TOKEN" ] && missing="$missing RAILWAY_TOKEN"
+          [ -z "$RAILWAY_SERVICE_NAME" ] && missing="$missing RAILWAY_SERVICE_NAME"
+          [ -z "$RAILWAY_PROJECT_ID" ] && missing="$missing RAILWAY_PROJECT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Add them under Settings > Secrets and variables > Actions."
+            echo "Get a token from https://railway.app/account/tokens (Account scope)."
+            exit 1
+          fi
+          echo "All Railway secrets present."
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Link to Railway project
-        run: railway link --project ${{ env.RAILWAY_PROJECT_ID }} --token ${{ env.RAILWAY_TOKEN }}
-
       - name: Deploy
-        run: railway up --service ${{ env.RAILWAY_SERVICE_NAME }} --token ${{ env.RAILWAY_TOKEN }} --no-wait
-
-      - name: Set environment variables
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          railway variables set DATABASE_URL="\${{Postgres.DATABASE_URL}}" NODE_ENV=production --token ${{ env.RAILWAY_TOKEN }}
+          railway up \
+            --service "${{ secrets.RAILWAY_SERVICE_NAME }}" \
+            --project "${{ secrets.RAILWAY_PROJECT_ID }}" \
+            --environment "${RAILWAY_ENVIRONMENT:-production}" \
+            --ci
 
-      - name: Verify deployment
+      - name: Verify health
+        env:
+          PUBLIC_URL: ${{ secrets.RAILWAY_PUBLIC_URL }}
         run: |
-          echo "Deployment triggered. Check Railway dashboard for status."
-          sleep 30
-          RAILWAY_URL=$(railway status --token ${{ env.RAILWAY_TOKEN }} | grep -oP 'https://[^\s]+' | head -1)
-          if [ -n "$RAILWAY_URL" ]; then
-            echo "Live at: $RAILWAY_URL"
-            curl -sf "$RAILWAY_URL/api/sqftlab/stats" && echo "✅ API healthy" || echo "⏳ Still starting..."
+          if [ -z "$PUBLIC_URL" ]; then
+            echo "::notice::RAILWAY_PUBLIC_URL not set — skipping health check."
+            exit 0
           fi
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$PUBLIC_URL/api/sqftlab/stats" || true)
+            if [ "$code" = "200" ]; then
+              echo "API healthy (HTTP 200)."
+              exit 0
+            fi
+            echo "attempt $i: HTTP $code — retrying in 15s"
+            sleep 15
+          done
+          echo "::warning::Could not confirm HTTP 200 from $PUBLIC_URL/api/sqftlab/stats after deploy."
