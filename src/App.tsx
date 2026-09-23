@@ -9,6 +9,7 @@ import { DataLabel } from '@/components/DataLabel'
 import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
 import { getRiskFlags } from '@/lib/verdict'
+import SNAPSHOT from '@/data/snapshot.json'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -96,9 +97,12 @@ const SOURCE_LABELS: Record<string, string> = { propertyfinder: 'PropertyFinder'
 async function safeFetch<T>(url: string, fallback: T): Promise<T> {
   try {
     const r = await fetch(url)
-    if (!r.ok) return fallback
-    return await r.json() as T
-  } catch { return fallback }
+    if (r.ok) return await r.json() as T
+  } catch { /* no backend reachable — fall through to the baked snapshot */ }
+  // Static deployments (and any moment the API is down) serve the register from a
+  // snapshot baked at build time, so the site shows real data instead of placeholders.
+  const baked = (SNAPSHOT as Record<string, unknown>)[url.split('?')[0]]
+  return baked !== undefined ? (baked as T) : fallback
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
