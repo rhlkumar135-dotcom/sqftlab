@@ -72,3 +72,56 @@ curl https://sqftlab.com/api/sqftlab/portfolio
 - **Database connection error:** Ensure `DATABASE_URL` is set correctly
 - **DNS not resolving:** Wait up to 48 hours for full propagation
 - **Seed data missing:** The startup script auto-seeds on first deploy
+
+---
+
+## Hourly data refresh
+
+Nothing was scheduled before: data only moved when someone called `/sqftlab/scrape`
+or `/sqftlab/intelligence/run` by hand, so the dashboard looked identical whether it
+had refreshed a minute ago or never.
+
+### What runs
+
+`GET|POST /api/sqftlab/cron/hourly?secret=$CRON_SECRET` executes six steps, each
+isolated so one dead upstream cannot freeze the whole dataset:
+
+| Step | What it does |
+|---|---|
+| `exchangeRates` | Live AED rates (open.er-api.com), cached 5 min |
+| `macro` | World Bank / IMF / oil indicators |
+| `communityStats` | **Recomputes every community's PSF from DLD transactions** and sets `psfSource` |
+| `deals` | Flags listings >12% below their community median |
+| `alerts` | Scans deal alerts, notifies pending matches |
+| `intelligence` | RPI, building profiles, supply pipeline, migration, district metrics, market summary |
+
+Returns `200` when every step passed, `207` when some failed — so a monitor can tell
+"ran clean" from "ran but the data is only partly fresh".
+
+### Observability
+
+Every run is written to `CronRun`. `GET /api/sqftlab/cron/status` is public and
+reports freshness (the hero reads it to print "data refreshed N min ago" instead of
+asserting a refresh interval); step detail is included only when authorised.
+
+```bash
+curl "$BASE/api/sqftlab/cron/status"           # { healthy, lastStatus, ageMs, ... }
+curl "$BASE/api/sqftlab/cron/status?secret=$CRON_SECRET"   # + per-step history
+```
+
+### Scheduling it on Railway
+
+The app does not schedule itself — something must call the endpoint. Either:
+
+1. **Railway cron service** — add a service with schedule `0 * * * *` and
+   `curl -fsS "$BASE/api/sqftlab/cron/hourly?secret=$CRON_SECRET"`.
+2. **Any external cron** (GitHub Actions, cron-job.org) hitting the same URL hourly.
+
+Set `CRON_SECRET` in the Railway environment first (see `.env.example`). Until it is
+set the app accepts the legacy value that is committed in this public repo.
+
+### Verify
+
+```bash
+bun run scripts/verify-cron.ts   # 24 assertions: auth, steps, persisted state, freshness
+```

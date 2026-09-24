@@ -232,11 +232,35 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
 
 // ─── Landing Page ────────────────────────────────────────────────────────────
 
+/** "7 min ago" / "2 hr ago" — powers honest data-freshness labels. */
+function relAge(ms: number): string {
+  const mins = Math.floor(ms / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs} hr ago`
+  return `${Math.floor(hrs / 24)} d ago`
+}
+
 function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; setSelectedListing: (id: string) => void }) {
   const [stats, setStats] = useState<{ communityCount: number; transactionCount: number; listingCount: number } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // The hero used to claim "refreshed every 60 seconds". That was never true —
+  // the pipeline runs hourly — so it is now derived from the actual refresh job
+  // rather than asserted. An unknown state says so instead of overclaiming.
+  const [fresh, setFresh] = useState<{ ageMs: number | null; healthy: boolean; lastStatus: string | null } | null>(null)
   useEffect(() => {
     safeFetch('/api/sqftlab/stats', { communityCount: 39, transactionCount: 585, listingCount: 607, dealCount: 155, topCommunities: [] }).then(setStats)
+  }, [])
+  useEffect(() => {
+    let stopped = false
+    const load = () =>
+      safeFetch<{ ageMs?: number | null; healthy?: boolean; lastStatus?: string | null } | null>('/api/sqftlab/cron/status', null)
+        .then((d) => { if (!stopped && d) setFresh({ ageMs: d.ageMs ?? null, healthy: !!d.healthy, lastStatus: d.lastStatus ?? null }) })
+        .catch(() => {})
+    load()
+    const t = setInterval(load, 60_000)
+    return () => { stopped = true; clearInterval(t) }
   }, [])
 
   return (
@@ -249,7 +273,11 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
             <div className="inline-flex items-center gap-2 mb-6 px-3 py-1.5 rounded-full text-xs font-medium"
               style={{ background: 'var(--g2)', backdropFilter: 'blur(16px)', border: '1px solid var(--gb)', color: 'var(--ink-3)' }}>
               <span className="live-dot" />
-              <span>Live UAE property intelligence · refreshed every 60 seconds</span>
+              <span>
+                {fresh?.ageMs != null
+                  ? `Live UAE property intelligence · data refreshed ${relAge(fresh.ageMs)}${fresh.healthy ? '' : ' · refresh overdue'}`
+                  : 'UAE property intelligence · checking data freshness…'}
+              </span>
             </div>
           </FadeIn>
 

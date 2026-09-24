@@ -75,7 +75,8 @@ async function main() {
   const status = await app.request('/sqftlab/stream/status')
   const sj = await status.json() as { transport: string; channels: string[]; subscribers: number }
   check('status reports sse', sj.transport === 'sse', `transport=${sj.transport}`)
-  check('4 channels declared', sj.channels.length === 4, `${sj.channels.length}`)
+  check('5 channels declared', sj.channels.length === 5, `${sj.channels.length}: ${sj.channels.join(',')}`)
+  check('cron:update channel declared', sj.channels.includes('cron:update'), sj.channels.join(','))
   check('subscriber released on cancel', sj.subscribers === 0, `subscribers=${sj.subscribers}`)
 
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`)

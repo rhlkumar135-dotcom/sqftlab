@@ -11,7 +11,7 @@
 // replacement of `publish()`/`subscribe()` — the channel names and payload
 // shapes are already identical to the spec's.
 
-export type Channel = 'market:update' | 'district:update' | 'deal:new' | 'intelligence:update'
+export type Channel = 'market:update' | 'district:update' | 'deal:new' | 'intelligence:update' | 'cron:update'
 
 interface Message {
   channel: Channel
@@ -60,7 +60,7 @@ export function streamStatus() {
     transport: 'sse',
     broker: 'in-process',
     subscribers: listeners.size,
-    channels: ['market:update', 'district:update', 'deal:new', 'intelligence:update'] as Channel[],
+    channels: ['market:update', 'district:update', 'deal:new', 'intelligence:update', 'cron:update'] as Channel[],
     buffered: Object.fromEntries([...recent.entries()].map(([k, v]) => [k, v.length])),
   }
 }

@@ -524,3 +524,22 @@ model ScraperLog {
   @@index([source, startedAt])
   @@map("scraper_logs")
 }
+
+// One row per hourly refresh run. Without this there is no way to answer
+// "is the data actually refreshing?" — the dashboard would look identical
+// whether the cron ran 5 minutes ago or never.
+model CronRun {
+  id         String    @id @default(cuid())
+  job        String // e.g. "hourly-refresh"
+  status     String // running | success | partial | error
+  steps      String? // JSON array: [{ step, status, ms, detail }]
+  okCount    Int?      @map("ok_count")
+  failCount  Int?      @map("fail_count")
+  errorMsg   String?   @map("error_msg")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  durationMs Int?      @map("duration_ms")
+
+  @@index([job, startedAt])
+  @@map("cron_runs")
+}
