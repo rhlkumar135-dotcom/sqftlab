@@ -1901,4 +1901,20 @@ app.get('/sqftlab/stream/market', (c) =>
   }),
 )
 
+// Catch-all — must be registered LAST so every real route wins.
+//
+// The pattern is '*' and not '/api/*': server.tsx mounts this app with
+// `app.route('/api', customRoutes)`, so routes here are relative to that mount
+// point (see the '/sqftlab/...' declarations above). An '/api/*' pattern would
+// therefore never match anything.
+//
+// This exists because server.tsx also owns a SPA catch-all that resolves any
+// unmatched path to index.html. Without this handler an API client asking for a
+// mistyped or removed endpoint receives an HTML document with a 200 status,
+// parses it as a successful response, and fails somewhere far away from the
+// actual mistake. Answering in JSON keeps the failure at the boundary.
+app.all('*', (c) =>
+  c.json({ error: `No API route matches ${c.req.method} ${c.req.path}` }, 404),
+)
+
 export default app

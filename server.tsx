@@ -44,6 +44,44 @@ const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 
+// SHOGO:CUSTOM-START asset-routing
+// Both of these MUST be registered before the static handlers below. Hono
+// dispatches middleware in registration order, so anything mounted after the
+// SPA catch-all is unreachable: the catch-all resolves *every* unmatched path
+// to index.html and answers before a later middleware ever runs.
+//
+// 1. The canvas preview mounts the app under /p/<projectId>/ and the client is
+//    built with that base, so asset and API requests arrive with the prefix on
+//    the path. Rewriting it here lets the request reach the real file. Without
+//    this it falls through to the catch-all and the browser receives index.html
+//    where it expects a JS module — the bundle never executes, #root stays
+//    empty, and the page renders blank.
+app.use('*', async (c, next) => {
+  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
+  if (!m) return next()
+  const url = new URL(c.req.url)
+  url.pathname = m[1] || '/'
+  return app.fetch(new Request(url, c.req.raw))
+})
+
+// 2. index.html must revalidate; hashed assets may be cached forever.
+//    Vite gives every build new asset filenames, so a cached shell is the only
+//    way a correctly deployed UI stays invisible — the browser keeps loading the
+//    previous build's asset names from cache. Revalidating the HTML makes a new
+//    deploy visible on the next navigation, while content-hashed assets stay
+//    immutable so repeat visits are still cheap.
+app.use('*', async (c, next) => {
+  await next()
+  if (c.req.path.startsWith('/api/')) return
+  if (/\.(js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(c.req.path)) {
+    c.header('Cache-Control', 'public, max-age=31536000, immutable')
+  } else {
+    c.header('Cache-Control', 'no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+  }
+})
+// SHOGO:CUSTOM-END
+
 // Serve static files in production
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
@@ -55,16 +93,8 @@ Bun.serve({ port, fetch: app.fetch })
 
 
 // SHOGO:CUSTOM-START preview-prefix
-// The canvas preview proxy mounts this app under /p/<projectId>/ and the client
-// is built with that base, so asset and API requests arrive with the prefix on
-// the path. Without stripping it no route matches, every request falls through
-// to the SPA catch-all below, and the browser receives index.html where it
-// expects a JS module — the bundle never executes and #root stays empty.
-app.use('*', async (c, next) => {
-  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
-  if (!m) return next()
-  const url = new URL(c.req.url)
-  url.pathname = m[1] || '/'
-  return app.fetch(new Request(url, c.req.raw))
-})
+// The prefix rewrite now lives ABOVE the static handlers (see the asset-routing
+// region). A copy here was dead code: this point in the file is after the SPA
+// catch-all, which resolves every unmatched path to index.html and responds
+// before any later middleware runs.
 // SHOGO:CUSTOM-END
