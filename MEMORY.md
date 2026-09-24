@@ -254,7 +254,7 @@ status reads `Success - www.sqftlab.com`. Check state with
 4. **`RAILWAY_GIT_COMMIT_SHA` must be declared as an `ARG`** in the Dockerfile.
    A Docker build only sees explicitly declared build args; without it the
    build-identity stamp in `vite.config.ts` writes `"unknown"`.
-5. **`sqrtlab-next/` is a nested git repo committed as a gitlink (mode 160000)
+5. **`sqftlab-next/` is a nested git repo committed as a gitlink (mode 160000)
    with NO `.gitmodules`** — a whole second Next.js app (its own `railway.toml`,
    `workers/`, `prisma/`, 39MB). A fresh clone yields an EMPTY directory. It is
    not built by the root Dockerfile, but it is a live foot-gun: if any Railway

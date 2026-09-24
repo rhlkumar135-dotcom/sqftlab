@@ -48,6 +48,9 @@ model Community {
   priceChange1y         Float    @default(0) @map("price_change_1y")
   transactionCount30d   Int      @default(0) @map("transaction_count_30d")
   totalTransactions     Int      @default(0) @map("total_transactions")
+  // Provenance of medianAedSqft: "dld" when derived from the government
+  // transaction register, "listing" when it fell back to asking prices.
+  psfSource             String   @default("listing") @map("psf_source")
   // Neighbourhood sub-scores (0-10 each)
   scoreSchools          Int      @default(0) @map("score_schools")
   scoreHealthcare       Int      @default(0) @map("score_healthcare")

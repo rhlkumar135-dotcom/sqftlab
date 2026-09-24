@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- GitHub repo: `rhlkumar135-dotcom/Khashn` ✅
+- GitHub repo: `rhlkumar135-dotcom/sqftlab` ✅
 - Railway account ✅
 - GoDaddy domain: `sqftlab.com` ✅
 
@@ -12,7 +12,7 @@
 
 1. Go to **https://railway.app/new**
 2. Click **"Deploy from GitHub Repo"**
-3. Select **`rhlkumar135-dotcom/Khashn`**
+3. Select **`rhlkumar135-dotcom/sqftlab`**
 4. Wait for initial build (~2-3 minutes)
 
 ## Step 2: Add PostgreSQL

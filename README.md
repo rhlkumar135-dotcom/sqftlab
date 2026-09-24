@@ -42,13 +42,13 @@ Real-time price heatmaps, AI-powered yield forecasts, deal alerts, and portfolio
 ```bash
 bun install
 bun run generate
-bun run scripts/seed-khashn.ts
+bun run scripts/seed-sqftlab.ts
 bun run dev
 ```
 
 ## Deploy to Railway
 
-1. Connect GitHub repo `rhlkumar135-dotcom/Khashn`
+1. Connect GitHub repo `rhlkumar135-dotcom/sqftlab`
 2. Add PostgreSQL database
 3. Set `DATABASE_URL=${{Postgres.DATABASE_URL}}`
 4. Set start command: `bash scripts/railway-setup.sh`

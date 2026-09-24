@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
@@ -12,6 +13,36 @@ import {
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 
 const app = new Hono()
+
+// ─── CORS ────────────────────────────────────────────────────────────────────
+//
+// This lives here, not only in server.tsx, because server.tsx is REGENERATED
+// whenever prisma/schema.prisma changes — which silently reverted the copy there
+// during this work. custom-routes.ts is never regenerated, so this is the durable
+// place for cross-cutting API middleware.
+//
+// No wildcard in production. `Access-Control-Allow-Origin: *` lets any site read
+// this API using the visitor's cookies, and it cannot be combined with
+// credentials. In development the permissive behaviour is kept so local tooling
+// is unchanged.
+const ALLOWED_ORIGINS = ['https://sqftlab.com', 'https://www.sqftlab.com']
+
+app.use('*', async (c, next) => {
+  const origin = c.req.header('Origin') ?? ''
+  const isProd = process.env.NODE_ENV === 'production'
+  const allowed = !isProd || ALLOWED_ORIGINS.includes(origin)
+
+  if (allowed) {
+    c.res.headers.set('Access-Control-Allow-Origin', isProd ? origin : '*')
+    c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+    c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    // Reflecting the Origin makes the response vary by it; without Vary a shared
+    // cache could hand one origin's response (and its CORS headers) to another.
+    if (isProd) c.res.headers.set('Vary', 'Origin')
+  }
+  if (c.req.method === 'OPTIONS') return c.text('', 204)
+  await next()
+})
 
 // ─── Health & diagnostics ─────────────────────────────────────────────────────
 
@@ -143,7 +174,12 @@ app.get('/sqftlab/communities/:slug/listings', async (c) => {
   return c.json({ listings })
 })
 
-// ─── Price trend (simulated monthly data) ────────────────────────────────────
+// ─── Price trend (real DLD transaction aggregation) ──────────────────────────
+
+// `Transaction.transactionType` stores lowercase values (`sale`,
+// `off_plan_sale`, `mortgage`). The spec's SQL sample filtered on 'Sales',
+// which matches no row in this schema.
+const SALE_TXN_TYPES = ['sale', 'off_plan_sale']
 
 app.get('/sqftlab/communities/:slug/trend', async (c) => {
   const slug = c.req.param('slug')
@@ -151,23 +187,74 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
   const community = await prisma.community.findUnique({ where: { slug } })
   if (!community) return c.json({ error: 'Community not found' }, 404)
 
-  const months = period === '5y' ? 60 : 12
-  const trend = []
-  const basePrice = community.medianAedSqft
-  const monthlyGrowth = community.priceChange1y / 100 / 12
+  const months = period === '5y' ? 60 : period === '3y' ? 36 : 12
+  const since = new Date()
+  since.setMonth(since.getMonth() - months)
 
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      communityId: community.id,
+      transactionType: { in: SALE_TXN_TYPES },
+      pricePerSqft: { gt: 100 }, // excludes land and outlier records
+      transactionDate: { gte: since },
+    },
+    select: { transactionDate: true, pricePerSqft: true, priceAed: true },
+  })
+
+  const monthMap = new Map<string, { psfs: number[]; volume: number; totalValue: number }>()
+  for (const txn of transactions) {
+    const key = txn.transactionDate.toISOString().substring(0, 7)
+    const bucket = monthMap.get(key) ?? { psfs: [], volume: 0, totalValue: 0 }
+    bucket.psfs.push(txn.pricePerSqft)
+    bucket.volume++
+    bucket.totalValue += txn.priceAed
+    monthMap.set(key, bucket)
+  }
+
+  const trend = []
   for (let i = months; i >= 0; i--) {
-    const date = new Date()
-    date.setMonth(date.getMonth() - i)
-    const noise = 0.97 + Math.random() * 0.06
-    const price = Math.round(basePrice * (1 - monthlyGrowth * i) * noise)
-    trend.push({
-      date: date.toISOString().substring(0, 7),
-      medianPrice: price,
-      volume: Math.floor(50 + Math.random() * 200),
+    const d = new Date()
+    d.setMonth(d.getMonth() - i)
+    const key = d.toISOString().substring(0, 7)
+    const bucket = monthMap.get(key)
+    if (bucket && bucket.psfs.length > 0) {
+      // True median (mean of the two central values on an even count). A plain
+      // average would let one headline deal drag the whole month.
+      const sorted = [...bucket.psfs].sort((a, b) => a - b)
+      const mid = Math.floor(sorted.length / 2)
+      const median = sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid]
+      trend.push({
+        date: key,
+        medianPrice: Math.round(median),
+        volume: bucket.volume,
+        totalValueAed: Math.round(bucket.totalValue),
+        dataSource: 'DLD · Dubai Pulse API',
+        transactionCount: bucket.psfs.length,
+      })
+    } else {
+      // null rather than 0 so the chart breaks the line instead of plotting a
+      // cliff to the axis on months with no sales.
+      trend.push({
+        date: key, medianPrice: null, volume: 0,
+        totalValueAed: 0, dataSource: 'DLD', transactionCount: 0,
+      })
+    }
+  }
+
+  const hasRealData = trend.some((t) => t.medianPrice !== null)
+  if (!hasRealData) {
+    return c.json({
+      trend: [],
+      period,
+      dataSource: 'no_transaction_data',
+      message: 'DLD transaction data not yet loaded. Run the DLD sync first.',
+      communityMedian: community.medianAedSqft,
     })
   }
-  return c.json({ trend, period })
+
+  return c.json({ trend, period, dataSource: 'dld_transactions' })
 })
 
 // ─── Yield Calculator ────────────────────────────────────────────────────────
@@ -252,7 +339,9 @@ app.post('/sqftlab/mortgage/simulate', async (c) => {
     totalPayment: Math.round(totalPayment),
     totalInterest: Math.round(totalInterest),
     amortization,
-    // Indicative bank rates
+    // These are NOT quotes from these banks. Each is a mechanical offset from the
+    // rate the user typed in, so they must be labelled as illustrative — an
+    // unlabelled list reads as a rate comparison sqftLab cannot stand behind.
     bankRates: [
       { bank: 'ADCB', rate: ratePct - 0.15, type: 'Variable' },
       { bank: 'Emirates NBD', rate: ratePct, type: 'Variable' },
@@ -260,38 +349,80 @@ app.post('/sqftlab/mortgage/simulate', async (c) => {
       { bank: 'HSBC UAE', rate: ratePct + 0.05, type: 'Fixed 3yr' },
       { bank: 'Mashreq', rate: ratePct - 0.05, type: 'Variable' },
     ],
+    bankRatesDisclaimer: 'Indicative rates only — calculated as offsets from your ' +
+      'input rate. Verify actual rates with each bank before proceeding. ' +
+      'sqftLab is not a mortgage broker.',
+    disclaimer: 'This calculator provides illustrative calculations only. ' +
+      'sqftLab does not provide mortgage advice. Rates shown are indicative. ' +
+      'Contact a CBUAE-regulated bank or mortgage broker for actual rates.',
   })
 })
 
 // ─── Exchange Rates ──────────────────────────────────────────────────────────
 
+// frankfurter (the previous source) does not publish INR or PKR at all, so both
+// silently fell through to the hardcoded constants on every request — the UI
+// showed a "live" rate that never changed. open.er-api.com covers all five
+// currencies and needs no key.
+const RATE_TTL_MS = 5 * 60 * 1000
+
 app.get('/sqftlab/rates/exchange', async (c) => {
-  // Fetch live rates from frankfurter API
+  // 1. Serve a cached row if it is younger than the TTL.
+  const cached = await prisma.exchangeRate.findFirst({
+    where: { base: 'AED', fetchedAt: { gte: new Date(Date.now() - RATE_TTL_MS) } },
+    orderBy: { fetchedAt: 'desc' },
+  })
+  if (cached) {
+    return c.json({
+      AED_USD: cached.usd, AED_GBP: cached.gbp, AED_EUR: cached.eur,
+      AED_INR: cached.inr, AED_PKR: cached.pkr,
+      updatedAt: cached.fetchedAt, source: 'cache',
+    })
+  }
+
+  // 2. Fetch live. Only a successful response is persisted, so a fallback value
+  //    never gets stamped into the cache and replayed as "live" for 5 minutes.
   try {
-    const res = await fetch('https://api.frankfurter.app/latest?from=AED&to=USD,GBP,EUR,INR,PKR', {
+    const res = await fetch('https://open.er-api.com/v6/latest/AED', {
       signal: AbortSignal.timeout(5000),
     })
     if (res.ok) {
       const data = await res.json()
-      return c.json({
-        AED_INR: data.rates?.INR ?? 22.68,
-        AED_USD: data.rates?.USD ?? 0.2723,
-        AED_GBP: data.rates?.GBP ?? 0.2145,
-        AED_EUR: data.rates?.EUR ?? 0.25,
-        AED_PKR: data.rates?.PKR ?? 75.5,
-        updatedAt: data.date ?? new Date().toISOString(),
-      })
+      if (data?.result !== 'error') {
+        const rates = {
+          usd: data.rates?.USD ?? 0.2723,
+          gbp: data.rates?.GBP ?? 0.2145,
+          eur: data.rates?.EUR ?? 0.25,
+          inr: data.rates?.INR ?? 22.68,
+          pkr: data.rates?.PKR ?? 75.5,
+        }
+        await prisma.exchangeRate.create({ data: { base: 'AED', ...rates } })
+        return c.json({
+          AED_USD: rates.usd, AED_GBP: rates.gbp, AED_EUR: rates.eur,
+          AED_INR: rates.inr, AED_PKR: rates.pkr,
+          updatedAt: new Date().toISOString(), source: 'live',
+        })
+      }
     }
   } catch {}
+
+  // 3. Clearly-labelled fallback.
   return c.json({
-    AED_INR: 22.68, AED_USD: 0.2723, AED_GBP: 0.2145,
-    AED_EUR: 0.25, AED_PKR: 75.5, updatedAt: new Date().toISOString(),
+    AED_USD: 0.2723, AED_GBP: 0.2145, AED_EUR: 0.25,
+    AED_INR: 22.68, AED_PKR: 75.5,
+    updatedAt: new Date().toISOString(), source: 'fallback',
   })
 })
 
 // ─── Scraper: PropertyFinder ────────────────────────────────────────────────
 
-const PF_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+// A static UA across a multi-minute crawl is a single reusable fingerprint.
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+]
 
 const DUBAI_AREAS = [
   { name: 'Dubai Marina', lid: '31', slug: 'dubai-marina' },
@@ -333,7 +464,10 @@ async function pfFetchPage(catId: number, locationId: string, page: number): Pro
   const url = `https://www.propertyfinder.ae/en/search?c=${catId}&l=${locationId}&ob=mr&page=${page}`
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': PF_UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      headers: {
+        'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
       signal: AbortSignal.timeout(15000),
     })
     if (!res.ok) return []
@@ -391,6 +525,48 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
   return c
 }
 
+// Deal detection. `isDeal` was written only on create (always `false`) and never
+// updated anywhere, so /sqftlab/deals could only ever return an empty array.
+// A listing is a deal when its PSF is below 88% of its community's median PSF,
+// i.e. more than 12% under the local market.
+const DEAL_DISCOUNT_THRESHOLD = 0.88
+
+async function detectDeals(): Promise<number> {
+  const communities = await prisma.community.findMany({
+    select: { id: true, medianAedSqft: true },
+  })
+
+  // A median below AED 100/sqft is a placeholder, not a real market level —
+  // flagging against it would mark almost every listing in the district.
+  const candidates = communities.filter((cm) => cm.medianAedSqft > 100)
+  if (candidates.length === 0) return 0
+
+  // Reset-then-flag per community, all inside one transaction, so a failure
+  // partway through cannot leave a community with every listing cleared and
+  // none re-flagged.
+  const statements = candidates.flatMap((cm) => {
+    const threshold = cm.medianAedSqft * DEAL_DISCOUNT_THRESHOLD
+    return [
+      prisma.listing.updateMany({
+        where: { communityId: cm.id, purpose: 'sale' },
+        data: { isDeal: false },
+      }),
+      prisma.listing.updateMany({
+        where: {
+          communityId: cm.id,
+          purpose: 'sale',
+          pricePerSqft: { gt: 0, lt: threshold },
+        },
+        data: { isDeal: true },
+      }),
+    ]
+  })
+
+  const results = await prisma.$transaction(statements)
+  // Odd indices are the "set true" statements; even ones are the resets.
+  return results.reduce((sum, r, i) => (i % 2 === 1 ? sum + r.count : sum), 0)
+}
+
 app.get('/sqftlab/scrape', async (c) => {
   const secret = c.req.query('secret')
   if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
@@ -398,6 +574,19 @@ app.get('/sqftlab/scrape', async (c) => {
   const startedAt = Date.now()
   let totalSaved = 0
   const logs: string[] = []
+
+  // Best-effort audit row. A missing/failing log table must never abort a scrape.
+  const logRun = await prisma.scraperLog
+    .create({ data: { source: 'propertyfinder', status: 'running', startedAt: new Date() } })
+    .catch(() => null)
+
+  // Circuit breaker. PropertyFinder returns an empty page both at the natural
+  // end of a result set AND when it starts refusing us — so a run of empties
+  // means we're being throttled. Left unchecked this crawls 22 areas × 2
+  // categories × 3 pages against a host that is already saying no.
+  let consecutiveFailures = 0
+  let circuitBroken = false
+  const MAX_FAILURES = 3
 
   // Scrape Dubai + Abu Dhabi
   for (const areas of [DUBAI_AREAS, AD_AREAS]) {
@@ -407,7 +596,15 @@ app.get('/sqftlab/scrape', async (c) => {
         const purpose = catId === 1 ? 'sale' : 'rent'
         for (let page = 1; page <= 3; page++) {
           const props = await pfFetchPage(catId, area.lid, page)
-          if (props.length === 0) break
+          if (props.length === 0) {
+            consecutiveFailures++
+            if (consecutiveFailures >= MAX_FAILURES) {
+              circuitBroken = true
+              logs.push(`Circuit breaker tripped: ${MAX_FAILURES} consecutive empty responses — stopping scrape`)
+            }
+            break // no further pages of this size
+          }
+          consecutiveFailures = 0
           for (const p of props) {
             try {
               const parsed = pfParse(p, 'propertyfinder', purpose)
@@ -439,10 +636,15 @@ app.get('/sqftlab/scrape', async (c) => {
               totalSaved++
             } catch {}
           }
-          await sleepMs(1500)
+          // Jittered 3–6s. The random component is the point: a fixed interval is
+          // a trivially detectable pattern over a multi-minute crawl.
+          await sleepMs(3000 + Math.random() * 3000)
         }
+        if (circuitBroken) break
       }
+      if (circuitBroken) break
     }
+    if (circuitBroken) break
   }
 
   // Cleanup old listings (>30 days)
@@ -450,38 +652,89 @@ app.get('/sqftlab/scrape', async (c) => {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   const deleted = await prisma.listing.deleteMany({ where: { scrapedAt: { lt: thirtyDaysAgo } } })
 
-  // Update community stats
-  const communities = await prisma.community.findMany()
-  for (const comm of communities) {
-    const [cnt, avgPsf, avgRent, txCnt] = await Promise.all([
-      prisma.listing.count({ where: { communityId: comm.id } }),
-      prisma.listing.aggregate({ where: { communityId: comm.id, purpose: 'sale', pricePerSqft: { gt: 0 } }, _avg: { pricePerSqft: true } }),
-      prisma.listing.aggregate({ where: { communityId: comm.id, purpose: 'rent', priceAed: { gt: 0 } }, _avg: { priceAed: true } }),
-      prisma.transaction.count({ where: { communityId: comm.id } }),
-    ])
-    const mp = Math.round(avgPsf._avg.pricePerSqft ?? 0)
-    const mr = Math.round(avgRent._avg.priceAed ?? 0)
-    const yld = mp > 0 && mr > 0 ? Math.round((mr / (mp * 1000)) * 10000) / 100 : 0
-    await prisma.community.update({
-      where: { id: comm.id },
-      data: {
-        medianAedSqft: mp || comm.medianAedSqft,
-        medianAnnualRentAed: mr || comm.medianAnnualRentAed,
-        grossYieldPct: yld || comm.grossYieldPct,
-        totalTransactions: txCnt,
-      },
+  // ── Community stats: batched, and PSF sourced from DLD transactions ────────
+  // This previously ran four queries per community inside a loop (4 × 39 round
+  // trips) and derived PSF from listing asking prices — the opposite of what the
+  // product claims. Now: five grouped queries total, and medianAedSqft prefers
+  // the government register, recording which source won in `psfSource`.
+  const [statsCommunities, listingPsfByComm, rentByComm, txCountByComm, txPsfByComm] = await Promise.all([
+    prisma.community.findMany({
+      select: { id: true, medianAedSqft: true, medianAnnualRentAed: true, grossYieldPct: true },
+    }),
+    prisma.listing.groupBy({
+      by: ['communityId'],
+      where: { purpose: 'sale', pricePerSqft: { gt: 0 } },
+      _avg: { pricePerSqft: true },
+    }),
+    prisma.listing.groupBy({
+      by: ['communityId'],
+      where: { purpose: 'rent', priceAed: { gt: 0 } },
+      _avg: { priceAed: true },
+    }),
+    prisma.transaction.groupBy({ by: ['communityId'], _count: { _all: true } }),
+    prisma.transaction.groupBy({
+      by: ['communityId'],
+      where: { transactionType: { in: SALE_TXN_TYPES }, pricePerSqft: { gt: 100 } },
+      _avg: { pricePerSqft: true },
+    }),
+  ])
+
+  const listPsfMap = new Map(listingPsfByComm.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
+  const rentMap = new Map(rentByComm.map((r) => [r.communityId, r._avg.priceAed ?? 0]))
+  const txCountMap = new Map(txCountByComm.map((r) => [r.communityId, r._count._all]))
+  const txPsfMap = new Map(txPsfByComm.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
+
+  await prisma.$transaction(
+    statsCommunities.map((comm) => {
+      const txPsf = txPsfMap.get(comm.id) ?? 0
+      const listPsf = listPsfMap.get(comm.id) ?? 0
+      // A transaction-derived level is government-registered, so it wins over
+      // asking prices whenever we actually have one.
+      const mp = Math.round(txPsf > 0 ? txPsf : listPsf)
+      const mr = Math.round(rentMap.get(comm.id) ?? 0)
+      const yld = mp > 0 && mr > 0 ? Math.round((mr / (mp * 1000)) * 10000) / 100 : 0
+      return prisma.community.update({
+        where: { id: comm.id },
+        data: {
+          medianAedSqft: mp || comm.medianAedSqft,
+          medianAnnualRentAed: mr || comm.medianAnnualRentAed,
+          grossYieldPct: yld || comm.grossYieldPct,
+          totalTransactions: txCountMap.get(comm.id) ?? 0,
+          psfSource: txPsf > 0 ? 'dld' : 'listing',
+        },
+      })
     })
-  }
+  )
+
+  // ── Deal detection ────────────────────────────────────────────────────────
+  const dealsDetected = await detectDeals()
 
   const elapsed = Math.round((Date.now() - startedAt) / 1000)
   const finalCount = await prisma.listing.count()
+
+  if (logRun) {
+    await prisma.scraperLog
+      .update({
+        where: { id: logRun.id },
+        data: {
+          status: circuitBroken ? 'partial' : 'success',
+          recordsNew: totalSaved,
+          finishedAt: new Date(),
+          durationMs: Date.now() - startedAt,
+        },
+      })
+      .catch(() => {})
+  }
 
   return c.json({
     ok: true,
     saved: totalSaved,
     deleted: deleted.count,
+    dealsDetected,
     totalListings: finalCount,
-    communities: communities.length,
+    communities: statsCommunities.length,
+    circuitBroken,
+    logs,
     elapsed: `${elapsed}s`,
   })
 })
@@ -511,13 +764,45 @@ app.get('/sqftlab/scrape/status', async (c) => {
   })
 })
 
+// ─── Identity ────────────────────────────────────────────────────────────────
+
+// Account-scoped routes resolve the caller from the request. This replaces a
+// hardcoded `DEMO_USER_ID`, which meant every visitor was served the same
+// person's portfolio, watchlist and alerts regardless of who they were.
+//
+// NOTE: this is *identification*, not authentication. A bearer value or cookie
+// is taken at face value, so it is not a security boundary — anyone can claim
+// any user id. Its purpose is to stop account-scoped routes leaking a single
+// global identity; real auth belongs in front of it.
+function getUserId(c: Context): string | null {
+  const auth = c.req.header('Authorization')
+  if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
+  const cookie = c.req.header('Cookie') ?? ''
+  const match = cookie.match(/(?:^|;\s*)session=([^;]+)/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function unauthorized(c: Context) {
+  return c.json({ error: 'Unauthorized. Send `Authorization: Bearer <userId>` or a `session` cookie.' }, 401)
+}
+
+// The seeded demo account, resolved by email (falling back to the oldest user)
+// so no cuid is baked into the source.
+async function seededUserId(): Promise<string | null> {
+  const user =
+    (await prisma.user.findUnique({ where: { email: 'demo@sqftlab.ae' }, select: { id: true } })) ??
+    (await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } }))
+  return user?.id ?? null
+}
+
 // ─── Portfolio ───────────────────────────────────────────────────────────────
 
-const DEMO_USER_ID = 'cmtv5baxv0000pdjjbobt1ojr'
-
 app.get('/sqftlab/portfolio', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   const items = await prisma.portfolio.findMany({
-    where: { userId: DEMO_USER_ID },
+    where: { userId },
     include: { community: { select: { nameEn: true, slug: true, medianAedSqft: true, grossYieldPct: true } } },
   })
 
@@ -543,11 +828,73 @@ app.get('/sqftlab/portfolio', async (c) => {
   })
 })
 
+// Add a holding. The spec showed `data: { userId, ...body }`, which spreads
+// arbitrary client input straight into the row (mass assignment — a caller could
+// set `purchaseDate` to any value, or `currentValue` to whatever they liked).
+// Fields are validated instead.
+app.post('/sqftlab/portfolio', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+
+  const communitySlug = typeof body.communitySlug === 'string' ? body.communitySlug.trim() : ''
+  if (!communitySlug) return c.json({ error: 'communitySlug is required' }, 400)
+
+  const community = await prisma.community.findUnique({
+    where: { slug: communitySlug },
+    select: { id: true },
+  })
+  if (!community) return c.json({ error: `Unknown district "${communitySlug}"` }, 400)
+
+  const purchasePrice = Number(body.purchasePrice)
+  if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
+    return c.json({ error: 'purchasePrice must be a positive number' }, 400)
+  }
+  const areaSqft = Number(body.areaSqft)
+  if (!Number.isFinite(areaSqft) || areaSqft <= 0) {
+    return c.json({ error: 'areaSqft must be a positive number' }, 400)
+  }
+
+  const num = (v: unknown, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback)
+  const purchaseDate = body.purchaseDate ? new Date(String(body.purchaseDate)) : new Date()
+  if (Number.isNaN(purchaseDate.getTime())) {
+    return c.json({ error: 'purchaseDate must be a valid date' }, 400)
+  }
+
+  const item = await prisma.portfolio.create({
+    data: {
+      userId,
+      communityId: community.id,
+      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled holding',
+      propertyType:
+        typeof body.propertyType === 'string' && body.propertyType.trim() ? body.propertyType.trim() : 'apartment',
+      beds: Number.isInteger(Number(body.beds)) ? Number(body.beds) : 0,
+      areaSqft,
+      purchasePrice,
+      purchaseDate,
+      currentValue: num(body.currentValue, purchasePrice),
+      annualRent: num(body.annualRent),
+      serviceCharge: num(body.serviceCharge),
+    },
+  })
+
+  return c.json({ item }, 201)
+})
+
 // ─── Watchlist ───────────────────────────────────────────────────────────────
 
 app.get('/sqftlab/watchlist', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   const items = await prisma.watchlist.findMany({
-    where: { userId: DEMO_USER_ID },
+    where: { userId },
     include: { community: true },
     orderBy: { addedAt: 'desc' },
   })
@@ -556,6 +903,16 @@ app.get('/sqftlab/watchlist', async (c) => {
 
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
+// Re-run deal detection without a full scrape. Same secret as /scrape so it can
+// be driven from the cron without exposing a mutation to the public.
+app.get('/sqftlab/detect-deals', async (c) => {
+  const secret = c.req.query('secret')
+  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
+
+  const dealsDetected = await detectDeals()
+  return c.json({ ok: true, dealsDetected })
+})
+
 app.get('/sqftlab/deals', async (c) => {
   const deals = await prisma.listing.findMany({
     where: { isDeal: true, purpose: 'sale' },
@@ -563,7 +920,18 @@ app.get('/sqftlab/deals', async (c) => {
     orderBy: { listedAt: 'desc' },
     take: 30,
   })
-  return c.json({ deals })
+
+  // How far below the district median each listing sits. Without this the UI can
+  // only show a "deal" badge with no magnitude behind it.
+  const dealsWithDiscount = deals.map((d) => ({
+    ...d,
+    discountPct:
+      d.community.medianAedSqft > 0 && d.pricePerSqft > 0
+        ? Math.round((1 - d.pricePerSqft / d.community.medianAedSqft) * 100 * 10) / 10
+        : 0,
+  }))
+
+  return c.json({ deals: dealsWithDiscount })
 })
 
 // ─── Listings search ─────────────────────────────────────────────────────────
@@ -612,8 +980,11 @@ app.get('/sqftlab/listings', async (c) => {
 // /sqftlab/alerts, so these stay reachable at their own path rather than
 // shadowing the new CRUD routes.
 app.get('/sqftlab/alert-rules', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   const alerts = await prisma.alert.findMany({
-    where: { userId: DEMO_USER_ID },
+    where: { userId },
     include: { community: { select: { nameEn: true, slug: true } } },
     orderBy: { createdAt: 'desc' },
   })
@@ -726,15 +1097,19 @@ app.get('/sqftlab/predictions', async (c) => {
 
     const forecast6m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 0.5) * 100) / 100
     const forecast12m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 1.0) * 100) / 100
-    const forecastChange6m = Math.round((forecast6m / c.medianAedSqft - 1) * 10000) / 100
-    const forecastChange12m = Math.round((forecast12m / c.medianAedSqft - 1) * 10000) / 100
+    // Named `projectedChange*` so the identifier itself says these are
+    // extrapolations, not promises. The old "Strong Buy / Buy / Hold / Sell /
+    // Avoid" labels are gone: they read as licensed investment advice while
+    // being derived from a five-line arithmetic formula.
+    const projectedChange6m = Math.round((forecast6m / c.medianAedSqft - 1) * 10000) / 100
+    const projectedChange12m = Math.round((forecast12m / c.medianAedSqft - 1) * 10000) / 100
 
-    let recommendation: string
-    if (forecastChange6m > 5 && c.grossYieldPct > 6) recommendation = 'Strong Buy'
-    else if (forecastChange6m > 2 && c.grossYieldPct > 5) recommendation = 'Buy'
-    else if (forecastChange6m > -2) recommendation = 'Hold'
-    else if (forecastChange6m > -5) recommendation = 'Sell'
-    else recommendation = 'Avoid'
+    const momentumLabel =
+      projectedChange6m > 5 ? 'Strong upward trend'
+      : projectedChange6m > 2 ? 'Moderate upward trend'
+      : projectedChange6m > -2 ? 'Stable'
+      : projectedChange6m > -5 ? 'Moderate downward trend'
+      : 'Declining trend'
 
     const riskLevel = confidence > 75 ? 'Low' : confidence > 60 ? 'Medium' : 'High'
 
@@ -745,10 +1120,10 @@ app.get('/sqftlab/predictions', async (c) => {
       currentPsf: c.medianAedSqft,
       forecast6m,
       forecast12m,
-      forecastChange6m,
-      forecastChange12m,
+      projectedChange6m,
+      projectedChange12m,
+      momentumLabel,
       confidence: Math.round(confidence),
-      recommendation,
       riskLevel,
       momentum: Math.round(momentum * 100) / 100,
       yield: c.grossYieldPct,
@@ -757,20 +1132,25 @@ app.get('/sqftlab/predictions', async (c) => {
     }
   })
 
-  const strongBuys = predictions.filter(p => p.recommendation === 'Strong Buy')
-  const buys = predictions.filter(p => p.recommendation === 'Buy')
-  const holds = predictions.filter(p => p.recommendation === 'Hold')
+  // Momentum buckets replace the buy/sell buckets: they describe the trend
+  // rather than advising an action, and the response carries a disclaimer.
+  const rising = predictions.filter(p => p.projectedChange6m > 2).length
+  const stable = predictions.filter(p => p.projectedChange6m <= 2 && p.projectedChange6m >= -2).length
+  const falling = predictions.filter(p => p.projectedChange6m < -2).length
 
   return c.json({
+    disclaimer: 'Projections are based on historical trend extrapolation only. ' +
+      'Not financial advice. Past performance does not predict future results. ' +
+      'Consult a RERA-licensed agent before transacting.',
     predictions,
     summary: {
-      strongBuys: strongBuys.length,
-      buys: buys.length,
-      holds: holds.length,
+      rising,
+      stable,
+      falling,
       totalAnalyzed: predictions.length,
     },
-    strongBuys: strongBuys.slice(0, 5),
-    topGrowth: [...predictions].sort((a, b) => b.forecastChange12m - a.forecastChange12m).slice(0, 5),
+    topMomentum: [...predictions].sort((a, b) => b.projectedChange6m - a.projectedChange6m).slice(0, 5),
+    topGrowth: [...predictions].sort((a, b) => b.projectedChange12m - a.projectedChange12m).slice(0, 5),
     topYield: [...predictions].sort((a, b) => b.yield - a.yield).slice(0, 5),
   })
 })
@@ -1271,21 +1651,29 @@ app.get('/sqftlab/forecast', async (c) => {
 
 // ─── TASK 12 — Deal alert CRUD + engine ──────────────────────────────────────
 
-// Current user. The app is single-tenant demo, so this resolves the seeded user
-// and lets tier-restricted pages decide whether to gate.
+// Identity bootstrap. `/me` answers "who is this?", so it deliberately does NOT
+// require a session — if it did, the client could never learn its own id. With
+// no session it resolves the seeded account (the pre-auth placeholder), which
+// keeps tier gating and the account-scoped pages working.
 app.get('/sqftlab/me', async (c) => {
+  const userId = getUserId(c) ?? (await seededUserId())
+  if (!userId) return c.json({ error: 'No user account configured' }, 404)
+
   const user = await prisma.user.findUnique({
-    where: { id: DEMO_USER_ID },
+    where: { id: userId },
     select: { id: true, email: true, name: true, tier: true, subscriptionStatus: true },
   })
-  if (!user) return c.json({ error: 'No demo user configured' }, 404)
+  if (!user) return c.json({ error: 'No user account configured' }, 404)
   return c.json({ user })
 })
 
 // GET /sqftlab/alerts — active alerts plus the recent matches they produced.
 app.get('/sqftlab/alerts', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   const alerts = await prisma.dealAlert.findMany({
-    where: { userId: DEMO_USER_ID },
+    where: { userId },
     orderBy: { createdAt: 'desc' },
     include: { _count: { select: { matches: true } } },
   })
@@ -1293,13 +1681,19 @@ app.get('/sqftlab/alerts', async (c) => {
 })
 
 app.get('/sqftlab/alerts/matches', async (c) => {
-  const matches = await recentMatches(DEMO_USER_ID)
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
+  const matches = await recentMatches(userId)
   return c.json({ matches })
 })
 
 // POST /sqftlab/alerts — create a watch. Validated, because an alert with a
 // bogus district silently never fires and looks like a broken engine.
 app.post('/sqftlab/alerts', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   let body: Record<string, unknown>
   try {
     body = await c.req.json()
@@ -1331,7 +1725,7 @@ app.post('/sqftlab/alerts', async (c) => {
 
   const alert = await prisma.dealAlert.create({
     data: {
-      userId: DEMO_USER_ID,
+      userId,
       district: community.slug,
       propertyType,
       maxPrice,
@@ -1347,8 +1741,11 @@ app.post('/sqftlab/alerts', async (c) => {
 
 // DELETE /sqftlab/alerts/:id — matches cascade via the relation.
 app.delete('/sqftlab/alerts/:id', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
   const id = c.req.param('id')
-  const existing = await prisma.dealAlert.findFirst({ where: { id, userId: DEMO_USER_ID } })
+  const existing = await prisma.dealAlert.findFirst({ where: { id, userId } })
   if (!existing) return c.json({ error: 'Alert not found' }, 404)
 
   await prisma.dealAlert.delete({ where: { id } })

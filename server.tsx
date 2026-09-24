@@ -14,14 +14,36 @@ import { createToolsHandlers } from '@shogo-ai/sdk/tools/server'
 
 const app = new Hono()
 
-// CORS — manual middleware so the wildcard always propagates
+// SHOGO:CUSTOM-START cors
+// NOTE: this file is REGENERATED whenever prisma/schema.prisma changes, which
+// silently reverts edits made here (observed during this work: a schema edit
+// restored the old wildcard). The authoritative CORS policy therefore also lives
+// in custom-routes.ts, which is never regenerated. Re-apply this block after any
+// schema change so the two stay in sync.
+//
+// No wildcard in production: `*` lets any site read this API with the visitor's
+// cookies, and it cannot be combined with credentials.
+const ALLOWED_ORIGINS = process.env.NODE_ENV === 'production'
+  ? ['https://sqftlab.com', 'https://www.sqftlab.com']
+  : ['*']
+
 app.use('*', async (c, next) => {
-  c.res.headers.set('Access-Control-Allow-Origin', '*')
-  c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+  const origin = c.req.header('Origin') ?? ''
+  const isProd = process.env.NODE_ENV === 'production'
+  const allowed = !isProd || ALLOWED_ORIGINS.includes(origin)
+
+  if (allowed) {
+    c.res.headers.set('Access-Control-Allow-Origin', isProd ? origin : '*')
+    c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+    c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    // Reflecting the Origin makes the response vary by it; without Vary a shared
+    // cache can hand one origin's response (and CORS headers) to another.
+    if (isProd) c.res.headers.set('Vary', 'Origin')
+  }
   if (c.req.method === 'OPTIONS') return c.text('', 204)
   await next()
 })
+// SHOGO:CUSTOM-END cors
 
 // Health check endpoint
 app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
@@ -43,6 +65,15 @@ app.route('/api', customRoutes)
 const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
+
+// Serve static files in production
+app.use('/*', serveStatic({ root: './dist' }))
+app.get('*', serveStatic({ path: './dist/index.html' }))
+
+const port = Number(process.env.PORT) || 3001
+console.log(`🚀 Server running on http://localhost:${port}`)
+
+Bun.serve({ port, fetch: app.fetch })
 
 // SHOGO:CUSTOM-START asset-routing
 // Both of these MUST be registered before the static handlers below. Hono
@@ -80,21 +111,4 @@ app.use('*', async (c, next) => {
     c.header('Pragma', 'no-cache')
   }
 })
-// SHOGO:CUSTOM-END
-
-// Serve static files in production
-app.use('/*', serveStatic({ root: './dist' }))
-app.get('*', serveStatic({ path: './dist/index.html' }))
-
-const port = Number(process.env.PORT) || 3001
-console.log(`🚀 Server running on http://localhost:${port}`)
-
-Bun.serve({ port, fetch: app.fetch })
-
-
-// SHOGO:CUSTOM-START preview-prefix
-// The prefix rewrite now lives ABOVE the static handlers (see the asset-routing
-// region). A copy here was dead code: this point in the file is after the SPA
-// catch-all, which resolves every unmatched path to index.html and responds
-// before any later middleware runs.
 // SHOGO:CUSTOM-END

@@ -12,6 +12,7 @@ import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
+import { ensureSession } from '@/lib/session'
 import SNAPSHOT from '@/data/snapshot.json'
 // Leaflet's stylesheet, bundled rather than pulled from unpkg. The map controls,
 // zoom buttons and tooltip chrome all depend on it, so an unreachable CDN left the
@@ -106,7 +107,11 @@ const SOURCE_LABELS: Record<string, string> = { propertyfinder: 'PropertyFinder'
 
 async function safeFetch<T>(url: string, fallback: T): Promise<T> {
   try {
-    const r = await fetch(url)
+    // Present an identity first: account-scoped routes answer 401 without one.
+    // ensureSession() caches after the first call, so this is not an extra
+    // round-trip per request.
+    const userId = await ensureSession()
+    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
     if (r.ok) return await r.json() as T
   } catch { /* no backend reachable — fall through to the baked snapshot */ }
   // Static deployments (and any moment the API is down) serve the register from a
@@ -1236,9 +1241,13 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
     setError(null)
     setNotice(null)
     try {
+      const uid = await ensureSession()
       const res = await fetch('/api/sqftlab/alerts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(uid ? { Authorization: `Bearer ${uid}` } : {}),
+        },
         body: JSON.stringify({
           district: form.district,
           propertyType: form.propertyType,
@@ -1270,7 +1279,11 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
     setError(null)
     setNotice(null)
     try {
-      const res = await fetch(`/api/sqftlab/alerts/${id}`, { method: 'DELETE' })
+      const uid = await ensureSession()
+      const res = await fetch(`/api/sqftlab/alerts/${id}`, {
+        method: 'DELETE',
+        ...(uid ? { headers: { Authorization: `Bearer ${uid}` } } : {}),
+      })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) setError(body.error || `Delete failed (${res.status})`)
       else {
@@ -2119,24 +2132,28 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
 
   const predictions = (data.predictions as Array<Record<string, unknown>>) || []
   const summary = data.summary as Record<string, number>
-  const strongBuys = (data.strongBuys as Array<Record<string, unknown>>) || []
+  // `topMomentum` replaced `strongBuys` when the buy/sell labels were removed.
+  const topMomentum = (data.topMomentum as Array<Record<string, unknown>>) || []
   const topGrowth = (data.topGrowth as Array<Record<string, unknown>>) || []
 
-  const getRecColor = (rec: string) => {
-    if (rec === 'Strong Buy') return 'var(--up)'
-    if (rec === 'Buy') return 'var(--b600)'
-    if (rec === 'Hold') return 'var(--warn)'
-    if (rec === 'Sell') return 'var(--down)'
+  // Colour by trend direction. These describe a trend, they do not advise an action.
+  const getTrendColor = (label: string) => {
+    if (label.includes('upward')) return 'var(--up)'
+    if (label === 'Stable') return 'var(--warn)'
+    if (label.includes('downward') || label === 'Declining trend') return 'var(--down)'
     return 'var(--ink-5)'
   }
 
-  const getRecBg = (rec: string) => {
-    if (rec === 'Strong Buy') return 'rgba(34,197,94,0.1)'
-    if (rec === 'Buy') return 'rgba(37,99,235,0.1)'
-    if (rec === 'Hold') return 'rgba(234,179,8,0.1)'
-    if (rec === 'Sell') return 'rgba(239,68,68,0.1)'
+  const getTrendBg = (label: string) => {
+    if (label.includes('upward')) return 'rgba(34,197,94,0.1)'
+    if (label === 'Stable') return 'rgba(234,179,8,0.1)'
+    if (label.includes('downward') || label === 'Declining trend') return 'rgba(239,68,68,0.1)'
     return 'var(--g3)'
   }
+
+  // A projection can be negative, and the old `+{n}%` markup rendered "-3.2%" as
+  // "+-3.2%". Sign it explicitly.
+  const signed = (n: number) => `${n >= 0 ? '+' : ''}${n}%`
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
@@ -2146,9 +2163,9 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         {[
-          { label: 'Strong Buys', value: String(summary.strongBuys || 0), color: 'var(--up)', bg: 'rgba(34,197,94,0.08)' },
-          { label: 'Buys', value: String(summary.buys || 0), color: 'var(--b600)', bg: 'rgba(37,99,235,0.08)' },
-          { label: 'Holds', value: String(summary.holds || 0), color: 'var(--warn)', bg: 'rgba(234,179,8,0.08)' },
+          { label: 'Rising', value: String(summary.rising || 0), color: 'var(--up)', bg: 'rgba(34,197,94,0.08)' },
+          { label: 'Stable', value: String(summary.stable || 0), color: 'var(--warn)', bg: 'rgba(234,179,8,0.08)' },
+          { label: 'Falling', value: String(summary.falling || 0), color: 'var(--down)', bg: 'rgba(239,68,68,0.08)' },
           { label: 'Analyzed', value: String(summary.totalAnalyzed || 0), color: 'var(--ink)', bg: 'var(--g3)' },
         ].map((s, i) => (
           <div key={i} className="p-4 rounded-[18px]" style={{ background: s.bg, border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
@@ -2159,13 +2176,13 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
-        {/* Strong Buy Recommendations */}
+        {/* Strongest momentum */}
         <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
           <h3 className="font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--up)' }}>
-            <Zap size={18} /> Top Recommendations
+            <Zap size={18} /> Strongest Momentum
           </h3>
           <div className="space-y-3">
-            {strongBuys.map((p, i) => (
+            {topMomentum.map((p, i) => (
               <button key={i} onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}
                 className="w-full p-4 rounded-[14px] text-left transition-all hover:translate-y-[-2px]"
                 style={{ background: 'var(--g3)', border: '1px solid var(--gb)' }}>
@@ -2174,8 +2191,8 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                     <div className="font-semibold" style={{ color: 'var(--ink)' }}>{p.community as string}</div>
                     <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
                   </div>
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
-                    {p.recommendation as string}
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getTrendBg(p.momentumLabel as string), color: getTrendColor(p.momentumLabel as string) }}>
+                    {p.momentumLabel as string}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-xs">
@@ -2184,7 +2201,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                     <div style={{ color: 'var(--ink-5)' }}>Current/sqft</div>
                   </div>
                   <div>
-                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>+{p.forecastChange6m as number}%</div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: (p.projectedChange6m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>{signed(p.projectedChange6m as number)}</div>
                     <div style={{ color: 'var(--ink-5)' }}>6m forecast</div>
                   </div>
                   <div>
@@ -2212,8 +2229,8 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                     <div className="font-semibold" style={{ color: 'var(--ink)' }}>{p.community as string}</div>
                     <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
                   </div>
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
-                    {p.recommendation as string}
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getTrendBg(p.momentumLabel as string), color: getTrendColor(p.momentumLabel as string) }}>
+                    {p.momentumLabel as string}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-xs">
@@ -2222,7 +2239,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                     <div style={{ color: 'var(--ink-5)' }}>Current/sqft</div>
                   </div>
                   <div>
-                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>+{p.forecastChange12m as number}%</div>
+                    <div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: (p.projectedChange12m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>{signed(p.projectedChange12m as number)}</div>
                     <div style={{ color: 'var(--ink-5)' }}>12m forecast</div>
                   </div>
                   <div>
@@ -2249,7 +2266,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                 <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>12m Forecast</th>
                 <th className="pb-2 text-right font-medium" style={{ color: 'var(--ink-5)' }}>Yield</th>
                 <th className="pb-2 text-center font-medium" style={{ color: 'var(--ink-5)' }}>Confidence</th>
-                <th className="pb-2 text-center font-medium" style={{ color: 'var(--ink-5)' }}>Recommendation</th>
+                <th className="pb-2 text-center font-medium" style={{ color: 'var(--ink-5)' }}>Momentum</th>
               </tr>
             </thead>
             <tbody>
@@ -2261,19 +2278,19 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
                     <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(p.emirate as string).replace('_', ' ')}</div>
                   </td>
                   <td className="py-3 text-right" style={{ fontFamily: 'var(--font-data)' }}>{format(p.currentPsf as number)}</td>
-                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.forecastChange6m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
-                    +{p.forecastChange6m as number}%
+                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.projectedChange6m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
+                    {signed(p.projectedChange6m as number)}
                   </td>
-                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.forecastChange12m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
-                    +{p.forecastChange12m as number}%
+                  <td className="py-3 text-right font-semibold" style={{ fontFamily: 'var(--font-data)', color: (p.projectedChange12m as number) >= 0 ? 'var(--up)' : 'var(--down)' }}>
+                    {signed(p.projectedChange12m as number)}
                   </td>
                   <td className="py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{p.yield as number}%</td>
                   <td className="py-3 text-center">
                     <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--g3)', fontFamily: 'var(--font-data)' }}>{p.confidence as number}%</span>
                   </td>
                   <td className="py-3 text-center">
-                    <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getRecBg(p.recommendation as string), color: getRecColor(p.recommendation as string) }}>
-                      {p.recommendation as string}
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: getTrendBg(p.momentumLabel as string), color: getTrendColor(p.momentumLabel as string) }}>
+                      {p.momentumLabel as string}
                     </span>
                   </td>
                 </tr>

@@ -1,6 +1,6 @@
 .shogo/sessions.db-wal filter=lfs diff=lfs merge=lfs -text
-sqrtlab-next/.next/cache/webpack/server-production/0.pack filter=lfs diff=lfs merge=lfs -text
-sqrtlab-next/.next/cache/webpack/client-production/0.pack filter=lfs diff=lfs merge=lfs -text
+sqftlab-next/.next/cache/webpack/server-production/0.pack filter=lfs diff=lfs merge=lfs -text
+sqftlab-next/.next/cache/webpack/client-production/0.pack filter=lfs diff=lfs merge=lfs -text
 
 # >>> shogo git-lfs (managed) >>>
 *.png filter=lfs diff=lfs merge=lfs -text
