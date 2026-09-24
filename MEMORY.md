@@ -129,3 +129,55 @@ loudly (commit 703e7f7, both branches unit-tested).
 - ALL Railway credentials remain dead (exhausted: CLI absent, no stored login, no env vars,
   session-record token `640cbfc7-…`, the pasted `6c9b84b8-…`, GraphQL on both
   backboard.railway.com/.app). Railway auth is a hard wall — need a fresh Account token.
+
+## ⚠️ The blank-page bug — root cause and where the fix lives (2026-09-24)
+
+**Symptom:** green build (`built in 4s`), `#root` empty, `<body>` height 0, page blank.
+CSS loaded fine; no console error. Only visible by loading the app in a browser.
+
+**Cause:** the preview proxy mounts this app under `/p/<projectId>/` and the Vite
+watcher builds with `--base /p/<projectId>/`, so `index.html` references
+`/p/<id>/assets/index-*.js`. That path matched no route in `server.tsx`, so it fell
+through to the SPA catch-all (`app.get('*', serveStatic('./dist/index.html'))`) and
+returned **HTML where a JS module was expected** — the module never executed.
+
+Proof (before → after): `/p/<id>/assets/index-*.js` was `200 text/html`, now
+`200 text/javascript`; `/p/<id>/api/*` was `200 text/html`, now `200 application/json`.
+
+**Fix:** `server.tsx`, inside `// SHOGO:CUSTOM-START preview-prefix … END` — a
+middleware that strips a leading `/p/<id>` before routing and re-enters `app.fetch`.
+Do not remove it. If it ever regresses, that is the first place to look.
+
+**To restart the project server** (it does NOT watch `server.tsx`): append a newline
+to `custom-routes.ts`. The runtime watches that file and restarts within ~8s, which
+re-imports `server.tsx`. `preview_project` errors for this project — no fallback URL.
+
+## Local repo can be behind/rolled back — check the remote (2026-09-24)
+
+This session the local repo was found at `739cd00` with a clean tree, while
+`origin/main` was at `acac813` — **two commits ahead**. Work believed done was missing
+from local. Always `git fetch` and compare before assuming state, then
+`git rebase origin/main` (never force-push over remote commits).
+
+## Features added per Master Document TASKS 8-12 (2026-09-24)
+
+- **TASK 12 Deal Alert Engine:** `DealAlert` + `AlertMatch` models; `src/lib/alerts.ts`
+  (`scanDealAlerts`, `notifyPendingMatches`, `recentMatches`); routes
+  `GET/POST /api/alerts`, `DELETE /api/alerts/:id`, `/alerts/scan`, `/alerts/notify`,
+  `/alerts/matches`. A deal = `pricePerSqft < district median × 0.85`. Scan is
+  idempotent via the `(alertId, listingId)` unique constraint. Notify refuses with
+  `transport: 'unconfigured'` when no mail transport exists — it must never mark a
+  match notified without delivering it.
+- Legacy rule-based `Alert` model moved to `/api/alert-rules` so it stops shadowing
+  the new `/api/alerts` (same path, older route won).
+- **TASK 10 forecast:** `GET /api/forecast?district=&months=` — least-squares
+  regression, R², residual band widening by horizon. `src/components/ForecastChart.tsx`
+  is pure SVG (solid blue actuals, dashed violet projection, 95% band), wired into the
+  Analytics page and the district page.
+- **TASK 8 /markets:** `GET /api/markets` + `MarketsPage` sortable table (District,
+  Avg PSF, 3M, 12M, Volume, Listings, Momentum) with city/type filters. All aggregated;
+  `3M` is measured (last 3 months vs prior 3) and shows "—" when there is no history
+  rather than inventing a figure.
+- **TASK 11** `Subscription` model. **`GET /api/sqftlab/me`** returns the demo user's
+  tier; the `/alerts` Elite gate now resolves against it, so an entitled account sees a
+  working page instead of a permanent "Coming soon" overlay.
