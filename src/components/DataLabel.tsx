@@ -4,6 +4,8 @@ interface DataLabelProps {
   period: string
   lastUpdated: string
   methodology?: string
+  /** Glossary term slug — renders a "See in glossary →" link inside the ⓘ tooltip. */
+  glossary?: string
 }
 
 function relativeTime(iso: string): string {
@@ -17,11 +19,11 @@ function relativeTime(iso: string): string {
   return `${days}d ago`
 }
 
-export function DataLabel({ source, count, period, lastUpdated, methodology }: DataLabelProps) {
+export function DataLabel({ source, count, period, lastUpdated, methodology, glossary }: DataLabelProps) {
   return (
     <div className="flex items-center gap-1 text-[var(--ink-5)]" style={{ fontFamily: 'var(--font-data)', fontSize: 9, letterSpacing: '0.04em' }}>
       <span>Based on {count.toLocaleString()} {source} transactions · {period} · Updated {relativeTime(lastUpdated)}</span>
-      {methodology && (
+      {(methodology || glossary) && (
         <span className="group relative cursor-help">
           <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-[var(--ink-5)]/30 text-[8px] leading-none">ⓘ</span>
           <span className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2.5 rounded-[10px] text-[11px] leading-relaxed z-50"
@@ -34,6 +36,15 @@ export function DataLabel({ source, count, period, lastUpdated, methodology }: D
               color: 'var(--ink-3)',
             }}>
             {methodology}
+            {glossary && (
+              <a
+                href={`#glossary-${glossary}`}
+                className="mt-2 block pt-2 border-t font-medium hover:underline decoration-dotted underline-offset-2"
+                style={{ borderColor: 'rgba(15,23,42,0.10)', color: 'var(--b600)', fontSize: 10 }}
+              >
+                See in glossary →
+              </a>
+            )}
           </span>
         </span>
       )}

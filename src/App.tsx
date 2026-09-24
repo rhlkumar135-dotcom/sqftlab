@@ -9,6 +9,7 @@ import { DataLabel } from '@/components/DataLabel'
 import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
 import { ForecastChart } from '@/components/ForecastChart'
+import { Glossary } from '@/components/Glossary'
 import { getRiskFlags } from '@/lib/verdict'
 import SNAPSHOT from '@/data/snapshot.json'
 
@@ -111,7 +112,7 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary'
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -570,7 +571,7 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
 
           <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
             <h3 className="font-semibold mb-2" style={{ color: 'var(--ink)' }}>Recent Transactions (DLD)</h3>
-            <DataLabel source="DLD" count={transactions.length} period="recent" lastUpdated={new Date().toISOString()} methodology="Dubai Land Department registered transactions" />
+            <DataLabel source="DLD" count={transactions.length} period="recent" lastUpdated={new Date().toISOString()} methodology="Dubai Land Department registered transactions" glossary="dld" />
             <div className="overflow-x-auto mt-3">
               <table className="w-full text-sm">
                 <thead><tr className="border-b text-left" style={{ borderColor: 'var(--ink-6)', color: 'var(--ink-5)' }}>
@@ -712,7 +713,7 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
               <h3 className="font-semibold" style={{ color: 'var(--ink)' }}>Transaction intelligence</h3>
               <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>47 DLD txns</span>
             </div>
-            <DataLabel source="DLD" count={47} period="24 months" lastUpdated={new Date().toISOString()} methodology="Based on DLD-registered transactions within 500m, same property type" />
+            <DataLabel source="DLD" count={47} period="24 months" lastUpdated={new Date().toISOString()} methodology="Based on DLD-registered transactions within 500m, same property type" glossary="comps" />
             <div className="mt-3 grid grid-cols-5 gap-2 text-[10px]" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>
               <span>Date</span><span>Type</span><span className="text-right">Sqft</span><span className="text-right">Price</span><span className="text-right">PSF</span>
             </div>
@@ -771,7 +772,7 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
               <div><div className="text-xs" style={{ color: 'var(--ink-5)' }}>Gross yield</div><div className="text-2xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{grossYield.toFixed(1)}%</div></div>
               <div><div className="text-xs" style={{ color: 'var(--ink-5)' }}>Net yield (est.)</div><div className="text-2xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{(grossYield * 0.78).toFixed(1)}%</div></div>
             </div>
-            <DataLabel source="Ejari" count={12} period="12 months" lastUpdated={new Date().toISOString()} methodology="Based on Ejari-registered tenancies in the district" />
+            <DataLabel source="Ejari" count={12} period="12 months" lastUpdated={new Date().toISOString()} methodology="Based on Ejari-registered tenancies in the district" glossary="ejari" />
           </div>
 
           {/* Verdict */}
@@ -2602,7 +2603,8 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
           </div>
           <DataLabel source="FCSC" count={data.economic.cpiSeries.length} period="reference series"
             lastUpdated={data.computedAt}
-            methodology="Headline UAE CPI year-on-year. Nominal property growth should be read against this line to gauge real returns." />
+            methodology="Headline UAE CPI year-on-year. Nominal property growth should be read against this line to gauge real returns."
+            glossary="cpi" />
         </div>
 
         <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
@@ -2762,6 +2764,17 @@ function AppInner() {
   const [selectedCommunity, setSelectedCommunity] = useState('dubai-marina')
   const [selectedListing, setSelectedListing] = useState('')
 
+  // Deep-link bridge: DataLabel ⓘ tooltips link to #glossary-<slug>, which must
+  // open the glossary page before the anchor can be scrolled to.
+  useEffect(() => {
+    const onHash = () => {
+      if (window.location.hash.startsWith('#glossary-')) setPage('glossary')
+    }
+    onHash()
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
   return (
     <div className="min-h-screen" style={{ background: 'var(--page)', fontFamily: 'var(--font-ui)' }}>
       <Nav page={page} setPage={setPage} />
@@ -2783,6 +2796,7 @@ function AppInner() {
       {page === 'predictions' && <PricePredictions setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'intelligence' && <IntelligencePage setPage={setPage} />}
       {page === 'waitlist' && <WaitlistPage setPage={setPage} />}
+      {page === 'glossary' && <Glossary />}
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
           <button onClick={() => setPage('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
@@ -2790,6 +2804,7 @@ function AppInner() {
           <button onClick={() => setPage('pricing')} className="transition-colors hover:text-white">Pricing</button>
           <button onClick={() => setPage('yield')} className="transition-colors hover:text-white">Yield Calculator</button>
           <button onClick={() => setPage('about')} className="transition-colors hover:text-white">Methodology</button>
+          <button onClick={() => setPage('glossary')} className="transition-colors hover:text-white">Glossary</button>
           <button onClick={() => setPage('waitlist')} className="transition-colors hover:text-white">Early Access</button>
         </div>
         © 2026 sqftLab · UAE Property Data Intelligence Platform · Data from DLD, ADREC, Bayut, PropertyFinder, Dubizzle
