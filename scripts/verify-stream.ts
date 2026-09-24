@@ -69,7 +69,16 @@ async function main() {
 
   const types = frames.map((f) => { try { return JSON.parse(f.data).type } catch { return '?' } })
   check('market:update pushed', types.includes('market:update'), `types=${[...new Set(types)].join(',')}`)
-  check('district:update pushed', types.includes('district:update'), `types=${[...new Set(types)].join(',')}`)
+  // district:update only fires when district metrics exist, which requires
+  // registered transactions. Accept its absence when the pipeline is honest about
+  // having no transaction data.
+  // Status alone proves nothing here — the route answers 200 with an empty array
+  // when there is nothing to publish. Check that the payload actually has rows.
+  const districtsRaw = await (await app.request('/sqftlab/districts')).text()
+  const hasDistrictData = /"districts"\s*:\s*\[\s*\{/.test(districtsRaw)
+  check('district:update pushed (when district data exists)',
+    types.includes('district:update') || !hasDistrictData,
+    `types=${[...new Set(types)].join(',')}`)
   check('deal:new pushed', types.includes('deal:new'), `types=${[...new Set(types)].join(',')}`)
 
   const status = await app.request('/sqftlab/stream/status')

@@ -39,8 +39,19 @@ bun run generate || echo "Shogo generate completed with warnings"
 echo "Step 3: Pushing schema to database..."
 bun x prisma db push 2>&1 || echo "Schema push done (with warnings)"
 
-echo "Step 4: Seeding database..."
-bun run scripts/seed-pg.ts 2>&1 || echo "Seed completed (data may already exist)"
+echo "Step 4: Demo seed..."
+# Opt-in only. seed-pg.ts fabricates listings and transactions with Math.random()
+# and stamps them with real source names ('dld_dubai', 'propertyfinder'), then
+# unconditionally overwrites community stats from a hardcoded array. Running it on
+# every boot both fabricated the dataset and clobbered real ingested data.
+if [ "${SEED_DEMO_DATA:-false}" = "true" ]; then
+  echo "  SEED_DEMO_DATA=true — generating the SYNTHETIC demo dataset."
+  echo "  WARNING: this data is generated, not sourced. Do not present it as DLD."
+  bun run scripts/seed-pg.ts 2>&1 || echo "Seed completed (data may already exist)"
+else
+  echo "  skipped — production runs on real ingested data."
+  echo "  Set SEED_DEMO_DATA=true only for a throwaway demo environment."
+fi
 
 echo "Step 5: Starting server on port ${PORT:-8080}..."
 exec bun run server.tsx

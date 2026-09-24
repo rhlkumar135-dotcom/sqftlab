@@ -106,7 +106,10 @@ model Transaction {
 
 model Listing {
   id              String   @id @default(cuid())
-  externalId      String   @map("external_id")
+  // Unique per portal. This is the dedupe key a scrape upserts on, and it was
+  // only indexed — so `upsert({ where: { externalId } })` was rejected outright
+  // and the scraper could never have run on any database.
+  externalId      String   @unique @map("external_id")
   source          String   // bayut, propertyfinder, dubizzle
   communityId     String   @map("community_id")
   purpose         String   // sale, rent
@@ -139,7 +142,6 @@ model Listing {
   @@index([purpose])
   @@index([scrapedAt])
   @@index([priceAed])
-  @@index([externalId])
   @@map("listings")
 }
 

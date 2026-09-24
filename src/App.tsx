@@ -294,7 +294,7 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
 
           {/* Two-line headline — spec: word stagger 60ms */}
           <h1 className="hero-h">
-            <StaggerWords text="Dubai Pulse. ADREC. Every live listing." className="hero-h1" gap={0.06} delay={0.1} />
+            <StaggerWords text="Live listings. Labelled sources. No invented data." className="hero-h1" gap={0.06} delay={0.1} />
             <StaggerWords text="One platform that tells you exactly what a property is worth — before anyone else does." className="hero-h2" gap={0.06} delay={0.25} />
           </h1>
 
@@ -1623,31 +1623,54 @@ function PricingPage({ setPage }: { setPage: (p: Page) => void }) {
 
 // ─── About / Methodology Page ───────────────────────────────────────────────
 
+interface SourceStatus { name: string; kind: string; requiresCredentials: boolean; envVar: string | null; connected: boolean }
+interface DeliveringSource { name: string; kind: string; records: number; lastRecordAt: string | null }
+
 function AboutPage() {
+  // Source status is fetched, not asserted. The table used to print "Real-time"
+  // for DLD unconditionally — including while nothing had ever been ingested.
+  const [sources, setSources] = useState<SourceStatus[] | null>(null)
+  const [delivering, setDelivering] = useState<DeliveringSource[]>([])
+  useEffect(() => {
+    safeFetch<{ available: SourceStatus[]; delivering: DeliveringSource[] } | null>('/api/sqftlab/sources', null)
+      .then((d) => { if (d?.available) { setSources(d.available); setDelivering(d.delivering ?? []) } })
+      .catch(() => {})
+  }, [])
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
+  const recordsFor = (name: string) => {
+    const n = norm(name)
+    return delivering.find((d) => n.startsWith(norm(d.name)) || norm(d.name).startsWith(n))
+  }
   return (
     <div className="max-w-[900px] mx-auto px-4 py-12">
       <h1 className="text-4xl font-extrabold mb-4" style={{ color: 'var(--ink)' }}>Intelligence, not listings.</h1>
       <p className="text-lg mb-8" style={{ color: 'var(--ink-3)' }}>
-        sqftLab is a data intelligence platform. We aggregate government transaction data (DLD, ADREC, Ejari),
-        economic data (CPI, FX, World Bank), and geospatial data (OSM) into comprehensive property intelligence reports.
+        sqftLab aggregates live portal listings and — where a source is connected — registered government
+        transaction data into property intelligence reports. Every figure below is labelled with the source it
+        actually came from; a source that is not connected says so rather than being filled in with an estimate.
       </p>
 
       <div className="p-5 rounded-[18px] mb-6" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
         <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Data Sources</h3>
         <div className="space-y-2 text-sm">
-          {[
-            { source: 'Dubai Pulse (DLD)', what: 'Transaction records, prices, dates', coverage: 'Dubai', freq: 'Real-time' },
-            { source: 'ADREC', what: 'Abu Dhabi transaction data', coverage: 'Abu Dhabi', freq: 'Monthly' },
-            { source: 'Ejari', what: 'Rental contract data', coverage: 'Dubai', freq: 'Monthly' },
-            { source: 'OSM', what: 'POI data for neighbourhood scores', coverage: 'Global', freq: 'Quarterly' },
-            { source: 'ExchangeRate-API', what: 'FX conversion rates', coverage: 'Global', freq: 'Daily' },
-          ].map((s, i) => (
-            <div key={i} className="flex items-center gap-3 py-2 border-b" style={{ borderColor: 'var(--ink-6)' }}>
-              <span className="font-medium" style={{ color: 'var(--ink)', minWidth: 140 }}>{s.source}</span>
-              <span style={{ color: 'var(--ink-4)', flex: 1 }}>{s.what}</span>
-              <span className="text-xs" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>{s.freq}</span>
-            </div>
-          ))}
+          {(sources ?? []).map((s, i) => {
+            const d = recordsFor(s.name)
+            const status = d
+              ? `${d.records.toLocaleString()} records`
+              : s.requiresCredentials
+                ? `not connected · set ${s.envVar}`
+                : 'not connected'
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-3 py-2 border-b" style={{ borderColor: 'var(--ink-6)' }}>
+                <span className="font-medium" style={{ color: 'var(--ink)', minWidth: 140 }}>{s.name}</span>
+                <span style={{ color: 'var(--ink-4)', flex: 1, minWidth: 160 }}>{s.kind === 'listings' ? 'Live portal listings' : 'Registered transactions'}</span>
+                <span className="text-xs" style={{ fontFamily: 'var(--font-data)', color: d ? 'var(--b600)' : 'var(--ink-5)' }}>{status}</span>
+              </div>
+            )
+          })}
+          {sources === null && (
+            <div className="text-xs py-2" style={{ color: 'var(--ink-5)' }}>Checking source status…</div>
+          )}
         </div>
       </div>
 
@@ -2041,7 +2064,7 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
       <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--ink)' }}>Market Analytics</h2>
-      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>Real-time UAE property market intelligence from DLD, ADREC, and live listings</p>
+      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>UAE property market intelligence from live listings and registered transaction data, with sources labelled</p>
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -2945,7 +2968,7 @@ function AppInner() {
           <button onClick={() => setPage('glossary')} className="transition-colors hover:text-white">Glossary</button>
           <button onClick={() => setPage('waitlist')} className="transition-colors hover:text-white">Early Access</button>
         </div>
-        © 2026 sqftLab · UAE Property Data Intelligence Platform · Data from DLD, ADREC, Bayut, PropertyFinder, Dubizzle
+        © 2026 sqftLab · UAE Property Data Intelligence Platform · Listings via PropertyFinder · Transaction sources listed on the Methodology page
       </footer>
     </div>
   )

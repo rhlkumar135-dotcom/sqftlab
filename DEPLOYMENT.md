@@ -125,3 +125,54 @@ set the app accepts the legacy value that is committed in this public repo.
 ```bash
 bun run scripts/verify-cron.ts   # 24 assertions: auth, steps, persisted state, freshness
 ```
+
+---
+
+## Data sources & provenance
+
+Nothing on this platform is generated. Every figure is either fetched from a named
+source or absent, and every response says which.
+
+| Source | Credentials | What it provides |
+|---|---|---|
+| PropertyFinder | none | Live sale + rent listings |
+| DLD (Dubai Pulse) | `DUBAI_PULSE_API_KEY` — free self-serve at dubaipulse.gov.ae | Dubai registered transactions |
+| ADREC (Abu Dhabi) | `ADREC_API_URL` + `ADREC_API_KEY` — request access at adrec.gov.ae/en/apisubscription | Abu Dhabi registered transactions |
+
+`GET /api/sqftlab/sources` reports per-source status and record counts; the
+Methodology page renders directly from it.
+
+**Unconfigured sources are reported, never filled in.** The hourly cron records a
+missing source as `skipped` (not `failed`), and transaction-derived endpoints
+return an explicit `insufficientData` + `reason` rather than a fabricated number.
+
+### The synthetic dataset is opt-in
+
+`scripts/seed-pg.ts` **generates** listings and transactions with `Math.random()`
+and stamps them with real source names. It is loaded only when
+`SEED_DEMO_DATA=true`, and it is off by default. It previously ran on every
+Railway boot, which fabricated the dataset and clobbered real ingested data on
+each restart.
+
+To confirm what is actually in a database:
+
+```bash
+bun run scripts/purge-mock-data.ts          # dry run — reports seeded vs real
+bun run scripts/purge-mock-data.ts --apply  # delete the synthetic rows
+```
+
+Seeded rows are identifiable: listings are `<portal>-<slug>-<index>-<13-digit-ms>`
+(real ones are `propertyfinder_<numericId>`), transactions are
+`DLD-<emirate>-<13-digit-ms>-<n>`.
+
+### Ingesting
+
+```bash
+bun run scripts/scraper-pf.ts                      # live listings (no credentials)
+curl "$BASE/api/sqftlab/cron/hourly?secret=$CRON_SECRET"   # includes dld/adrec sync
+```
+
+The scraper attributes listings to the **area queried**, not the listing's own
+`location.name` — for most PropertyFinder rows that field is a building
+("AG Tower", "Building Y16"), and using it invented hundreds of phantom
+"communities" that then appeared as market areas.

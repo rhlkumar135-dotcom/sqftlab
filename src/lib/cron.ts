@@ -4,10 +4,12 @@ import { runIntelligencePipeline } from './intelligence'
 import { scanDealAlerts, notifyPendingMatches } from './alerts'
 import { publish } from './events'
 import { detectDeals, SALE_TXN_TYPES } from './deals'
+import { dldConfigured, syncDLDTransactions } from './dld'
+import { adrecConfigured, syncADRECTransactions } from './adrec'
 
 export const HOURLY_JOB = 'hourly-refresh'
 
-export type StepStatus = 'ok' | 'failed'
+export type StepStatus = 'ok' | 'failed' | 'skipped'
 export interface StepResult {
   step: string
   status: StepStatus
@@ -22,6 +24,7 @@ export interface RefreshResult {
   runId: string
   okCount: number
   failCount: number
+  skipCount: number
   durationMs: number
   steps: StepResult[]
 }
@@ -42,6 +45,7 @@ export async function refreshCommunityStats(): Promise<{
   communities: number
   dld: number
   listing: number
+  none: number
 }> {
   const [txPsf, txCount, listPsf, listRent] = await Promise.all([
     prisma.transaction.groupBy({
@@ -84,6 +88,7 @@ export async function refreshCommunityStats(): Promise<{
 
   let dld = 0
   let listing = 0
+  let none = 0
 
   await prisma.$transaction(
     communities.map((cm) => {
@@ -97,6 +102,7 @@ export async function refreshCommunityStats(): Promise<{
 
       if (tx > 0) dld++
       else if (lp > 0) listing++
+      else none++
 
       return prisma.community.update({
         where: { id: cm.id },
@@ -105,13 +111,16 @@ export async function refreshCommunityStats(): Promise<{
           medianAnnualRentAed: mr || cm.medianAnnualRentAed,
           grossYieldPct: yld || cm.grossYieldPct,
           totalTransactions: txCountMap.get(cm.id) ?? 0,
-          psfSource: tx > 0 ? 'dld' : 'listing',
+          // Provenance must describe what actually backs the number. Labelling a
+          // community 'listing' when it has neither transactions nor sale
+          // listings asserts a source that does not exist. 'none' says so.
+          psfSource: tx > 0 ? 'dld' : lp > 0 ? 'listing' : 'none',
         },
       })
     })
   )
 
-  return { communities: communities.length, dld, listing }
+  return { communities: communities.length, dld, listing, none }
 }
 
 /**
@@ -130,11 +139,21 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
     data: { job: HOURLY_JOB, status: 'running' },
   })
 
-  const step = async (name: string, fn: () => Promise<string | void>) => {
+  const step = async (
+    name: string,
+    fn: () => Promise<string | void | { skipped: string }>
+  ) => {
     const t = Date.now()
     try {
       const detail = await fn()
-      steps.push({ step: name, status: 'ok', ms: Date.now() - t, detail: detail || undefined })
+      // A step may declare itself inapplicable (an unconfigured data source)
+      // rather than failing. Recorded distinctly so a healthy run with missing
+      // credentials does not read as a broken pipeline.
+      if (detail && typeof detail === 'object' && 'skipped' in detail) {
+        steps.push({ step: name, status: 'skipped', ms: Date.now() - t, detail: detail.skipped })
+        return
+      }
+      steps.push({ step: name, status: 'ok', ms: Date.now() - t, detail: (detail as string) || undefined })
     } catch (e) {
       steps.push({
         step: name,
@@ -150,6 +169,25 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
     return `ok=${r.ok}${r.error ? ` error=${r.error}` : ''}`
   })
 
+  // Government transaction sources. Reported as "skipped" rather than "failed"
+  // when credentials are absent — an unconfigured source is a known state, not a
+  // broken pipeline, and conflating the two would make a healthy run look red.
+  await step('dldSync', async () => {
+    if (!dldConfigured()) {
+      return { skipped: 'not configured — set DUBAI_PULSE_API_KEY' }
+    }
+    const r = await syncDLDTransactions()
+    return `${r.imported} transactions imported since ${r.since} (${r.pages} pages)`
+  })
+
+  await step('adrecSync', async () => {
+    if (!adrecConfigured()) {
+      return { skipped: 'not configured — set ADREC_API_URL and ADREC_API_KEY' }
+    }
+    const r = await syncADRECTransactions()
+    return `${r.imported} imported, ${r.skipped} unmappable (${r.pages} pages)`
+  })
+
   await step('macro', async () => {
     const r = await fetchAllMacro()
     const ok = r.results.filter((x) => x.ok).length
@@ -158,7 +196,7 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
 
   await step('communityStats', async () => {
     const r = await refreshCommunityStats()
-    return `${r.communities} communities (dld=${r.dld}, listing=${r.listing})`
+    return `${r.communities} communities (dld=${r.dld}, listing=${r.listing}, none=${r.none})`
   })
 
   await step('deals', async () => {
@@ -176,11 +214,25 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
 
   await step('intelligence', async () => {
     const r = await runIntelligencePipeline()
-    return `rpi=${r.rpi} buildings=${r.buildings} supply=${r.supply} in ${r.durationMs}ms`
+    // These are objects, not counts — interpolating them directly printed
+    // "[object Object]" in the run status.
+    const len = (v: unknown) => (Array.isArray(v) ? v.length : 0)
+    const gaps: string[] = []
+    if (len(r.rpi?.segments) === 0) gaps.push('rpi needs transactions')
+    if (len(r.buildings?.buildings) === 0) gaps.push('buildings need transactions')
+    if (len(r.supply?.districts) === 0) gaps.push('supply needs transactions')
+    const detail =
+      `rpi=${len(r.rpi?.segments)} buildings=${len(r.buildings?.buildings)} ` +
+      `supply=${len(r.supply?.districts)} metrics=${len(r.metrics?.districts)} ` +
+      `migration=${len(r.migration?.flows)} in ${r.durationMs}ms`
+    return gaps.length ? `${detail} — ${gaps.join('; ')}` : detail
   })
 
   const okCount = steps.filter((s) => s.status === 'ok').length
-  const failCount = steps.length - okCount
+  const skipCount = steps.filter((s) => s.status === 'skipped').length
+  // Only genuine failures count against the run; "skipped" means a source is
+  // simply not configured, which is not a broken pipeline.
+  const failCount = steps.filter((s) => s.status === 'failed').length
   const durationMs = Date.now() - startedAt
   const status = failCount === 0 ? 'success' : okCount > 0 ? 'partial' : 'error'
 
@@ -201,12 +253,12 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
   try {
     const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
     if (summary) publish('market:update', summary)
-    publish('cron:update', { job: HOURLY_JOB, status, okCount, failCount, durationMs, steps })
+    publish('cron:update', { job: HOURLY_JOB, status, okCount, failCount, skipCount, durationMs, steps })
   } catch {
     // A broadcast failure must not fail an otherwise successful refresh.
   }
 
-  return { ok: failCount === 0, job: HOURLY_JOB, runId: run.id, okCount, failCount, durationMs, steps }
+  return { ok: failCount === 0, job: HOURLY_JOB, runId: run.id, okCount, failCount, skipCount, durationMs, steps }
 }
 
 /** Most recent runs, newest first — powers /sqftlab/cron/status. */

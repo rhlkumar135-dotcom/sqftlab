@@ -22,7 +22,8 @@ const SECRET = process.env.CRON_SECRET || 'sqftlab-cron-2026'
 
 interface Step { step: string; status: string; ms: number; detail?: string; error?: string }
 interface RunResult {
-  ok: boolean; okCount: number; failCount: number; durationMs: number; steps: Step[]
+  ok: boolean; okCount: number; failCount: number; skipCount: number
+  durationMs: number; steps: Step[]
 }
 interface StatusResult {
   healthy: boolean; lastStatus: string | null; lastRunAt: string | null
@@ -52,29 +53,64 @@ async function main() {
     check(`step "${expected}" present`, names.includes(expected), names.join(','))
   }
 
+  // Government transaction sources: must be reported (never silently absent) and
+  // must not count as failures while their credentials are simply unset.
+  for (const name of ['dldSync', 'adrecSync']) {
+    const st = body.steps.find((x) => x.step === name)
+    check(`step "${name}" present`, !!st, st ? st.status : 'missing')
+    check(`"${name}" not counted as a failure`, st?.status !== 'failed', st?.status ?? 'missing')
+  }
+  check('skipCount matches skipped steps',
+    body.skipCount === body.steps.filter((s) => s.status === 'skipped').length,
+    `skipCount=${body.skipCount} actual=${body.steps.filter((s) => s.status === 'skipped').length}`)
+
   const reported = body.steps.filter((s) => s.status === 'failed')
   if (reported.length) console.log(`     failures: ${reported.map((s) => `${s.step}: ${s.error}`).join(' | ')}`)
 
   // ── The run must have actually moved data ───────────────────────────────────
   const stats = body.steps.find((s) => s.step === 'communityStats')
-  const dldMatch = /dld=(\d+)/.exec(stats?.detail ?? '')
-  check('communityStats reports DLD-sourced PSF', !!dldMatch && Number(dldMatch[1]) > 0, stats?.detail ?? 'no detail')
+  const parsed = /(\d+) communities \(dld=(\d+), listing=(\d+), none=(\d+)\)/.exec(stats?.detail ?? '')
+  check('communityStats reports its provenance split', !!parsed, stats?.detail ?? 'no detail')
+  check('every community is accounted for as dld, listing or none',
+    !!parsed && Number(parsed[1]) === Number(parsed[2]) + Number(parsed[3]) + Number(parsed[4]),
+    stats?.detail ?? 'no detail')
 
   const dealsStep = body.steps.find((s) => s.step === 'deals')
   check('deal detection ran', /listings below market/.test(dealsStep?.detail ?? ''), dealsStep?.detail ?? 'no detail')
 
   // ── Persisted state matches what the step claimed ───────────────────────────
+  // Provenance must be internally consistent: a community is marked 'dld' if and
+  // only if it actually holds registered transactions. Expressed as a
+  // consistency rule rather than a minimum count, so it stays meaningful whether
+  // or not the DLD key is configured — and it still fails loudly if generated
+  // rows are ever loaded in and labelled as government data again.
   const dldRows = await prisma.community.count({ where: { psfSource: 'dld' } })
   const withTxns = await prisma.$queryRaw<Array<{ n: bigint }>>`
     SELECT COUNT(DISTINCT community_id) AS n FROM transactions
   `.catch(() => [{ n: 0n }])
   const expectedDld = Number(withTxns[0]?.n ?? 0)
-  check('psfSource=dld persisted for communities with transactions',
-    dldRows === expectedDld && dldRows > 0, `dld=${dldRows} expected=${expectedDld}`)
+  check('psfSource=dld exactly matches communities holding transactions',
+    dldRows === expectedDld, `dld=${dldRows} expected=${expectedDld}`)
 
-  const notDld = await prisma.community.count({ where: { psfSource: { not: 'dld' } } })
-  check('no community left on listing-derived PSF while it has transactions',
-    notDld === 0, `still-listing=${notDld}`)
+  // No community may claim a source it cannot back.
+  const unsourced = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*) AS n FROM communities
+    WHERE psf_source = 'listing'
+      AND NOT EXISTS (
+        SELECT 1 FROM listings l
+        WHERE l.community_id = communities.id AND l.price_per_sqft > 0 AND l.purpose = 'sale'
+      )
+  `
+  check('no community claims listing provenance without sale listings',
+    Number(unsourced[0]?.n ?? 0) === 0, `unsourced=${unsourced[0]?.n}`)
+
+  const mislabelled = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*) AS n FROM communities c
+    WHERE c.psf_source = 'dld'
+      AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.community_id = c.id)
+  `
+  check('no community claims DLD provenance without transactions',
+    Number(mislabelled[0]?.n ?? 0) === 0, `mislabelled=${mislabelled[0]?.n}`)
 
   // ── Run recorded for observability ──────────────────────────────────────────
   const run = await prisma.cronRun.findFirst({ where: { job: 'hourly-refresh' }, orderBy: { startedAt: 'desc' } })

@@ -12,7 +12,7 @@
       "fileExtension": "tsx",
       "serverConfig": {
         "port": 3001,
-        "cors": true,
+        "cors": false,
         "routesPath": "./src/generated",
         "dbPath": "./src/lib/db",
         "apiBasePath": "/api",

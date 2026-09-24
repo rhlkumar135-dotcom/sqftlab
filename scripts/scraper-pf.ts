@@ -7,11 +7,26 @@
  * Or trigger via: GET /api/sqftlab/scrape
  */
 
-import { PrismaClient } from '@prisma/client'
+import { prisma } from '../src/lib/db'
+import { findCommunityByName, invalidateCommunityCache } from '../src/lib/community-match'
 
-const prisma = new PrismaClient()
+// Rotated per request. A single static UA across hundreds of requests is the
+// easiest possible fingerprint for a bot filter to latch onto.
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+]
+const randomUA = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+// Fixed 1.5s is a metronome: trivially distinguishable from a human. Jitter makes
+// the request rhythm irregular.
+const jitterSleep = (minMs: number, maxMs: number) =>
+  new Promise((r) => setTimeout(r, minMs + Math.random() * (maxMs - minMs)))
+
+// Stop retrying a source that has gone quiet rather than hammering it.
+const MAX_CONSECUTIVE_EMPTY = 3
 
 // Dubai areas with PropertyFinder location IDs
 const DUBAI_AREAS: { name: string; locationId: string; slug: string }[] = [
@@ -57,7 +72,7 @@ async function fetchPage(categoryId: number, locationId: string, page: number): 
   try {
     const res = await fetch(url, {
       headers: {
-        'User-Agent': UA,
+        'User-Agent': randomUA(),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
       },
@@ -84,7 +99,12 @@ async function fetchPage(categoryId: number, locationId: string, page: number): 
 
 function parseListing(property: any, source: string, purpose: string) {
   const price = property.price?.value ?? 0
-  const area = property.size ?? 0
+  // PropertyFinder returns size as { value, unit }, not a bare number. Passing the
+  // object through made the upsert fail outright ("Expected Float, provided
+  // Object") and, because `object > 0` is false, silently forced pricePerSqft to
+  // 0 as well. Accept either shape defensively.
+  const rawSize = property.size
+  const area = typeof rawSize === 'number' ? rawSize : (rawSize?.value ?? 0)
   const pricePerSqft = area > 0 ? Math.round(price / area) : 0
   const beds = property.bedrooms_value ?? property.bedrooms ?? 0
   const baths = property.bathrooms_value ?? property.bathrooms ?? 0
@@ -129,10 +149,8 @@ async function findOrCreateCommunity(name: string, slug: string, emirate: string
   let community = await prisma.community.findFirst({ where: { slug } })
   
   if (!community) {
-    // Try by name
-    community = await prisma.community.findFirst({ 
-      where: { nameEn: { contains: name, mode: 'insensitive' } } 
-    })
+    // Try by name — dialect-agnostic lookup (see src/lib/community-match.ts)
+    community = await findCommunityByName(name)
   }
   
   if (!community) {
@@ -163,13 +181,28 @@ async function findOrCreateCommunity(name: string, slug: string, emirate: string
 async function scrapeArea(area: { name: string; locationId: string; slug: string }, emirate: string) {
   let totalSaved = 0
   
+  // Tracked across both categories: if the source has gone quiet (a block, a
+  // layout change, a rate limit), stop the whole area instead of retrying each
+  // category and each page against it.
+  let consecutiveEmpty = 0
+  let circuitBroken = false
+
   for (const categoryId of [1, 2]) { // 1=buy, 2=rent
+    if (circuitBroken) break
     const purpose = categoryId === 1 ? 'sale' : 'rent'
-    
+
     for (let page = 1; page <= 5; page++) {
       const properties = await fetchPage(categoryId, area.locationId, page)
-      if (properties.length === 0) break
-      
+      if (properties.length === 0) {
+        consecutiveEmpty++
+        if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+          console.warn(`  ⚡ Circuit breaker: ${area.name} stopped after ${MAX_CONSECUTIVE_EMPTY} empty responses`)
+          circuitBroken = true
+        }
+        break
+      }
+      consecutiveEmpty = 0
+
       for (const property of properties) {
         try {
           const parsed = parseListing(property, 'propertyfinder', purpose)
@@ -177,9 +210,15 @@ async function scrapeArea(area: { name: string; locationId: string; slug: string
           // Skip if no price or area
           if (parsed.priceAed <= 0) continue
           
+          // Attribute the listing to the area we actually queried, NOT the
+          // listing's own location.name. For most PropertyFinder listings that
+          // field is a *building* ("AG Tower", "Listone Residence"), so using it
+          // invented hundreds of bogus "communities" that then surfaced in the UI
+          // as market areas. Buildings are a separate concept here and are
+          // handled by building_profiles.
           const community = await findOrCreateCommunity(
-            parsed.districtName,
-            parsed.locationSlug,
+            area.name,
+            area.slug,
             emirate,
             parsed.latitude,
             parsed.longitude,
@@ -226,7 +265,7 @@ async function scrapeArea(area: { name: string; locationId: string; slug: string
         }
       }
       
-      await sleep(1500) // Rate limit
+      await jitterSleep(2500, 4500) // rate limit (jittered, not a metronome)
     }
   }
   
@@ -320,7 +359,7 @@ async function main() {
     const count = await scrapeArea(area, 'dubai')
     console.log(`${count} listings`)
     totalListings += count
-    await sleep(2000)
+    await jitterSleep(2000, 3500)
   }
   
   // Scrape Abu Dhabi areas
@@ -330,7 +369,7 @@ async function main() {
     const count = await scrapeArea(area, 'abu_dhabi')
     console.log(`${count} listings`)
     totalListings += count
-    await sleep(2000)
+    await jitterSleep(2000, 3500)
   }
   
   // Cleanup old listings

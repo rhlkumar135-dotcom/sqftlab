@@ -5,6 +5,7 @@ import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
 import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
 import { detectDeals } from './src/lib/deals'
+import { findCommunityByName, invalidateCommunityCache } from './src/lib/community-match'
 import { runHourlyRefresh, recentCronRuns, HOURLY_JOB } from './src/lib/cron'
 import {
   runIntelligencePipeline, computeYieldCurve, migrationSurges, applyScenario,
@@ -223,8 +224,23 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
       pricePerSqft: { gt: 100 }, // excludes land and outlier records
       transactionDate: { gte: since },
     },
-    select: { transactionDate: true, pricePerSqft: true, priceAed: true },
+    select: { transactionDate: true, pricePerSqft: true, priceAed: true, source: true },
   })
+
+  // Label the series by what is actually in the table. Hardcoding
+  // "DLD · Dubai Pulse API" made the chart assert a government source no matter
+  // what the rows were, including while the table held generated data.
+  const present = new Set(transactions.map((t) => t.source))
+  const sourceLabel =
+    present.size === 0
+      ? 'unknown'
+      : present.has('dld') && present.has('adrec')
+        ? 'DLD + ADREC'
+        : present.has('dld')
+          ? 'DLD (Dubai Pulse)'
+          : present.has('adrec')
+            ? 'ADREC (Abu Dhabi)'
+            : [...present].join(', ')
 
   const monthMap = new Map<string, { psfs: number[]; volume: number; totalValue: number }>()
   for (const txn of transactions) {
@@ -255,7 +271,7 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
         medianPrice: Math.round(median),
         volume: bucket.volume,
         totalValueAed: Math.round(bucket.totalValue),
-        dataSource: 'DLD · Dubai Pulse API',
+        dataSource: sourceLabel,
         transactionCount: bucket.psfs.length,
       })
     } else {
@@ -263,7 +279,7 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
       // cliff to the axis on months with no sales.
       trend.push({
         date: key, medianPrice: null, volume: 0,
-        totalValueAed: 0, dataSource: 'DLD', transactionCount: 0,
+        totalValueAed: 0, dataSource: sourceLabel, transactionCount: 0,
       })
     }
   }
@@ -274,12 +290,13 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
       trend: [],
       period,
       dataSource: 'no_transaction_data',
-      message: 'DLD transaction data not yet loaded. Run the DLD sync first.',
+      message:
+        'No registered transaction data for this area yet. Connect a source: set DUBAI_PULSE_API_KEY for Dubai, or ADREC_API_URL/ADREC_API_KEY for Abu Dhabi.',
       communityMedian: community.medianAedSqft,
     })
   }
 
-  return c.json({ trend, period, dataSource: 'dld_transactions' })
+  return c.json({ trend, period, dataSource: sourceLabel, sources: [...present] })
 })
 
 // ─── Yield Calculator ────────────────────────────────────────────────────────
@@ -536,7 +553,9 @@ function pfParse(property: any, source: string, purpose: string) {
 
 async function ensureCommunity(name: string, slug: string, emirate: string) {
   let c = await prisma.community.findFirst({ where: { slug } })
-  if (!c) c = await prisma.community.findFirst({ where: { nameEn: { contains: name, mode: 'insensitive' } } })
+  // Dialect-agnostic name lookup — Prisma's `mode: 'insensitive'` is
+  // Postgres-only and throws on SQLite. See src/lib/community-match.ts.
+  if (!c) c = await findCommunityByName(name)
   if (!c) {
     c = await prisma.community.create({
       data: {
@@ -546,6 +565,9 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
         transactionCount30d: 0, totalTransactions: 0,
       },
     })
+    // The matcher caches the community list; a new row must not be invisible to
+    // the next listing in this same scrape pass.
+    invalidateCommunityCache()
   }
   return c
 }
@@ -1876,14 +1898,27 @@ app.get('/sqftlab/building', async (c) => {
     : { intelligenceScore: 'desc' as const }
 
   const buildings = await prisma.buildingProfile.findMany({ where, orderBy, take: limit })
+  // Count the actual input so an empty result can explain itself instead of
+  // returning a bare 0 next to a claim of government provenance.
+  const txnCount = await prisma.transaction.count()
   return c.json({
     buildings,
     count: buildings.length,
+    ...(buildings.length === 0
+      ? {
+          insufficientData: true,
+          reason:
+            txnCount === 0
+              ? 'No registered transactions have been loaded, so no building profiles can be computed. Connect a transaction source (DUBAI_PULSE_API_KEY for Dubai, or ADREC_API_URL/ADREC_API_KEY for Abu Dhabi).'
+              : `No building profiles match this filter yet, though ${txnCount} transactions are available. Run the intelligence pipeline.`,
+        }
+      : {}),
     methodology:
-      'Every metric is derived from DLD sales in that building: price velocity from PSF windows, ' +
+      'Every metric is derived from registered sales in that building: price velocity from PSF windows, ' +
       'liquidity from median holding period between resales, owner confidence from units never resold, ' +
       'and floor premium from a PSF-on-floor regression.',
-    source: 'Dubai Land Department',
+    source: txnCount > 0 ? 'Registered transactions' : null,
+    transactionCount: txnCount,
   })
 })
 
@@ -2137,6 +2172,52 @@ app.get('/sqftlab/cron/status', async (c) => {
     staleAfterMs,
     runCount: runs.length,
     ...(cronAuthorized(c) ? { runs } : {}),
+  })
+})
+
+// Data provenance. Public and honest: each source reports whether it is
+// configured and how much real data it has actually delivered, so the UI can
+// state its sourcing truthfully instead of asserting "Real-time" unconditionally.
+app.get('/sqftlab/sources', async (c) => {
+  const [listingAgg, txnSources] = await Promise.all([
+    prisma.listing.groupBy({
+      by: ['source'],
+      _count: { _all: true },
+      _max: { scrapedAt: true },
+    }),
+    prisma.transaction.groupBy({
+      by: ['source'],
+      _count: { _all: true },
+      _max: { registeredAt: true },
+    }),
+  ])
+
+  const listingRows = listingAgg.map((r) => ({
+    name: r.source,
+    kind: 'listings' as const,
+    records: r._count._all,
+    lastRecordAt: r._max.scrapedAt,
+  }))
+
+  const txnRows = txnSources.map((r) => ({
+    name: r.source,
+    kind: 'transactions' as const,
+    records: r._count._all,
+    lastRecordAt: r._max.registeredAt,
+  }))
+
+  // "Available to fetch" is a different question from "has been fetched" — the
+  // record counts answer the second, this answers the first.
+  const available = [
+    { name: 'PropertyFinder', kind: 'listings', requiresCredentials: false, envVar: null, connected: listingRows.some((r) => r.name === 'propertyfinder') },
+    { name: 'DLD (Dubai Pulse)', kind: 'transactions', requiresCredentials: true, envVar: 'DUBAI_PULSE_API_KEY', connected: txnRows.some((r) => r.name === 'dld') },
+    { name: 'ADREC (Abu Dhabi)', kind: 'transactions', requiresCredentials: true, envVar: 'ADREC_API_URL', connected: txnRows.some((r) => r.name === 'adrec') },
+  ]
+
+  return c.json({
+    available,
+    delivering: [...listingRows, ...txnRows],
+    note: 'Counts are recorded rows only. Nothing here is estimated or generated.',
   })
 })
 

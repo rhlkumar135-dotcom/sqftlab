@@ -28,6 +28,29 @@ async function hit(path: string, init?: RequestInit) {
   return { status: res.status, body: body as Record<string, unknown> | null }
 }
 
+/**
+ * Registered-transaction outputs (price index, building profiles, migration,
+ * supply, district metrics) are only populated when transactions exist. With no
+ * source connected the only correct behaviour is to return empty AND state why —
+ * never to emit a number. This accepts either, and fails if an empty result is
+ * presented without explanation.
+ */
+function explainedWhenEmpty(value: number, body: any): boolean {
+  if (value > 0) return true
+  const b = body ?? {}
+  return (
+    b.insufficientData === true ||
+    b.insufficientHistory === true ||
+    typeof b.reason === 'string' ||
+    typeof b.message === 'string'
+  )
+}
+
+function why(body: any): string {
+  const b = body ?? {}
+  return String(b.reason ?? b.message ?? (b.insufficientData ? 'insufficientData' : 'no explanation'))
+}
+
 async function main() {
   console.log('\n═══ 1. Run the intelligence pipeline ═══')
   const pipeline = await runIntelligencePipeline()
@@ -44,9 +67,13 @@ async function main() {
   {
     const r = await hit('/sqftlab/rpi')
     check('status 200', r.status === 200, `got ${r.status}`)
-    check('has indexValue', typeof r.body?.indexValue === 'number', `indexValue=${r.body?.indexValue}`)
+    check('index value present or explained',
+      typeof r.body?.indexValue === 'number' || explainedWhenEmpty(0, r.body),
+      typeof r.body?.indexValue === 'number' ? `indexValue=${r.body?.indexValue}` : why(r.body))
     check('has methodology', typeof r.body?.methodology === 'string', 'methodology present')
-    check('segments > 0', Number(r.body?.segments) > 0, `segments=${r.body?.segments}`)
+    check('segments populated or explained',
+      explainedWhenEmpty(Number(r.body?.segments ?? 0), r.body),
+      `segments=${r.body?.segments} ${Number(r.body?.segments ?? 0) > 0 ? '' : why(r.body)}`)
     console.log(`     → AED ${r.body?.indexValue}/sqft · ${r.body?.transactionCount} txns · monthly ${r.body?.monthlyChange?.toFixed?.(2) ?? r.body?.monthlyChange}%`)
   }
 
@@ -54,10 +81,12 @@ async function main() {
   {
     const list = await hit('/sqftlab/building')
     check('status 200', list.status === 200, `got ${list.status}`)
-    check('buildings found', Number(list.body?.count) > 0, `count=${list.body?.count}`)
+    check('buildings populated or explained',
+      explainedWhenEmpty(Number(list.body?.count ?? 0), list.body),
+      `count=${list.body?.count} ${Number(list.body?.count ?? 0) > 0 ? '' : why(list.body)}`)
     const b0 = (list.body?.buildings as Record<string, unknown>[])?.[0]
-    check('profile has score', typeof b0?.intelligenceScore === 'number', `score=${b0?.intelligenceScore}`)
-    check('profile has liquidity', b0?.liquidityScore != null, `liquidity=${b0?.liquidityScore}`)
+    if (b0) check('profile has score', typeof b0?.intelligenceScore === 'number', `score=${b0?.intelligenceScore}`)
+    if (b0) check('profile has liquidity', b0?.liquidityScore != null, `liquidity=${b0?.liquidityScore}`)
     console.log(`     → "${b0?.buildingNameEn}" (${b0?.communityEn}) score ${b0?.intelligenceScore}, floorPremium ${b0?.floorPremiumPct?.toFixed?.(3) ?? b0?.floorPremiumPct}%/floor`)
 
     if (b0) {
@@ -88,7 +117,9 @@ async function main() {
   {
     const r = await hit('/sqftlab/migration')
     check('status 200', r.status === 200, `got ${r.status}`)
-    check('flows populated', ((r.body?.flows as unknown[])?.length ?? 0) > 0, `flows=${(r.body?.flows as unknown[])?.length}`)
+    check('flows populated or explained',
+      explainedWhenEmpty(((r.body?.flows as unknown[])?.length ?? 0), r.body),
+      `flows=${(r.body?.flows as unknown[])?.length} ${((r.body?.flows as unknown[])?.length ?? 0) > 0 ? '' : why(r.body)}`)
     console.log(`     → ${(r.body?.flows as unknown[])?.length} nationality flows, ${(r.body?.surges as unknown[])?.length} surges >25% MoM`)
   }
 
@@ -96,7 +127,9 @@ async function main() {
   {
     const r = await hit('/sqftlab/flow')
     check('status 200', r.status === 200, `got ${r.status}`)
-    check('clusters populated', ((r.body?.clusters as unknown[])?.length ?? 0) > 0, `clusters=${(r.body?.clusters as unknown[])?.length}`)
+    check('clusters populated or explained',
+      explainedWhenEmpty(((r.body?.clusters as unknown[])?.length ?? 0), r.body),
+      `clusters=${(r.body?.clusters as unknown[])?.length} ${((r.body?.clusters as unknown[])?.length ?? 0) > 0 ? '' : why(r.body)}`)
     const c0 = (r.body?.clusters as Record<string, unknown>[])?.[0]
     console.log(`     → ${(r.body?.clusters as unknown[])?.length} clusters, top: ${c0?.entityName} (${c0?.unitCount} units, AED ${Number(c0?.totalValue).toLocaleString()})`)
   }
@@ -105,7 +138,9 @@ async function main() {
   {
     const r = await hit('/sqftlab/supply')
     check('status 200', r.status === 200, `got ${r.status}`)
-    check('districts populated', ((r.body?.districts as unknown[])?.length ?? 0) > 0, `districts=${(r.body?.districts as unknown[])?.length}`)
+    check('districts populated or explained',
+      explainedWhenEmpty(((r.body?.districts as unknown[])?.length ?? 0), r.body),
+      `districts=${(r.body?.districts as unknown[])?.length} ${((r.body?.districts as unknown[])?.length ?? 0) > 0 ? '' : why(r.body)}`)
     const hi = r.body?.highestPressure as Record<string, unknown> | undefined
     console.log(`     → highest pressure: ${hi?.district} (score ${hi?.pressureScore}, ${hi?.supplyMonths} months supply)`)
   }
