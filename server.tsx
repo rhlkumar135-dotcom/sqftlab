@@ -23,22 +23,23 @@ app.use('*', async (c, next) => {
   await next()
 })
 
+// SHOGO:CUSTOM-START preview-prefix
+// The canvas preview proxy mounts this app under /p/<projectId>/ and the client
+// is built with that base, so asset and API requests arrive with the prefix on
+// the path. Without stripping it no route matches, every request falls through
+// to the SPA catch-all below, and the browser receives index.html where it
+// expects a JS module — the bundle never executes and #root stays empty.
+app.use('*', async (c, next) => {
+  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
+  if (!m) return next()
+  const url = new URL(c.req.url)
+  url.pathname = m[1] || '/'
+  return app.fetch(new Request(url, c.req.raw))
+})
+// SHOGO:CUSTOM-END
+
 // Health check endpoint
 app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
-
-// The Shogo preview proxy mounts the app under /p/<projectId>/ and rewrites the
-// built asset URLs to that prefix. Strip it before routing so those assets and
-// /api/* both resolve instead of falling through to the SPA shell.
-app.use('*', async (c, next) => {
-  const url = new URL(c.req.url)
-  const m = url.pathname.match(/^\/p\/[0-9a-fA-F-]{36}(\/.*)?$/)
-  if (m) {
-    const rest = m[1] || '/'
-    const rewritten = new URL(rest + url.search, url.origin)
-    return app.fetch(new Request(rewritten, c.req.raw))
-  }
-  await next()
-})
 
 // CRUD routes (available after schema.prisma has models)
 try {
@@ -58,19 +59,11 @@ const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 
-// Any unmatched /api/* path is an API error, not a client-side route. Registered
-// after every real API route, it only sees genuine misses — without it those
-// requests fell through to the SPA catch-all below and returned HTML with a 200,
-// so an API caller would parse the app shell as a successful response.
-app.all('/api/*', (c) =>
-  c.json({ error: `No API route matches ${c.req.method} ${c.req.path}` }, 404),
-)
-
 // Serve static files in production
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 
 const port = Number(process.env.PORT) || 3001
-console.log(`🚀 Server running on 0.0.0.0:${port}`)
+console.log(`🚀 Server running on http://localhost:${port}`)
 
-Bun.serve({ port, hostname: '0.0.0.0', fetch: app.fetch })
+Bun.serve({ port, fetch: app.fetch })

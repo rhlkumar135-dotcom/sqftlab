@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { prisma } from './src/lib/db'
+import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
 
 const app = new Hono()
 
@@ -585,7 +586,10 @@ app.get('/sqftlab/listings', async (c) => {
 
 // ─── Alerts ──────────────────────────────────────────────────────────────────
 
-app.get('/sqftlab/alerts', async (c) => {
+// Legacy rule-based alerts (Alert model). The Deal Alert Engine (TASK 12) owns
+// /sqftlab/alerts, so these stay reachable at their own path rather than
+// shadowing the new CRUD routes.
+app.get('/sqftlab/alert-rules', async (c) => {
   const alerts = await prisma.alert.findMany({
     where: { userId: DEMO_USER_ID },
     include: { community: { select: { nameEn: true, slug: true } } },
@@ -1033,6 +1037,313 @@ app.post('/sqftlab/waitlist', async (c) => {
 app.get('/sqftlab/waitlist', async (c) => {
   const count = await prisma.waitlist.count()
   return c.json({ count })
+})
+
+// ─── TASK 8 — District market table ──────────────────────────────────────────
+// One row per district with the spec's columns. Every value is aggregated from
+// the register — nothing is synthesized, so a district with thin data reports
+// null for a change rather than inventing a number.
+app.get('/sqftlab/markets', async (c) => {
+  const emirate = c.req.query('emirate')
+  const propertyType = c.req.query('type')
+
+  const communityWhere: Record<string, unknown> = {}
+  if (emirate && emirate !== 'all') communityWhere.emirate = emirate
+
+  const communities = await prisma.community.findMany({
+    where: communityWhere,
+    select: {
+      id: true, slug: true, nameEn: true, emirate: true,
+      medianAedSqft: true, grossYieldPct: true, priceChange30d: true,
+      priceChange1y: true, transactionCount30d: true, totalTransactions: true,
+      medianAnnualRentAed: true,
+    },
+  })
+
+  // Sale listings per district, respecting the property-type filter.
+  const listingWhere: Record<string, unknown> = { purpose: 'sale' }
+  if (propertyType && propertyType !== 'any') listingWhere.propertyType = propertyType
+  const listingGroups = await prisma.listing.groupBy({
+    by: ['communityId'],
+    where: listingWhere,
+    _count: { _all: true },
+  })
+  const listingsByCommunity = new Map(listingGroups.map((g) => [g.communityId, g._count._all]))
+
+  // 3-month change: mean realised PSF over the last 3 months vs the 3 before it.
+  const sixMonthsAgo = new Date()
+  sixMonthsAgo.setUTCMonth(sixMonthsAgo.getUTCMonth() - 6)
+  const threeMonthsAgo = new Date()
+  threeMonthsAgo.setUTCMonth(threeMonthsAgo.getUTCMonth() - 3)
+
+  const txns = await prisma.transaction.findMany({
+    where: { transactionDate: { gte: sixMonthsAgo }, pricePerSqft: { gt: 0 } },
+    select: { communityId: true, transactionDate: true, pricePerSqft: true },
+  })
+
+  const recent = new Map<string, number[]>()
+  const prior = new Map<string, number[]>()
+  for (const t of txns) {
+    const target = t.transactionDate >= threeMonthsAgo ? recent : prior
+    const list = target.get(t.communityId)
+    if (list) list.push(t.pricePerSqft)
+    else target.set(t.communityId, [t.pricePerSqft])
+  }
+  const mean = (a?: number[]) => (a && a.length ? a.reduce((s, v) => s + v, 0) / a.length : null)
+
+  const rows = communities.map((k) => {
+    const recentMean = mean(recent.get(k.id))
+    const priorMean = mean(prior.get(k.id))
+    const change3m =
+      recentMean != null && priorMean != null && priorMean > 0
+        ? ((recentMean - priorMean) / priorMean) * 100
+        : null
+
+    // Momentum blends 30-day price movement with yield — a district that is both
+    // appreciating and yielding well scores high.
+    const momentum = (k.priceChange30d ?? 0) + (k.grossYieldPct ?? 0) * 0.5
+
+    return {
+      slug: k.slug,
+      nameEn: k.nameEn,
+      emirate: k.emirate,
+      avgPsf: Math.round(k.medianAedSqft),
+      change3m: change3m != null ? Number(change3m.toFixed(2)) : null,
+      change12m: Number((k.priceChange1y ?? 0).toFixed(2)),
+      volume: k.totalTransactions,
+      volume30d: k.transactionCount30d,
+      listings: listingsByCommunity.get(k.id) ?? 0,
+      momentum: Number(momentum.toFixed(2)),
+      grossYieldPct: k.grossYieldPct ?? 0,
+      medianAnnualRentAed: k.medianAnnualRentAed ?? 0,
+    }
+  })
+
+  return c.json({
+    rows,
+    count: rows.length,
+    totals: {
+      volume: rows.reduce((s, r) => s + r.volume, 0),
+      listings: rows.reduce((s, r) => s + r.listings, 0),
+    },
+  })
+})
+
+// ─── TASK 10 — Price trend forecasting ───────────────────────────────────────
+// Least-squares linear regression over the last 12 months of realised PSF, per
+// the spec formula:
+//   slope     = (n·Σxy − Σx·Σy) / (n·Σx² − (Σx)²)
+//   intercept = (Σy − slope·Σx) / n
+// Confidence is R² combined with a residual-based band that widens with horizon.
+app.get('/sqftlab/forecast', async (c) => {
+  const district = c.req.query('district')
+  const months = Math.min(Math.max(parseInt(c.req.query('months') || '6'), 1), 24)
+
+  if (!district) return c.json({ error: 'district is required' }, 400)
+
+  const community = await prisma.community.findFirst({
+    where: { OR: [{ slug: district }, { nameEn: district }] },
+    select: { id: true, nameEn: true, slug: true, medianAedSqft: true },
+  })
+  if (!community) return c.json({ error: `Unknown district "${district}"` }, 404)
+
+  const since = new Date()
+  since.setUTCMonth(since.getUTCMonth() - 11)
+  since.setUTCDate(1)
+  since.setUTCHours(0, 0, 0, 0)
+
+  const txns = await prisma.transaction.findMany({
+    where: {
+      communityId: community.id,
+      transactionDate: { gte: since },
+      pricePerSqft: { gt: 0 },
+    },
+    select: { transactionDate: true, pricePerSqft: true },
+  })
+
+  const buckets = new Map<string, number[]>()
+  for (const t of txns) {
+    const d = t.transactionDate
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+    const list = buckets.get(key)
+    if (list) list.push(t.pricePerSqft)
+    else buckets.set(key, [t.pricePerSqft])
+  }
+
+  const history = [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, prices]) => ({
+      date: `${month}-01`,
+      psf: prices.reduce((s, p) => s + p, 0) / prices.length,
+      sampleSize: prices.length,
+    }))
+
+  if (history.length < 3) {
+    return c.json({
+      district: community.nameEn,
+      slug: community.slug,
+      history,
+      forecast: [],
+      regression: null,
+      note: 'Not enough monthly history to fit a trend (need at least 3 months).',
+    })
+  }
+
+  const n = history.length
+  const xs = history.map((_, i) => i)
+  const ys = history.map((h) => h.psf)
+  const sumX = xs.reduce((s, x) => s + x, 0)
+  const sumY = ys.reduce((s, y) => s + y, 0)
+  const sumXY = xs.reduce((s, x, i) => s + x * ys[i], 0)
+  const sumXX = xs.reduce((s, x) => s + x * x, 0)
+
+  const denominator = n * sumXX - sumX * sumX
+  const slope = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator
+  const intercept = (sumY - slope * sumX) / n
+
+  // R² — how much of the variance the trend line explains.
+  const meanY = sumY / n
+  const ssTot = ys.reduce((s, y) => s + (y - meanY) ** 2, 0)
+  const ssRes = ys.reduce((s, y, i) => s + (y - (intercept + slope * i)) ** 2, 0)
+  const r2 = ssTot === 0 ? 0 : Math.max(0, 1 - ssRes / ssTot)
+  const residualStd = Math.sqrt(ssRes / Math.max(1, n - 2))
+
+  const lastDate = new Date(history[n - 1].date)
+  const forecast = Array.from({ length: months }, (_, k) => {
+    const x = n + k
+    const psf = intercept + slope * x
+    const horizon = k + 1
+    // Band widens with the horizon — a 6-month projection is less certain than
+    // a 1-month one by sqrt(horizon).
+    const band = 1.96 * residualStd * Math.sqrt(1 + horizon / n)
+    const d = new Date(lastDate)
+    d.setUTCMonth(d.getUTCMonth() + horizon)
+    // Confidence decays with horizon but never claims certainty.
+    const confidence = Math.round(Math.max(35, Math.min(95, r2 * 100 - horizon * 2.5 + 20)))
+    return {
+      date: d.toISOString().slice(0, 10),
+      psf: Math.max(0, psf),
+      lower: Math.max(0, psf - band),
+      upper: psf + band,
+      confidence,
+    }
+  })
+
+  return c.json({
+    district: community.nameEn,
+    slug: community.slug,
+    currentPsf: community.medianAedSqft,
+    history,
+    forecast,
+    regression: {
+      slope,
+      intercept,
+      r2,
+      residualStd,
+      monthsOfHistory: n,
+      direction: slope > 0 ? 'rising' : slope < 0 ? 'falling' : 'flat',
+      monthlyChangePct: meanY > 0 ? (slope / meanY) * 100 : 0,
+    },
+  })
+})
+
+// ─── TASK 12 — Deal alert CRUD + engine ──────────────────────────────────────
+
+// Current user. The app is single-tenant demo, so this resolves the seeded user
+// and lets tier-restricted pages decide whether to gate.
+app.get('/sqftlab/me', async (c) => {
+  const user = await prisma.user.findUnique({
+    where: { id: DEMO_USER_ID },
+    select: { id: true, email: true, name: true, tier: true, subscriptionStatus: true },
+  })
+  if (!user) return c.json({ error: 'No demo user configured' }, 404)
+  return c.json({ user })
+})
+
+// GET /sqftlab/alerts — active alerts plus the recent matches they produced.
+app.get('/sqftlab/alerts', async (c) => {
+  const alerts = await prisma.dealAlert.findMany({
+    where: { userId: DEMO_USER_ID },
+    orderBy: { createdAt: 'desc' },
+    include: { _count: { select: { matches: true } } },
+  })
+  return c.json({ alerts })
+})
+
+app.get('/sqftlab/alerts/matches', async (c) => {
+  const matches = await recentMatches(DEMO_USER_ID)
+  return c.json({ matches })
+})
+
+// POST /sqftlab/alerts — create a watch. Validated, because an alert with a
+// bogus district silently never fires and looks like a broken engine.
+app.post('/sqftlab/alerts', async (c) => {
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+
+  const district = typeof body.district === 'string' ? body.district.trim() : ''
+  if (!district) return c.json({ error: 'district is required' }, 400)
+
+  const community = await prisma.community.findFirst({
+    where: { OR: [{ slug: district }, { nameEn: district }] },
+    select: { slug: true },
+  })
+  if (!community) return c.json({ error: `Unknown district "${district}"` }, 400)
+
+  const propertyType =
+    typeof body.propertyType === 'string' && body.propertyType && body.propertyType !== 'any'
+      ? body.propertyType
+      : null
+  const maxPrice = body.maxPrice != null && body.maxPrice !== '' ? Number(body.maxPrice) : null
+  if (maxPrice != null && (!Number.isFinite(maxPrice) || maxPrice <= 0)) {
+    return c.json({ error: 'maxPrice must be a positive number' }, 400)
+  }
+  const minBeds = body.minBeds != null && body.minBeds !== '' ? Number(body.minBeds) : null
+  if (minBeds != null && (!Number.isInteger(minBeds) || minBeds < 0)) {
+    return c.json({ error: 'minBeds must be a non-negative integer' }, 400)
+  }
+
+  const alert = await prisma.dealAlert.create({
+    data: {
+      userId: DEMO_USER_ID,
+      district: community.slug,
+      propertyType,
+      maxPrice,
+      minBeds,
+      active: true,
+    },
+  })
+
+  // Evaluate immediately so a new alert shows matches without waiting for the cron.
+  const scan = await scanDealAlerts()
+  return c.json({ alert, scan }, 201)
+})
+
+// DELETE /sqftlab/alerts/:id — matches cascade via the relation.
+app.delete('/sqftlab/alerts/:id', async (c) => {
+  const id = c.req.param('id')
+  const existing = await prisma.dealAlert.findFirst({ where: { id, userId: DEMO_USER_ID } })
+  if (!existing) return c.json({ error: 'Alert not found' }, 404)
+
+  await prisma.dealAlert.delete({ where: { id } })
+  return c.json({ ok: true, deleted: id })
+})
+
+// POST /sqftlab/alerts/scan — run the engine on demand (the scraper cron also
+// calls this after each listing upsert).
+app.post('/sqftlab/alerts/scan', async (c) => {
+  const scan = await scanDealAlerts()
+  return c.json({ ok: true, scan })
+})
+
+// POST /sqftlab/alerts/notify — deliver unseen matches by email.
+app.post('/sqftlab/alerts/notify', async (c) => {
+  const result = await notifyPendingMatches()
+  return c.json({ ok: true, notify: result })
 })
 
 // ─── Payment kill switch (spec Part 5.5) ──────────────────────────────────────

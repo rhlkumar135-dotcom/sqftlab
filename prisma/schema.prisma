@@ -23,9 +23,11 @@ model User {
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
-  portfolios  Portfolio[]
-  watchlists  Watchlist[]
-  alerts      Alert[]
+  portfolios   Portfolio[]
+  watchlists   Watchlist[]
+  alerts       Alert[]
+  dealAlerts   DealAlert[]
+  subscription Subscription?
 
   @@map("users")
 }
@@ -113,6 +115,8 @@ model Listing {
 
   community Community @relation(fields: [communityId], references: [id])
 
+  alertMatches AlertMatch[]
+
   @@index([communityId])
   @@index([isDeal])
   @@index([purpose])
@@ -191,4 +195,57 @@ model Waitlist {
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@map("waitlist")
+}
+
+// TASK 12 — Deal Alert Engine
+model DealAlert {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  district     String // community slug
+  propertyType String?  @map("property_type")
+  maxPrice     Float?   @map("max_price")
+  minBeds      Int?     @map("min_beds")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user    User         @relation(fields: [userId], references: [id])
+  matches AlertMatch[]
+
+  @@index([userId])
+  @@index([active])
+  @@index([district])
+  @@map("deal_alerts")
+}
+
+model AlertMatch {
+  id          String    @id @default(cuid())
+  alertId     String    @map("alert_id")
+  listingId   String    @map("listing_id")
+  detectedAt  DateTime  @default(now()) @map("detected_at")
+  psfDiscount Float     @map("psf_discount")
+  notified    Boolean   @default(false)
+  notifiedAt  DateTime? @map("notified_at")
+
+  alert   DealAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  listing Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([alertId, listingId])
+  @@index([notified])
+  @@index([detectedAt])
+  @@map("alert_matches")
+}
+
+// TASK 11 — Subscription tiers
+model Subscription {
+  id         String    @id @default(cuid())
+  userId     String    @unique @map("user_id")
+  tier       String    @default("free") // free, pro, elite
+  stripeId   String?   @map("stripe_id")
+  validUntil DateTime? @map("valid_until")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("subscriptions")
 }

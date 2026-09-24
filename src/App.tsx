@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -8,6 +8,7 @@ import { InvestmentScore, ScoreBadge } from '@/components/InvestmentScore'
 import { DataLabel } from '@/components/DataLabel'
 import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
+import { ForecastChart } from '@/components/ForecastChart'
 import { getRiskFlags } from '@/lib/verdict'
 import SNAPSHOT from '@/data/snapshot.json'
 
@@ -107,11 +108,12 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist'
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
   { id: 'listings' as Page, label: 'Listings', icon: Building },
+  { id: 'markets' as Page, label: 'Markets', icon: Table2 },
   { id: 'analytics' as Page, label: 'Analytics', icon: BarChart3 },
   { id: 'predictions' as Page, label: 'Predictions', icon: TrendingUp },
   { id: 'portfolio' as Page, label: 'Portfolio', icon: Briefcase },
@@ -630,6 +632,11 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
           </div>
         </div>
       </div>
+
+      {/* TASK 10 — forecast on the district detail page */}
+      <div className="mt-6">
+        <ForecastSection district={slug} />
+      </div>
     </div>
   )
 }
@@ -1099,44 +1106,269 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; 
 
 // ─── Alerts ──────────────────────────────────────────────────────────────────
 
-function AlertsPage() {
-  const [alerts, setAlerts] = useState<Alert[]>([])
+// ─── Deal Alert Engine page (TASK 12 — Elite tier) ───────────────────────────
+
+interface DealAlertRow {
+  id: string
+  district: string
+  propertyType: string | null
+  maxPrice: number | null
+  minBeds: number | null
+  active: boolean
+  createdAt: string
+  _count?: { matches: number }
+}
+
+interface AlertMatchRow {
+  id: string
+  psfDiscount: number
+  detectedAt: string
+  notified: boolean
+  alert: { id: string; district: string }
+  listing: Listing & { community?: { nameEn: string; slug: string; medianAedSqft: number } }
+}
+
+function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => void; setSelectedListing: (id: string) => void }) {
+  const [alerts, setAlerts] = useState<DealAlertRow[]>([])
+  const [matches, setMatches] = useState<AlertMatchRow[]>([])
+  const [districts, setDistricts] = useState<Array<{ slug: string; nameEn: string }>>([])
   const [loading, setLoading] = useState(true)
-  useEffect(() => {
-    safeFetch('/api/sqftlab/alerts', { alerts: [], items: [] }).then(d => { setAlerts(d.alerts || d.items || []); setLoading(false) })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [form, setForm] = useState({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+  const [tier, setTier] = useState<string | null>(null)
+  const { format } = useCurrency()
+
+  const load = useCallback(() => {
+    setLoading(true)
+    Promise.all([
+      safeFetch('/api/sqftlab/alerts', { alerts: [] }),
+      safeFetch('/api/sqftlab/alerts/matches', { matches: [] }),
+    ]).then(([a, m]) => {
+      setAlerts((a.alerts || []) as DealAlertRow[])
+      setMatches((m.matches || []) as AlertMatchRow[])
+      setLoading(false)
+    })
   }, [])
 
-  const typeLabels: Record<string, { label: string; color: string }> = {
-    below_market: { label: 'Below Market', color: 'var(--down-bg)' }, price_drop: { label: 'Price Drop', color: 'var(--up-bg)' },
-    new_listing: { label: 'New Listing', color: 'var(--b100)' }, yield_target: { label: 'Yield Target', color: 'rgba(59,130,246,0.09)' },
+  useEffect(() => {
+    load()
+    safeFetch('/api/sqftlab/communities', { communities: [] }).then((d) => {
+      setDistricts((d.communities || []) as Array<{ slug: string; nameEn: string }>)
+    })
+    safeFetch('/api/sqftlab/me', { user: null }).then((d) => {
+      setTier((d.user as { tier?: string } | null)?.tier ?? 'free')
+    })
+  }, [load])
+
+  async function createAlert(e: FormEvent) {
+    e.preventDefault()
+    if (!form.district) {
+      setError('Choose a district first.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch('/api/sqftlab/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          district: form.district,
+          propertyType: form.propertyType,
+          maxPrice: form.maxPrice || null,
+          minBeds: form.minBeds || null,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(body.error || `Request failed (${res.status})`)
+      } else {
+        const created = body.scan?.matchesCreated ?? 0
+        setNotice(
+          created > 0
+            ? `Alert saved — ${created} matching deal${created === 1 ? '' : 's'} found straight away.`
+            : 'Alert saved — no current listings match, we will watch for new ones.',
+        )
+        setForm({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+        load()
+      }
+    } catch {
+      setError('Could not reach the alert service.')
+    } finally {
+      setBusy(false)
+    }
   }
 
+  async function removeAlert(id: string) {
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch(`/api/sqftlab/alerts/${id}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) setError(body.error || `Delete failed (${res.status})`)
+      else {
+        setNotice('Alert removed.')
+        load()
+      }
+    } catch {
+      setError('Could not reach the alert service.')
+    }
+  }
+
+  const inputStyle = { background: 'var(--g1)', border: '1px solid var(--gb)', color: 'var(--ink)' } as const
+  const inputClass = 'text-sm px-3 py-2 rounded-xl outline-none w-full'
+
+  // Elite gate resolved against the actual account, so an entitled user sees the
+  // working page instead of a permanent "Coming soon" overlay.
+  const Gate = ({ children }: { children: ReactNode }) =>
+    tier === null ? null : tier === 'elite' ? (
+      <>{children}</>
+    ) : (
+      <FeatureGate feature="Deal alerts are an Elite feature">{children}</FeatureGate>
+    )
+
   return (
-    <div className="max-w-[1280px] mx-auto px-4 py-6">
-      <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Deal Alerts</h2>
-      {loading ? <div className="text-center py-20" style={{ color: 'var(--ink-5)' }}>Loading alerts...</div> : alerts.length === 0 ? (
-        <div className="text-center py-20" style={{ color: 'var(--ink-5)' }}>
-          <Bell size={40} className="mx-auto mb-3" style={{ color: 'var(--ink-6)' }} />
-          <p>No alerts configured — create one to get notified of deals.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {alerts.map(a => {
-            const type = typeLabels[a.alertType] || { label: a.alertType, color: 'var(--g3)' }
-            return (
-              <div key={a.id} className="p-4 rounded-[18px] flex flex-wrap items-center gap-4" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-                <div className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: type.color }}>{type.label}</div>
-                <div className="flex-1 min-w-[200px]">
-                  <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>
-                    {a.community?.nameEn || 'All Communities'}{a.propertyType && ` · ${a.propertyType}`}{a.beds !== undefined && ` · ${a.beds}BR`}
+    <div className="max-w-[1280px] mx-auto px-4 sm:px-6 py-6">
+      <div className="flex flex-wrap items-center gap-3 mb-2">
+        <h2 className="text-2xl font-bold" style={{ color: 'var(--ink)' }}>Deal Alerts</h2>
+        <span className="text-[10px] font-bold px-2 py-1 rounded-full" style={{ background: 'linear-gradient(90deg,#2563EB,#6366F1)', color: '#fff' }}>ELITE</span>
+      </div>
+      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>
+        We scan every listing and flag anything priced more than 15% below its district's median AED/sqft.
+      </p>
+
+      {error && (
+        <div className="mb-4 px-4 py-3 rounded-xl text-sm" style={{ background: 'var(--down-bg)', color: 'var(--down)' }}>{error}</div>
+      )}
+      {notice && (
+        <div className="mb-4 px-4 py-3 rounded-xl text-sm" style={{ background: 'var(--up-bg)', color: 'var(--up)' }}>{notice}</div>
+      )}
+
+      <Gate>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Create + list */}
+          <div className="space-y-5">
+            <form onSubmit={createAlert} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+              <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>New alert</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>District</label>
+                  <select value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} className={inputClass} style={inputStyle}>
+                    <option value="">Select a district…</option>
+                    {districts.map((d) => (
+                      <option key={d.slug} value={d.slug}>{d.nameEn}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Property type</label>
+                  <select value={form.propertyType} onChange={(e) => setForm({ ...form, propertyType: e.target.value })} className={inputClass} style={inputStyle}>
+                    <option value="any">Any</option>
+                    <option value="apartment">Apartment</option>
+                    <option value="villa">Villa</option>
+                    <option value="townhouse">Townhouse</option>
+                    <option value="commercial">Commercial</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Max price (AED)</label>
+                    <input type="number" min="0" placeholder="Optional" value={form.maxPrice} onChange={(e) => setForm({ ...form, maxPrice: e.target.value })} className={inputClass} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Min bedrooms</label>
+                    <input type="number" min="0" placeholder="Optional" value={form.minBeds} onChange={(e) => setForm({ ...form, minBeds: e.target.value })} className={inputClass} style={inputStyle} />
                   </div>
                 </div>
-                <div className="w-2 h-2 rounded-full" style={{ background: a.isActive ? 'var(--up)' : 'var(--ink-6)' }} />
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="w-full py-2.5 rounded-full text-sm font-semibold transition-opacity"
+                  style={{ background: 'linear-gradient(90deg,#2563EB,#6366F1)', color: '#fff', boxShadow: 'var(--sh-btn)', opacity: busy ? 0.6 : 1 }}
+                >
+                  {busy ? 'Saving…' : 'Create alert'}
+                </button>
               </div>
-            )
-          })}
+            </form>
+
+            <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+              <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Active alerts</h3>
+              {loading ? (
+                <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>Loading…</div>
+              ) : alerts.length === 0 ? (
+                <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>No alerts yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {alerts.map((a) => (
+                    <div key={a.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--g1)', border: '1px solid var(--gb)' }}>
+                      <div className="flex-1 min-w-[160px]">
+                        <div className="text-sm font-medium capitalize" style={{ color: 'var(--ink)' }}>{a.district.replace(/-/g, ' ')}</div>
+                        <div className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
+                          {[a.propertyType || 'any type', a.minBeds != null ? `${a.minBeds}+ BR` : null, a.maxPrice ? `≤ ${format(a.maxPrice)}` : null]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </div>
+                      </div>
+                      <span className="text-[11px] px-2 py-1 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)' }}>
+                        {a._count?.matches ?? 0} match{(a._count?.matches ?? 0) === 1 ? '' : 'es'}
+                      </span>
+                      <button onClick={() => removeAlert(a.id)} aria-label="Delete alert" className="p-1.5 rounded-lg transition-colors hover:bg-red-50">
+                        <X size={14} style={{ color: 'var(--down)' }} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Recent matches */}
+          <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+            <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Recent matches</h3>
+            {loading ? (
+              <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>Loading…</div>
+            ) : matches.length === 0 ? (
+              <div className="text-center py-10" style={{ color: 'var(--ink-5)' }}>
+                <Bell size={32} className="mx-auto mb-2" style={{ color: 'var(--ink-6)' }} />
+                <p className="text-sm">No deals detected yet — matches appear once a listing drops 15% below its district median.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {matches.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => { setSelectedListing(m.listing.id); setPage('property') }}
+                    className="w-full text-left flex gap-3 p-3 rounded-xl transition-colors hover:bg-blue-50/50"
+                    style={{ background: 'var(--g1)', border: '1px solid var(--gb)' }}
+                  >
+                    {m.listing.imageUrl ? (
+                      <img src={m.listing.imageUrl} alt="" className="w-16 h-12 object-cover rounded-lg flex-shrink-0" />
+                    ) : (
+                      <div className="w-16 h-12 rounded-lg flex-shrink-0 flex items-center justify-center" style={{ background: 'var(--g3)' }}>
+                        <ImageIcon size={16} style={{ color: 'var(--ink-6)' }} />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>
+                        {m.listing.beds === 0 ? 'Studio' : `${m.listing.beds}BR`} {m.listing.propertyType} · {m.listing.community?.nameEn ?? m.alert.district}
+                      </div>
+                      <div className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
+                        {format(m.listing.priceAed)} · {Math.round(m.listing.pricePerSqft).toLocaleString('en-US')} AED/sqft
+                      </div>
+                      <div className="text-xs font-bold mt-1" style={{ color: 'var(--down)', fontFamily: 'var(--font-data)' }}>
+                        {m.psfDiscount.toFixed(1)}% below district median
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </Gate>
     </div>
   )
 }
@@ -1375,6 +1607,302 @@ function MortgageSimulator() {
 
 // ─── Market Analytics ────────────────────────────────────────────────────────
 
+// ─── TASK 10 — Trend forecast (shared by analytics + district pages) ─────────
+
+function ForecastSection({ district }: { district?: string }) {
+  const [list, setList] = useState<Array<{ slug: string; nameEn: string }>>([])
+  const [active, setActive] = useState(district ?? '')
+  const [data, setData] = useState<Record<string, unknown> | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (district) setActive(district)
+  }, [district])
+
+  useEffect(() => {
+    if (district) return
+    safeFetch('/api/sqftlab/communities', { communities: [] }).then((d) => {
+      const c = (d.communities || []) as Array<{ slug: string; nameEn: string }>
+      setList(c)
+      setActive((prev) => prev || c[0]?.slug || '')
+    })
+  }, [district])
+
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    setLoading(true)
+    safeFetch(`/api/sqftlab/forecast?district=${encodeURIComponent(active)}&months=6`, null).then((d) => {
+      if (cancelled) return
+      setData(d)
+      setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
+  const history = (data?.history || []) as Array<{ date: string; psf: number }>
+  const forecast = (data?.forecast || []) as Array<{ date: string; psf: number; lower?: number; upper?: number; confidence?: number }>
+  const regression = data?.regression as
+    | { direction: string; monthlyChangePct: number; r2: number; monthsOfHistory: number }
+    | null
+
+  return (
+    <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div>
+          <h3 className="font-semibold" style={{ color: 'var(--ink)' }}>Price Trend &amp; 6-Month Forecast</h3>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--ink-5)' }}>
+            Least-squares regression on 12 months of realised DLD price per sqft
+          </p>
+        </div>
+        {!district && list.length > 0 && (
+          <select
+            value={active}
+            onChange={(e) => setActive(e.target.value)}
+            className="text-xs px-3 py-1.5 rounded-full outline-none"
+            style={{ background: 'var(--g1)', border: '1px solid var(--gb)', color: 'var(--ink)' }}
+          >
+            {list.map((c) => (
+              <option key={c.slug} value={c.slug}>{c.nameEn}</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="h-[260px] flex items-center justify-center text-xs" style={{ color: 'var(--ink-5)' }}>
+          Fitting trend…
+        </div>
+      ) : (
+        <>
+          <ForecastChart history={history} forecast={forecast} />
+          {regression && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+              {[
+                {
+                  label: 'Direction',
+                  value: regression.direction === 'rising' ? '▲ Rising' : regression.direction === 'falling' ? '▼ Falling' : 'Flat',
+                  color: regression.direction === 'rising' ? 'var(--up)' : regression.direction === 'falling' ? 'var(--down)' : 'var(--ink)',
+                },
+                {
+                  label: 'Monthly change',
+                  value: `${regression.monthlyChangePct >= 0 ? '+' : ''}${regression.monthlyChangePct.toFixed(2)}%`,
+                  color: regression.monthlyChangePct >= 0 ? 'var(--up)' : 'var(--down)',
+                },
+                { label: 'Fit (R²)', value: regression.r2.toFixed(2), color: 'var(--ink)' },
+                { label: 'Data points', value: `${regression.monthsOfHistory} mo`, color: 'var(--ink)' },
+              ].map((s) => (
+                <div key={s.label} className="p-3 rounded-[14px]" style={{ background: 'var(--g1)', border: '1px solid var(--gb)' }}>
+                  <div className="text-[11px] mb-1" style={{ color: 'var(--ink-5)' }}>{s.label}</div>
+                  <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: s.color }}>{s.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {forecast.length > 0 && (
+            <div className="mt-3 text-xs" style={{ color: 'var(--ink-4)' }}>
+              Projected {new Date(forecast[forecast.length - 1].date).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}:{' '}
+              <strong style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>
+                {Math.round(forecast[forecast.length - 1].psf).toLocaleString('en-US')} AED/sqft
+              </strong>{' '}
+              <span style={{ color: 'var(--ink-5)' }}>
+                ({(forecast[forecast.length - 1].confidence ?? 0)}% confidence)
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── TASK 8 — Full district analytics table ─────────────────────────────────
+
+type MarketRow = {
+  slug: string
+  nameEn: string
+  emirate: string
+  avgPsf: number
+  change3m: number | null
+  change12m: number
+  volume: number
+  volume30d: number
+  listings: number
+  momentum: number
+  grossYieldPct: number
+  medianAnnualRentAed: number
+}
+
+type MarketSortKey = 'nameEn' | 'avgPsf' | 'change3m' | 'change12m' | 'volume' | 'listings' | 'momentum'
+
+function MarketsPage({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
+  const [rows, setRows] = useState<MarketRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [emirate, setEmirate] = useState('all')
+  const [propertyType, setPropertyType] = useState('any')
+  const [sortKey, setSortKey] = useState<MarketSortKey>('momentum')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const { format } = useCurrency()
+
+  useEffect(() => {
+    setLoading(true)
+    safeFetch(`/api/sqftlab/markets?emirate=${emirate}&type=${propertyType}`, { rows: [], totals: { volume: 0, listings: 0 } }).then((d) => {
+      setRows((d.rows || []) as MarketRow[])
+      setLoading(false)
+    })
+  }, [emirate, propertyType])
+
+  function toggleSort(key: MarketSortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'nameEn' ? 'asc' : 'desc')
+    }
+  }
+
+  const sorted = [...rows].sort((a, b) => {
+    if (sortKey === 'nameEn') {
+      return sortDir === 'asc' ? a.nameEn.localeCompare(b.nameEn) : b.nameEn.localeCompare(a.nameEn)
+    }
+    const av = a[sortKey]
+    const bv = b[sortKey]
+    // Districts with no comparable data sort last regardless of direction.
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
+  })
+
+  const totals = {
+    volume: rows.reduce((s, r) => s + r.volume, 0),
+    listings: rows.reduce((s, r) => s + r.listings, 0),
+    avgPsf: rows.length ? Math.round(rows.reduce((s, r) => s + r.avgPsf, 0) / rows.length) : 0,
+  }
+
+  const columns: Array<{ key: MarketSortKey | null; label: string; align: 'left' | 'right' }> = [
+    { key: 'nameEn', label: 'District', align: 'left' },
+    { key: 'avgPsf', label: 'Avg PSF', align: 'right' },
+    { key: 'change3m', label: '3M', align: 'right' },
+    { key: 'change12m', label: '12M', align: 'right' },
+    { key: 'volume', label: 'Volume', align: 'right' },
+    { key: 'listings', label: 'Listings', align: 'right' },
+    { key: 'momentum', label: 'Momentum', align: 'right' },
+  ]
+
+  function pct(v: number | null) {
+    if (v == null) return <span style={{ color: 'var(--ink-6)' }}>—</span>
+    return (
+      <span style={{ color: v >= 0 ? 'var(--up)' : 'var(--down)', fontFamily: 'var(--font-data)' }}>
+        {v >= 0 ? '+' : ''}{v.toFixed(1)}%
+      </span>
+    )
+  }
+
+  return (
+    <div className="max-w-[1280px] mx-auto px-4 sm:px-6 py-6">
+      <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--ink)' }}>Markets</h2>
+      <p className="text-sm mb-5" style={{ color: 'var(--ink-5)' }}>
+        Every district ranked on realised DLD transactions and live sale listings
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+        {[
+          { label: 'Districts', value: String(rows.length), color: 'var(--ink)' },
+          { label: 'Transactions', value: totals.volume.toLocaleString('en-US'), color: 'var(--b600)' },
+          { label: 'Sale listings', value: totals.listings.toLocaleString('en-US'), color: 'var(--ink)' },
+        ].map((s) => (
+          <div key={s.label} className="p-4 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+            <div className="text-xs mb-1" style={{ color: 'var(--ink-5)' }}>{s.label}</div>
+            <div className="text-xl font-bold" style={{ fontFamily: 'var(--font-data)', color: s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <select
+          value={emirate}
+          onChange={(e) => setEmirate(e.target.value)}
+          className="text-sm px-3 py-2 rounded-xl outline-none"
+          style={{ background: 'var(--g1)', border: '1px solid var(--gb)', color: 'var(--ink)' }}
+        >
+          <option value="all">All cities</option>
+          <option value="dubai">Dubai</option>
+          <option value="abu_dhabi">Abu Dhabi</option>
+          <option value="sharjah">Sharjah</option>
+        </select>
+        <select
+          value={propertyType}
+          onChange={(e) => setPropertyType(e.target.value)}
+          className="text-sm px-3 py-2 rounded-xl outline-none"
+          style={{ background: 'var(--g1)', border: '1px solid var(--gb)', color: 'var(--ink)' }}
+        >
+          <option value="any">All property types</option>
+          <option value="apartment">Apartment</option>
+          <option value="villa">Villa</option>
+          <option value="townhouse">Townhouse</option>
+          <option value="commercial">Commercial</option>
+        </select>
+        <div className="text-xs self-center" style={{ color: 'var(--ink-5)' }}>
+          Click any column to sort · click a row for the district
+        </div>
+      </div>
+
+      <div className="rounded-[18px] overflow-hidden" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm" style={{ minWidth: 720 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--gb)' }}>
+                {columns.map((col) => (
+                  <th
+                    key={col.label}
+                    onClick={() => col.key && toggleSort(col.key)}
+                    className={`px-4 py-3 text-xs font-semibold whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+                    style={{ color: sortKey === col.key ? 'var(--b600)' : 'var(--ink-5)', cursor: col.key ? 'pointer' : 'default', userSelect: 'none' }}
+                  >
+                    {col.label}
+                    {sortKey === col.key && <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr
+                  key={r.slug}
+                  onClick={() => { setSelectedCommunity(r.slug); setPage('community') }}
+                  className="transition-colors hover:bg-blue-50/50"
+                  style={{ borderBottom: '1px solid var(--ink-6)', cursor: 'pointer' }}
+                >
+                  <td className="px-4 py-3">
+                    <div className="font-medium" style={{ color: 'var(--ink)' }}>{r.nameEn}</div>
+                    <div className="text-[11px] capitalize" style={{ color: 'var(--ink-5)' }}>{r.emirate.replace('_', ' ')}</div>
+                  </td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{format(r.avgPsf)}</td>
+                  <td className="px-4 py-3 text-right">{pct(r.change3m)}</td>
+                  <td className="px-4 py-3 text-right">{pct(r.change12m)}</td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>{r.volume.toLocaleString('en-US')}</td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>{r.listings}</td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>{r.momentum.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {loading && <div className="p-8 text-center text-sm" style={{ color: 'var(--ink-5)' }}>Loading districts…</div>}
+        {!loading && sorted.length === 0 && <div className="p-8 text-center text-sm" style={{ color: 'var(--ink-5)' }}>No districts match these filters.</div>}
+      </div>
+
+      <p className="text-[11px] mt-4" style={{ color: 'var(--ink-5)' }}>
+        Momentum = 30-day price change + half the gross yield. 3M change compares mean realised AED/sqft over the
+        last 3 months against the 3 months before it. Districts without enough recent transactions show “—”.
+      </p>
+    </div>
+  )
+}
+
 function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1501,6 +2029,11 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
             </button>
           ))}
         </div>
+      </div>
+
+      {/* TASK 10 — trend forecast below the existing charts */}
+      <div className="mt-6">
+        <ForecastSection />
       </div>
     </div>
   )
@@ -2233,11 +2766,12 @@ function AppInner() {
       {page === 'dashboard' && <HeatmapDashboard setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'community' && <CommunityDetail slug={selectedCommunity} setPage={setPage} />}
       {page === 'listings' && <ListingsFeed setPage={setPage} setSelectedListing={setSelectedListing} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'markets' && <MarketsPage setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'property' && <PropertyIntelligence listingId={selectedListing} setPage={setPage} />}
       {page === 'portfolio' && <Portfolio />}
       {page === 'watchlist' && <Watchlist setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'deals' && <Deals setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'alerts' && <AlertsPage />}
+      {page === 'alerts' && <AlertsPage setPage={setPage} setSelectedListing={setSelectedListing} />}
       {page === 'pricing' && <PricingPage setPage={setPage} />}
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
