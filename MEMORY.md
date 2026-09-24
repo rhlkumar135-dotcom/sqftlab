@@ -331,3 +331,62 @@ assert count-up values settled on real numbers rather than frozen at 0.
 
 ⚠️ The two browser agents that ran this session each wrote a stray report `.md`
 into the **workspace root** (not the project). Delete those — don't commit them.
+
+---
+
+## FIX-01..FIX-12 bug-fix brief — applied (commit 6c7504c)
+
+All 12 fixes from `files/Pasted_markdown.md` (the "Bug Fix Agent Tasks" brief) are
+implemented, verified and deployed. Verification lives in
+`scripts/verify-fixes.ts` — **41/41**. Also re-run: `verify-intel.ts` 31/31,
+`verify-stream.ts` 12/12 (takes ~70s, it waits for real publishes — do not
+assume it hung).
+
+### ⚠️ server.tsx is NOT a safe place for custom code — it gets regenerated
+
+The header claims "This file can be customized - it will not be overwritten if it
+exists". **That is false in practice.** Editing `prisma/schema.prisma` triggers
+`shogo generate`, which **re-emitted server.tsx**, and:
+
+- the generated wildcard CORS block came back at the top (reverting my edit), and
+- my `// SHOGO:CUSTOM-START cors` region was **preserved but relocated to the END
+  of the file — after `Bun.serve()` and after the SPA catch-all**, where Hono can
+  never reach it (the catch-all answers first). It also duplicated
+  `const ALLOWED_ORIGINS` in the same module scope, which is a hard SyntaxError.
+
+So: put cross-cutting API middleware in **`custom-routes.ts`**, which is never
+regenerated. `server.tsx` changes are re-applied best-effort and must be
+re-checked after any schema change (`grep -c "SHOGO:CUSTOM-START cors" server.tsx`
+must be 1, and `Bun.serve` must come after all `app.use` calls).
+
+### Issues found in the brief itself (deviations are deliberate)
+
+1. **FIX-05 used `transactionType: 'Sales'`** — this schema stores `sale`,
+   `off_plan_sale`, `mortgage`. Filtering on 'Sales' matches nothing. Now filters
+   `{ in: ['sale', 'off_plan_sale'] }` via `SALE_TXN_TYPES`.
+2. **FIX-09's circuit breaker only broke the page loop**, so the crawl continued
+   over all 22 areas. Now sets `circuitBroken` and unwinds all three loops.
+3. **FIX-03's `POST /portfolio` spread `...body`** straight into the row (mass
+   assignment). Fields are validated instead. Also: the brief implies real auth,
+   but there is no auth layer here — `getUserId()` is *identification*, not
+   authentication (any caller can claim any id). Say so if asked.
+4. **FIX-04's `detect-deals`** resets `isDeal` per community; done inside one
+   `$transaction` so a mid-run failure can't leave districts cleared.
+
+### Where identity now comes from (no more DEMO_USER_ID)
+
+`getUserId(c)` reads `Authorization: Bearer <id>` or a `session` cookie. Routes
+answer **401** without it. The browser bootstraps via `/api/sqftlab/me`
+(`src/lib/session.ts` → `ensureSession()`), and `safeFetch` attaches the header.
+`/me` deliberately does NOT require a session — otherwise the client could never
+learn its own id. The seeded account is resolved by email, not a baked cuid.
+
+`scripts/build-snapshot.py` must send the same header (it does) and must never
+bake a 401 error envelope into `src/data/snapshot.json`.
+
+### Exchange rates
+
+frankfurter (the old source) **never published INR or PKR**, so both were
+permanently hardcoded and looked like live rates. Now open.er-api.com with a
+5-minute DB cache in `ExchangeRate`. Live values at the time of writing:
+INR 26.09, PKR 75.42.
