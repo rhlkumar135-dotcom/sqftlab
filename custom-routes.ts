@@ -766,9 +766,9 @@ app.get('/sqftlab/scrape/status', async (c) => {
 
 // ─── Identity ────────────────────────────────────────────────────────────────
 
-// Account-scoped routes resolve the caller from the request. This replaces a
-// hardcoded `DEMO_USER_ID`, which meant every visitor was served the same
-// person's portfolio, watchlist and alerts regardless of who they were.
+// Account-scoped routes resolve the caller from the request. This replaces the
+// old hardcoded demo-user constant, which meant every visitor was served the
+// same person's portfolio, watchlist and alerts regardless of who they were.
 //
 // NOTE: this is *identification*, not authentication. A bearer value or cookie
 // is taken at face value, so it is not a security boundary — anyone can claim

@@ -84,4 +84,9 @@ async function main() {
 
 main()
   .catch((e) => { console.error('FATAL', e); process.exitCode = 1 })
-  .finally(() => prisma.$disconnect())
+  .finally(async () => {
+    await prisma.$disconnect()
+    // The SSE subscription keeps the event loop alive after the assertions
+    // finish, so this script would otherwise never exit on its own.
+    process.exit(process.exitCode ?? 0)
+  })

@@ -66,20 +66,15 @@ const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 
-// Serve static files in production
-app.use('/*', serveStatic({ root: './dist' }))
-app.get('*', serveStatic({ path: './dist/index.html' }))
-
-const port = Number(process.env.PORT) || 3001
-console.log(`🚀 Server running on http://localhost:${port}`)
-
-Bun.serve({ port, fetch: app.fetch })
-
 // SHOGO:CUSTOM-START asset-routing
-// Both of these MUST be registered before the static handlers below. Hono
-// dispatches middleware in registration order, so anything mounted after the
-// SPA catch-all is unreachable: the catch-all resolves *every* unmatched path
-// to index.html and answers before a later middleware ever runs.
+// These MUST be registered BEFORE the static handlers below. Hono dispatches
+// middleware in registration order, so anything mounted after the SPA catch-all
+// is unreachable: that catch-all resolves *every* unmatched path to index.html
+// and answers before a later middleware ever runs.
+//
+// This region previously sat after `Bun.serve(...)` and after the catch-all, so
+// neither middleware below had ever executed. It has been moved above the static
+// handlers, where it actually runs.
 //
 // 1. The canvas preview mounts the app under /p/<projectId>/ and the client is
 //    built with that base, so asset and API requests arrive with the prefix on
@@ -112,3 +107,12 @@ app.use('*', async (c, next) => {
   }
 })
 // SHOGO:CUSTOM-END
+
+// Serve static files in production — registered AFTER the middleware above, so
+// the prefix rewrite and cache headers actually apply to these responses.
+app.use('/*', serveStatic({ root: './dist' }))
+app.get('*', serveStatic({ path: './dist/index.html' }))
+
+const port = Number(process.env.PORT) || 3001
+console.log(`🚀 Server running on http://localhost:${port}`)
+Bun.serve({ port, fetch: app.fetch })
