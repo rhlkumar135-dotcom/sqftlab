@@ -2140,7 +2140,7 @@ app.get('/sqftlab/cron/status', async (c) => {
   })
 })
 
-// ─── Pipeline control (the spec's 6-hourly intelligence cron) ───────────────
+// ─── Pipeline control (manual trigger; the hourly cron calls this too) ──────
 app.post('/sqftlab/intelligence/run', async (c) => {
   try {
     const result = await runIntelligencePipeline()

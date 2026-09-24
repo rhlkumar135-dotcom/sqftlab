@@ -31,7 +31,7 @@ export const GLOSSARY: GlossaryTerm[] = [
     letter: 'A',
     term: 'AED (Arab Emirates Dirham)',
     definition:
-      `The official currency of the United Arab Emirates. All sqftLab prices, PSF values, and yields are denominated in AED by default. The platform offers conversion to USD, GBP, EUR, and INR using live exchange rates fetched every 60 seconds. 1 USD ≈ 3.67 AED (pegged rate since 1997).`,
+      `The official currency of the United Arab Emirates. All sqftLab prices, PSF values, and yields are denominated in AED by default. The platform offers conversion to USD, GBP, EUR, and INR using live exchange rates, cached for 5 minutes. 1 USD ≈ 3.67 AED (pegged rate since 1997).`,
     whyMatters: `International investors think in their home currency first. The AED/USD peg makes UAE property uniquely stable for USD-based investors.`,
     source: 'ExchangeRate-API open endpoint',
   },
@@ -239,7 +239,7 @@ export const GLOSSARY: GlossaryTerm[] = [
     letter: 'E',
     term: 'ExchangeRate-API',
     definition:
-      `The free open endpoint used by sqftLab for live currency conversion. URL: open.er-api.com/v6/latest/AED. No key required. Fetched every 60 seconds. Provides AED rates against USD, GBP, EUR, INR, and PKR. Powers the global FX toggle in the sqftLab ticker.`,
+      `The free open endpoint used by sqftLab for live currency conversion. URL: open.er-api.com/v6/latest/AED. No key required. Cached for 5 minutes. Provides AED rates against USD, GBP, EUR, INR, and PKR. Powers the global FX toggle in the sqftLab ticker.`,
     source: 'ExchangeRate-API open endpoint',
     seeAlso: ['aed'],
   },
@@ -486,7 +486,7 @@ export const GLOSSARY: GlossaryTerm[] = [
     letter: 'R',
     term: 'Real Price Index (RPI)',
     definition:
-      `sqftLab's proprietary daily property price index. Computed from the trimmed mean (5th–95th percentile) of DLD-registered sales PSF, per district × property type × bedroom count, updated every 6 hours. The first free, daily, transaction-based UAE property price index.`,
+      `sqftLab's proprietary daily property price index. Computed from the trimmed mean (5th–95th percentile) of DLD-registered sales PSF, per district × property type × bedroom count, refreshed hourly. The first free, daily, transaction-based UAE property price index.`,
     whyMatters: `Unlike REIDIN or JLL indices it is updated daily not quarterly, free not $15K+/year, and the methodology is publicly documented.`,
     source: 'DLD transactions · Dubai Pulse API',
     tier: 'pro',

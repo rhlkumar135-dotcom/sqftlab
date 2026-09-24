@@ -7,7 +7,7 @@
 // beta coefficient is worse than an honest "not yet computable".
 //
 // The spec targets Postgres materialized views; this port recomputes into plain
-// tables, so `runIntelligencePipeline()` is the equivalent of the 6-hourly cron.
+// tables, so `runIntelligencePipeline()` is the heavy stage of the hourly cron.
 
 import { prisma } from './db'
 
@@ -966,7 +966,7 @@ export async function computeMarketSummary() {
   return { computed: true, ...summary }
 }
 
-// ─── Pipeline entry point (the spec's 6-hourly intelligence cron) ───────────
+// ─── Pipeline entry point (heavy stage of the hourly refresh cron) ──────────
 
 export async function runIntelligencePipeline() {
   const startedAt = Date.now()
