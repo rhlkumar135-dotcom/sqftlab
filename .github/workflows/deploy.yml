@@ -12,7 +12,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Railway's native GitHub integration already deploys on push to main on its
+      # own. This workflow is the CLI fallback and needs its own token. Missing
+      # secrets used to hard-fail the job, so every push showed a red X and it was
+      # impossible to tell a real deploy failure from an unconfigured workflow.
+      # Report the gap and skip the remaining steps instead.
       - name: Check Railway secrets
+        id: check
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_NAME: ${{ secrets.RAILWAY_SERVICE_NAME }}
@@ -23,17 +29,21 @@ jobs:
           [ -z "$RAILWAY_SERVICE_NAME" ] && missing="$missing RAILWAY_SERVICE_NAME"
           [ -z "$RAILWAY_PROJECT_ID" ] && missing="$missing RAILWAY_PROJECT_ID"
           if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing"
-            echo "Add them under Settings > Secrets and variables > Actions."
-            echo "Get a token from https://railway.app/account/tokens (Account scope)."
-            exit 1
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Railway CLI deploy skipped — missing repository secrets:$missing"
+            echo "Add them under Settings > Secrets and variables > Actions, or ignore"
+            echo "this workflow and rely on Railway's native GitHub integration."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "All Railway secrets present."
           fi
-          echo "All Railway secrets present."
 
       - name: Install Railway CLI
+        if: steps.check.outputs.present == 'true'
         run: npm install -g @railway/cli
 
       - name: Deploy
+        if: steps.check.outputs.present == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
@@ -44,6 +54,7 @@ jobs:
             --ci
 
       - name: Verify health
+        if: steps.check.outputs.present == 'true'
         env:
           PUBLIC_URL: ${{ secrets.RAILWAY_PUBLIC_URL }}
         run: |
@@ -51,8 +62,11 @@ jobs:
             echo "::notice::RAILWAY_PUBLIC_URL not set — skipping health check."
             exit 0
           fi
+          # /health is the liveness endpoint server.tsx defines, and the same path
+          # railway.toml uses for the deploy healthcheck. Prefer it over a data
+          # route so a database hiccup doesn't read as a failed deploy.
           for i in 1 2 3 4 5 6; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$PUBLIC_URL/api/sqftlab/stats" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$PUBLIC_URL/health" || true)
             if [ "$code" = "200" ]; then
               echo "API healthy (HTTP 200)."
               exit 0
@@ -60,4 +74,5 @@ jobs:
             echo "attempt $i: HTTP $code — retrying in 15s"
             sleep 15
           done
-          echo "::warning::Could not confirm HTTP 200 from $PUBLIC_URL/api/sqftlab/stats after deploy."
+          echo "::error::Could not confirm HTTP 200 from $PUBLIC_URL/health after deploy."
+          exit 1

@@ -1,0 +1,11 @@
+# Nixpacks build configuration.
+#
+# railway.toml pins builder = "NIXPACKS" but left the toolchain to auto-detection.
+# Both package.json and bun.lock are present, so detection can settle on Node and
+# never install Bun — scripts/railway-build.sh then dies on `bun install` with
+# "bun: command not found" and every deploy fails regardless of the code.
+#
+# "..." keeps whatever Nixpacks auto-detects and appends Bun to it, rather than
+# replacing the list (which would drop Node and break the npm-based tooling).
+[phases.setup]
+nixPkgs = ["...", "bun"]
