@@ -17,6 +17,8 @@ import SNAPSHOT from '@/data/snapshot.json'
 // zoom buttons and tooltip chrome all depend on it, so an unreachable CDN left the
 // heat map visibly broken while the JS kept working.
 import 'leaflet/dist/leaflet.css'
+import { CountUp, EASE, FadeIn, HoverLift, Reveal, Stagger, StaggerItem, StaggerWords } from '@/components/anim'
+import { motion } from 'framer-motion'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -138,7 +140,7 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
   const { currency, setCurrency } = useCurrency()
 
   return (
-    <nav className="sticky top-0 z-50" style={{ background: 'var(--g1)', backdropFilter: 'var(--gblur-nav)', WebkitBackdropFilter: 'var(--gblur-nav)', borderBottom: '1px solid var(--gb)' }}>
+    <motion.nav className="sticky top-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4, ease: EASE }} style={{ background: 'var(--g1)', backdropFilter: 'var(--gblur-nav)', WebkitBackdropFilter: 'var(--gblur-nav)', borderBottom: '1px solid var(--gb)' }}>
       {/* Brand gradient strip */}
       <div className="h-[1.5px] w-full" style={{ background: 'linear-gradient(90deg, #2563EB, #6366F1, #0EA5E9)' }} />
 
@@ -219,7 +221,7 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
           ))}
         </div>
       )}
-    </nav>
+    </motion.nav>
   )
 }
 
@@ -237,17 +239,19 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
       {/* Hero — Spec §4 */}
       <section className="relative overflow-hidden py-16 md:py-28" style={{ background: 'var(--page)' }}>
         <div className="max-w-[1280px] mx-auto px-6 relative">
-          {/* Live tag */}
-          <div className="inline-flex items-center gap-2 mb-6 px-3 py-1.5 rounded-full text-xs font-medium"
-            style={{ background: 'var(--g2)', backdropFilter: 'blur(16px)', border: '1px solid var(--gb)', color: 'var(--ink-3)' }}>
-            <span className="live-dot" />
-            <span>Live UAE property intelligence · refreshed every 60 seconds</span>
-          </div>
+          {/* Live tag — spec: 500ms fade */}
+          <FadeIn duration={0.5}>
+            <div className="inline-flex items-center gap-2 mb-6 px-3 py-1.5 rounded-full text-xs font-medium"
+              style={{ background: 'var(--g2)', backdropFilter: 'blur(16px)', border: '1px solid var(--gb)', color: 'var(--ink-3)' }}>
+              <span className="live-dot" />
+              <span>Live UAE property intelligence · refreshed every 60 seconds</span>
+            </div>
+          </FadeIn>
 
-          {/* Two-line headline */}
+          {/* Two-line headline — spec: word stagger 60ms */}
           <h1 className="hero-h">
-            <span className="hero-h1">Dubai Pulse. ADREC. Every live listing.</span>
-            <span className="hero-h2">One platform that tells you exactly what a property is worth — before anyone else does.</span>
+            <StaggerWords text="Dubai Pulse. ADREC. Every live listing." className="hero-h1" gap={0.06} delay={0.1} />
+            <StaggerWords text="One platform that tells you exactly what a property is worth — before anyone else does." className="hero-h2" gap={0.06} delay={0.25} />
           </h1>
 
           <style>{`
@@ -2449,19 +2453,23 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
     spark?: number[]
     bar?: number
     signal?: string
+    raw?: number
+    fmt?: (n: number) => string
   }[] = [
-    { label: 'AVG PRICE PSF', value: `AED ${o.avgPsf.toLocaleString()}`, sub: `${o.districtsTracked} districts`, spark: psfTrend },
-    { label: 'AVG GROSS YIELD', value: `${o.avgYield}%`, sub: 'Ejari where available' },
+    { label: 'AVG PRICE PSF', value: `AED ${o.avgPsf.toLocaleString()}`, sub: `${o.districtsTracked} districts`, spark: psfTrend, raw: o.avgPsf, fmt: (n) => `AED ${Math.round(n).toLocaleString()}` },
+    { label: 'AVG GROSS YIELD', value: `${o.avgYield}%`, sub: 'Ejari where available', raw: o.avgYield, fmt: (n) => `${n.toFixed(2)}%` },
     {
       label: 'MOMENTUM INDEX',
       value: `${o.momentumIndex > 0 ? '+' : ''}${o.momentumIndex}%`,
       sub: '30-day mean change',
       bar: momentumBar,
       signal: o.momentumIndex > 2 ? '◆ Strong bullish' : undefined,
+      raw: o.momentumIndex,
+      fmt: (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)}%`,
     },
-    { label: 'DLD TRANSACTIONS', value: o.transactionCount.toLocaleString(), sub: 'registered register' },
-    { label: 'VALUE TRANSACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration' },
-    { label: 'ACTIVE LISTINGS', value: o.activeListings.toLocaleString(), sub: 'all portals' },
+    { label: 'DLD TRANSACTIONS', value: o.transactionCount.toLocaleString(), sub: 'registered register', raw: o.transactionCount, fmt: (n) => Math.round(n).toLocaleString() },
+    { label: 'VALUE TRANSACTED', value: shortAed(o.totalValueAed), sub: 'gross consideration', raw: o.totalValueAed, fmt: (n) => shortAed(n) },
+    { label: 'ACTIVE LISTINGS', value: o.activeListings.toLocaleString(), sub: 'all portals', raw: o.activeListings, fmt: (n) => Math.round(n).toLocaleString() },
   ]
 
   return (
@@ -2476,26 +2484,30 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
       </p>
 
       {/* Section 1 — Market overview */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+      <Stagger className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4" gap={0.08}>
         {kpis.map((k) => (
-          <div key={k.label} className="p-4 rounded-[18px]" style={CARD_STYLE}>
-            <div className="text-[10px] font-semibold tracking-wider mb-1.5" style={{ color: 'var(--ink-5)' }}>{k.label}</div>
-            <div className="text-xl font-bold" style={{ color: 'var(--ink)', fontFamily: 'var(--font-data)' }}>{k.value}</div>
-            <div className="text-[10px] mt-1" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>{k.sub}</div>
-            {k.spark && k.spark.length > 1 && (
-              <div className="mt-2"><Sparkline data={k.spark} /></div>
-            )}
-            {k.bar != null && (
-              <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(37,99,235,0.12)' }}>
-                <div className="h-full rounded-full" style={{ width: `${k.bar}%`, background: 'linear-gradient(90deg,#2563EB,#6366F1,#0EA5E9)' }} />
+          <StaggerItem key={k.label}>
+            <HoverLift className="p-4 rounded-[18px] h-full" style={CARD_STYLE}>
+              <div className="text-[10px] font-semibold tracking-wider mb-1.5" style={{ color: 'var(--ink-5)' }}>{k.label}</div>
+              <div className="text-xl font-bold" style={{ color: 'var(--ink)', fontFamily: 'var(--font-data)' }}>
+                {k.raw != null ? <CountUp value={k.raw} format={k.fmt} /> : k.value}
               </div>
-            )}
-            {k.signal && (
-              <div className="text-[10px] mt-1 font-semibold" style={{ color: 'var(--warn)' }}>{k.signal}</div>
-            )}
-          </div>
+              <div className="text-[10px] mt-1" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>{k.sub}</div>
+              {k.spark && k.spark.length > 1 && (
+                <div className="mt-2"><Sparkline data={k.spark} /></div>
+              )}
+              {k.bar != null && (
+                <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(37,99,235,0.12)' }}>
+                  <div className="h-full rounded-full" style={{ width: `${k.bar}%`, background: 'linear-gradient(90deg,#2563EB,#6366F1,#0EA5E9)' }} />
+                </div>
+              )}
+              {k.signal && (
+                <div className="text-[10px] mt-1 font-semibold" style={{ color: 'var(--warn)' }}>{k.signal}</div>
+              )}
+            </HoverLift>
+          </StaggerItem>
         ))}
-      </div>
+      </Stagger>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
         <div className="p-4 rounded-[18px]" style={CARD_STYLE}>
