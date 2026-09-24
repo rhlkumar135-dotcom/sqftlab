@@ -1,6 +1,15 @@
 import { Hono } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
+import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
+import {
+  runIntelligencePipeline, computeYieldCurve, migrationSurges, applyScenario,
+  computeRealPriceIndex, computeBuildingProfiles, computeSupplyPipeline,
+  computeInstitutionalFlow, computeMigrationSignal, computeDistrictMetrics,
+  computeMarketSummary, ALL_BEDS,
+} from './src/lib/intelligence'
+import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 
 const app = new Hono()
 
@@ -1368,5 +1377,528 @@ app.post('/webhooks/stripe', async (c) => {
   )
   return c.json({ received: true, processed: false })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Spec Part 6 / Part 8 — the 7 extraordinary intelligence products + the
+// supporting district, macro and image endpoints.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SPEC_VERSION = '2.0'
+
+// ─── 6.1 Real Price Index ────────────────────────────────────────────────────
+// GET /api/sqftlab/rpi?district=downtown-dubai&type=Apartment&beds=2
+app.get('/sqftlab/rpi', async (c) => {
+  const district = c.req.query('district')
+  const type = c.req.query('type')
+  const bedsParam = c.req.query('beds')
+  const beds = bedsParam === 'all' || bedsParam == null ? ALL_BEDS : Number(bedsParam)
+
+  const where: Record<string, unknown> = {}
+  if (district) where.district = district
+  if (type) where.propertyType = type
+  if (bedsParam != null) where.bedrooms = Number.isFinite(beds) ? beds : ALL_BEDS
+
+  const latestDate = await prisma.realPriceIndex.findFirst({
+    where: district ? { district } : {},
+    orderBy: { indexDate: 'desc' },
+    select: { indexDate: true },
+  })
+
+  const rows = await prisma.realPriceIndex.findMany({
+    where: { ...where, ...(latestDate ? { indexDate: latestDate.indexDate } : {}) },
+    orderBy: { indexValue: 'desc' },
+    take: 200,
+  })
+  if (!rows.length) {
+    return c.json({
+      index: [],
+      insufficientHistory: true,
+      reason: 'No Real Price Index segments have been computed yet. Run POST /api/sqftlab/intelligence/run.',
+      methodology: 'Trimmed mean (5th–95th percentile) of DLD-registered sales PSF. The window starts at the spec\'s 30 days and widens to 90/180/365 only when 30 days leaves too few segments above the 3-sale confidence floor. Segments under 3 sales are always omitted.',
+      source: 'Dubai Land Department',
+    })
+  }
+
+  const history = district
+    ? await prisma.realPriceIndex.findMany({
+        where: { district, ...(type ? { propertyType: type } : {}) },
+        orderBy: { indexDate: 'desc' },
+        take: 90,
+      })
+    : []
+
+  const head = rows[0]
+  const monthlyAgo = history.find((h) => h.indexDate.getTime() <= Date.now() - 30 * 86_400_000)
+  const yearlyAgo = history.find((h) => h.indexDate.getTime() <= Date.now() - 365 * 86_400_000)
+  const pct = (a?: number | null, b?: number | null) =>
+    a == null || b == null || b === 0 ? null : ((a - b) / b) * 100
+
+  return c.json({
+    district: district ?? 'all',
+    propertyType: type ?? 'All',
+    bedrooms: head.bedrooms === ALL_BEDS || head.bedrooms < 0 ? null : head.bedrooms,
+    indexValue: Math.round(head.indexValue),
+    cpiAdjusted: head.cpiAdjusted != null ? Math.round(head.cpiAdjusted) : null,
+    transactionCount: head.transactionCount,
+    monthlyChange: pct(head.indexValue, monthlyAgo?.indexValue),
+    yearlyChange: pct(head.indexValue, yearlyAgo?.indexValue),
+    history: history.map((h) => ({
+      date: h.indexDate.toISOString().slice(0, 10),
+      indexValue: Math.round(h.indexValue),
+      cpiAdjusted: h.cpiAdjusted != null ? Math.round(h.cpiAdjusted) : null,
+      transactionCount: h.transactionCount,
+    })),
+    segments: rows.length,
+    index: rows.slice(0, 60).map((r) => ({
+      district: r.district, propertyType: r.propertyType,
+      bedrooms: r.bedrooms < 0 ? null : r.bedrooms,
+      indexValue: Math.round(r.indexValue),
+      cpiAdjusted: r.cpiAdjusted != null ? Math.round(r.cpiAdjusted) : null,
+      transactionCount: r.transactionCount,
+    })),
+    methodology: 'Trimmed mean (5th–95th percentile) of DLD-registered sales PSF. The window starts at the spec\'s 30 days and widens to 90/180/365 only when 30 days leaves too few segments above the 3-sale confidence floor. Segments under 3 sales are always omitted.',
+    source: 'Dubai Land Department',
+    calculatedAt: head.calculatedAt.toISOString(),
+  })
+})
+
+// ─── 6.2 Building Intelligence Profile ──────────────────────────────────────
+app.get('/sqftlab/building', async (c) => {
+  const district = c.req.query('district')
+  const community = c.req.query('community')
+  const sort = c.req.query('sort') ?? 'score'
+  const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200)
+
+  const where: Record<string, unknown> = {}
+  if (district) where.district = district
+  if (community) where.communityEn = community
+
+  const orderBy =
+    sort === 'liquidity' ? { liquidityScore: 'desc' as const }
+    : sort === 'trend' ? { psfTrend12m: 'desc' as const }
+    : { intelligenceScore: 'desc' as const }
+
+  const buildings = await prisma.buildingProfile.findMany({ where, orderBy, take: limit })
+  return c.json({
+    buildings,
+    count: buildings.length,
+    methodology:
+      'Every metric is derived from DLD sales in that building: price velocity from PSF windows, ' +
+      'liquidity from median holding period between resales, owner confidence from units never resold, ' +
+      'and floor premium from a PSF-on-floor regression.',
+    source: 'Dubai Land Department',
+  })
+})
+
+app.get('/sqftlab/building/:slug', async (c) => {
+  const slug = decodeURIComponent(c.req.param('slug'))
+  const [buildingNameEn, communityEn] = slug.includes('--') ? slug.split('--') : [slug, undefined]
+
+  const building = communityEn
+    ? await prisma.buildingProfile.findFirst({ where: { buildingNameEn, communityEn } })
+    : await prisma.buildingProfile.findFirst({ where: { buildingNameEn } })
+
+  if (!building) return c.json({ error: 'Building not found', slug }, 404)
+
+  const peers = await prisma.buildingProfile.findMany({
+    where: { communityEn: building.communityEn, NOT: { id: building.id } },
+    orderBy: { intelligenceScore: 'desc' },
+    take: 5,
+  })
+
+  return c.json({
+    building,
+    peers,
+    interpretation: {
+      psfVelocity: 'Is this building gaining or losing value faster than its community?',
+      liquidity: 'How quickly a unit can be resold here — low means a slow exit.',
+      ownerOccupier: 'Units never resold = stable, owner-occupied stock.',
+      buyerHoldRate: 'Share of buyers who held longer than 12 months.',
+      ejariDensity: 'Rental contracts per 100 DLD units — higher means rental-dominated.',
+      floorPremium: building.floorPremiumPct != null
+        ? `Each floor adds about ${building.floorPremiumPct.toFixed(2)}% to PSF — floor 20 vs floor 5 is roughly ${(15 * building.floorPremiumPct).toFixed(1)}% more.`
+        : 'Not enough floor-tagged sales in this building to fit a premium curve.',
+    },
+  })
+})
+
+// ─── 6.3 District Yield Curve ───────────────────────────────────────────────
+app.get('/sqftlab/yield-curve', async (c) => {
+  const district = c.req.query('district')
+  if (!district) return c.json({ error: 'district query parameter is required' }, 400)
+  const result = await computeYieldCurve(district)
+  if ('error' in result && result.error === 'district_not_found') {
+    return c.json({ error: `Unknown district: ${district}` }, 404)
+  }
+  return c.json(result)
+})
+
+// ─── 6.4 Migration Signal ───────────────────────────────────────────────────
+app.get('/sqftlab/migration', async (c) => {
+  const district = c.req.query('district')
+  const where = district ? { district } : {}
+
+  const [flows, surges] = await Promise.all([
+    prisma.nationalityFlow.findMany({
+      where, orderBy: [{ month: 'desc' }, { transactionCount: 'desc' }], take: 100,
+    }),
+    migrationSurges(20),
+  ])
+
+  if (!flows.length) {
+    return c.json({
+      flows: [], surges: [], insufficientData: true,
+      reason: 'No transactions carry buyerNationality. DLD populates this field; the current dataset does not.',
+      methodology: 'Share of transactions by buyer nationality per district per month, with month-on-month surge detection above 25%.',
+    })
+  }
+  return c.json({
+    flows, surges,
+    surgeThresholdPct: 25,
+    methodology: 'Share of transactions by buyer nationality per district per month, with month-on-month surge detection above 25%.',
+    source: 'Dubai Land Department buyer records',
+  })
+})
+
+// ─── 6.5 Institutional Flow Tracker ─────────────────────────────────────────
+app.get('/sqftlab/flow', async (c) => {
+  const district = c.req.query('district')
+  const clusters = await prisma.institutionalTransaction.findMany({
+    where: district ? { district } : {},
+    orderBy: { totalValue: 'desc' },
+    take: 50,
+  })
+  if (!clusters.length) {
+    return c.json({
+      clusters: [], insufficientData: true,
+      reason: 'No corporate buyer clusters found. This requires buyerType=corporate on DLD transactions.',
+      methodology: 'Corporate purchases clustered by entity + building, split on any gap over 30 days, kept at 3+ units.',
+    })
+  }
+  return c.json({
+    clusters,
+    count: clusters.length,
+    totalValueAed: clusters.reduce((s, x) => s + x.totalValue, 0),
+    methodology: 'Corporate purchases clustered by entity + building, split on any gap over 30 days, kept at 3+ units.',
+    source: 'Dubai Land Department',
+  })
+})
+
+// ─── 6.6 Construction Pipeline Pressure ─────────────────────────────────────
+app.get('/sqftlab/supply', async (c) => {
+  const rows = await prisma.supplyPipeline.findMany({ orderBy: { pressureScore: 'desc' } })
+  if (!rows.length) {
+    return c.json({
+      districts: [], insufficientData: true,
+      reason: 'Supply pipeline has not been computed yet. Run POST /api/sqftlab/intelligence/run.',
+      methodology: 'Gross off-plan registrations in the trailing 3 years divided by trailing 12-month absorption, scaled to a 0–100 pressure score. Because a DLD row carries no unit identifier, registrations cannot be matched to completions, so the unit count is an upper bound.',
+    })
+  }
+  return c.json({
+    districts: rows,
+    highestPressure: rows[0],
+    lowestPressure: rows[rows.length - 1],
+    methodology: 'Gross off-plan registrations in the trailing 3 years divided by trailing 12-month absorption, scaled to a 0–100 pressure score. Because a DLD row carries no unit identifier, registrations cannot be matched to completions, so the unit count is an upper bound.',
+    source: 'Dubai Land Department off-plan records',
+  })
+})
+
+// ─── 6.7 Economic Sensitivity + scenario modeller ───────────────────────────
+app.get('/sqftlab/macro', async (c) => {
+  const district = c.req.query('district')
+  const rows = await prisma.macroSensitivity.findMany({ where: district ? { district } : {} })
+  const indicators = await prisma.macroIndicator.findMany({ orderBy: { fetchedAt: 'desc' }, take: 40 })
+  const latestFx = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
+
+  const required = ['oil_price', 'vix', 'uae_gdp', 'uae_tourism']
+  const present = [...new Set(indicators.map((i) => i.indicator))]
+  const missing = required.filter((i) => !present.includes(i))
+
+  if (!rows.length) {
+    return c.json({
+      sensitivities: [], insufficientHistory: true,
+      missingIndicators: missing,
+      indicatorsAvailable: present,
+      latestFx,
+      reason:
+        `The sensitivity model needs 20+ months of district PSF history plus aligned oil, VIX, GDP and tourism series. ` +
+        (missing.length ? `No ${missing.join(', ')} series is ingested.` : ''),
+      methodology: 'Multiple OLS regression of monthly district PSF on oil, VIX, UAE GDP and tourism arrivals.',
+    })
+  }
+  return c.json({ sensitivities: rows, indicatorsAvailable: present, missingIndicators: missing, latestFx })
+})
+
+app.post('/sqftlab/macro/scenario', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as {
+    district?: string; oilPct?: number; vixChange?: number; gdpPct?: number; tourismPct?: number
+  }
+  if (!body.district) return c.json({ error: 'district is required' }, 400)
+
+  const s = await prisma.macroSensitivity.findFirst({ where: { district: body.district } })
+  if (!s) {
+    return c.json({
+      error: 'No fitted sensitivity model for this district yet.',
+      district: body.district,
+      insufficientHistory: true,
+      reason: 'The scenario modeller needs the regression coefficients, which require 20+ months of history.',
+    }, 412)
+  }
+  return c.json({
+    district: body.district,
+    shock: { oilPct: body.oilPct ?? 0, vixChange: body.vixChange ?? 0, gdpPct: body.gdpPct ?? 0, tourismPct: body.tourismPct ?? 0 },
+    ...applyScenario(s, body),
+    rSquared: s.rSquared,
+  })
+})
+
+// ─── District metrics + market summary ──────────────────────────────────────
+app.get('/sqftlab/districts', async (c) => {
+  const emirate = c.req.query('emirate')
+  const metrics = await prisma.districtMetrics.findMany({ orderBy: { momentumScore: 'desc' } })
+  const communities = await prisma.community.findMany({
+    select: { slug: true, nameEn: true, nameAr: true, emirate: true, latitude: true, longitude: true, medianAedSqft: true, grossYieldPct: true, neighbourhoodScore: true },
+  })
+  const byslug = new Map(communities.map((x) => [x.slug, x]))
+
+  const districts = metrics
+    .map((m) => ({ ...m, community: byslug.get(m.district) ?? null }))
+    .filter((m) => (emirate && emirate !== 'all' ? m.community?.emirate === emirate : true))
+
+  return c.json({
+    districts,
+    count: districts.length,
+    layers: ['psf', 'yield', 'momentum', 'dealDensity', 'supplyPressure', 'institutionalFlow'],
+    methodology: 'Per-district roll-up of DLD sales over trailing windows, recomputed by the intelligence pipeline.',
+  })
+})
+
+app.get('/sqftlab/market-summary', async (c) => {
+  const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+  if (!summary) {
+    return c.json({
+      insufficientData: true,
+      reason: 'Market summary has not been computed yet. Run POST /api/sqftlab/intelligence/run.',
+    })
+  }
+  const fx = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
+  return c.json({ summary, fx })
+})
+
+// ─── Pipeline control (the spec's 6-hourly intelligence cron) ───────────────
+app.post('/sqftlab/intelligence/run', async (c) => {
+  try {
+    const result = await runIntelligencePipeline()
+
+    // Spec 16.3 — broadcast the recomputed state to every connected client.
+    const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+    if (summary) publish('market:update', summary)
+    publish('intelligence:update', {
+      rpi: result.rpi, buildings: result.buildings, supply: result.supply,
+      migration: result.migration, flow: result.flow, metrics: result.metrics,
+      durationMs: result.durationMs, generatedAt: result.generatedAt,
+    })
+    const topDistricts = await prisma.districtMetrics.findMany({
+      orderBy: { momentumScore: 'desc' }, take: 10,
+    })
+    for (const d of topDistricts) {
+      publish('district:update', {
+        district: d.district, avgPricePsf: d.avgPricePsf,
+        priceChange3m: d.priceChange3m, momentumScore: d.momentumScore,
+        calculatedAt: d.calculatedAt.toISOString(),
+      })
+    }
+
+    return c.json({ ...result, published: { market: !!summary, districts: topDistricts.length } })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500)
+  }
+})
+
+// Fire the broadcast path without recomputing, so the client can be exercised
+// against a live stream even when nothing has changed on disk.
+app.post('/sqftlab/stream/test-publish', async (c) => {
+  const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+  publish('market:update', summary ?? { note: 'no market summary computed yet' })
+  const d = await prisma.districtMetrics.findFirst({ orderBy: { momentumScore: 'desc' } })
+  if (d) publish('district:update', { district: d.district, momentumScore: d.momentumScore })
+  const deal = await prisma.listing.findFirst({ where: { isDeal: true } })
+  if (deal) {
+    publish('deal:new', {
+      id: deal.id, title: deal.title, purpose: deal.purpose,
+      priceAed: deal.priceAed, pricePerSqft: deal.pricePerSqft,
+      imageUrl: deal.imageUrl, sourceUrl: deal.sourceUrl,
+      detectedAt: new Date().toISOString(),
+    })
+  }
+  return c.json({ ok: true, published: ['market:update', 'district:update', 'deal:new'], ...streamStatus() })
+})
+
+app.get('/sqftlab/intelligence/status', async (c) => {
+  const [rpi, buildings, flows, clusters, supply, sens, metrics, summary, macro, fx] = await Promise.all([
+    prisma.realPriceIndex.count(), prisma.buildingProfile.count(),
+    prisma.nationalityFlow.count(), prisma.institutionalTransaction.count(),
+    prisma.supplyPipeline.count(), prisma.macroSensitivity.count(),
+    prisma.districtMetrics.count(), prisma.marketSummary.count(),
+    prisma.macroIndicator.count(), prisma.exchangeRate.count(),
+  ])
+  const lastSummary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+  return c.json({
+    products: {
+      realPriceIndex: { rows: rpi, ready: rpi > 0 },
+      buildingIntelligence: { rows: buildings, ready: buildings > 0 },
+      migrationSignal: { rows: flows, ready: flows > 0 },
+      institutionalFlow: { rows: clusters, ready: clusters > 0 },
+      supplyPipeline: { rows: supply, ready: supply > 0 },
+      macroSensitivity: { rows: sens, ready: sens > 0 },
+      districtMetrics: { rows: metrics, ready: metrics > 0 },
+    },
+    infrastructure: { marketSummary: summary, macroIndicators: macro, exchangeRates: fx },
+    lastComputedAt: lastSummary?.computedAt?.toISOString() ?? null,
+    specVersion: SPEC_VERSION,
+  })
+})
+
+// ─── Macro ingestion (spec Part 3.2 free sources) ───────────────────────────
+app.post('/sqftlab/macro/refresh', async (c) => {
+  try {
+    const result = await fetchAllMacro()
+    return c.json({ ...result, fetchedAt: new Date().toISOString() })
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500)
+  }
+})
+
+app.get('/sqftlab/fx', async (c) => {
+  const latest = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
+  if (latest) return c.json(latest)
+  // Nothing ingested yet — fetch live rather than returning an empty shape.
+  const r = await fetchExchangeRates()
+  if (!r.ok) return c.json({ error: r.error ?? 'FX unavailable' }, 502)
+  const fresh = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
+  return c.json(fresh)
+})
+
+// ─── Spec Part 8 — /api/img image proxy ─────────────────────────────────────
+// Only hosts we actually scrape are allowed through: an open proxy here would
+// be an SSRF hole pointed at the internal network.
+const IMAGE_HOST_ALLOWLIST = [
+  'bayut-production.s3.eu-central-1.amazonaws.com',
+  'images.bayut.com',
+  'cdn.propertyfinder.ae',
+  'www.propertyfinder.ae',
+  'dbz-images.dubizzle.com',
+  'images.dubizzle.com',
+]
+
+app.get('/sqftlab/img', async (c) => {
+  const raw = c.req.query('url')
+  if (!raw) return c.json({ error: 'url query parameter is required' }, 400)
+
+  let target: URL
+  try {
+    target = new URL(raw)
+  } catch {
+    return c.json({ error: 'url is not a valid absolute URL' }, 400)
+  }
+  if (target.protocol !== 'https:' || !IMAGE_HOST_ALLOWLIST.includes(target.hostname)) {
+    return c.json({ error: `Host not allowed: ${target.hostname}`, allowlist: IMAGE_HOST_ALLOWLIST }, 403)
+  }
+
+  const cached = await prisma.imageCache.findFirst({ where: { externalUrl: target.toString() } })
+  if (cached?.contentType && cached.expiresAt && cached.expiresAt.getTime() > Date.now()) {
+    return c.body(null, 302, { Location: target.toString() })
+  }
+
+  try {
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), 12_000)
+    const res = await fetch(target.toString(), { signal: ctl.signal, headers: { 'User-Agent': 'sqftLab/1.0' } })
+    clearTimeout(timer)
+    if (!res.ok) return c.json({ error: `Upstream returned ${res.status}` }, 502)
+
+    const buf = Buffer.from(await res.arrayBuffer())
+    const contentType = res.headers.get('content-type') ?? 'image/jpeg'
+    await prisma.imageCache.upsert({
+      where: { externalUrl: target.toString() },
+      create: {
+        externalUrl: target.toString(), contentType, sizeBytes: buf.length,
+        expiresAt: new Date(Date.now() + 7 * 86_400_000),
+      },
+      update: { contentType, sizeBytes: buf.length, fetchedAt: new Date(), expiresAt: new Date(Date.now() + 7 * 86_400_000) },
+    })
+    return c.body(new Uint8Array(buf), 200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=604800, immutable',
+    })
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Spec Part 16 — real-time stream (SSE).
+// ═══════════════════════════════════════════════════════════════════════════
+
+app.get('/sqftlab/stream/status', (c) => c.json(streamStatus()))
+
+app.get('/sqftlab/stream/market', (c) =>
+  streamSSE(c, async (stream) => {
+    let closed = false
+
+    // 1. Send the current state immediately so there is no empty first paint.
+    const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+    const fx = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
+    await stream.writeSSE({
+      event: 'message',
+      data: JSON.stringify({ type: 'init', payload: { summary, fx }, ts: Date.now() }),
+    })
+
+    // 2. Replay whatever was published before this client connected.
+    for (const m of recentMessages()) {
+      await stream.writeSSE({
+        event: 'message',
+        data: JSON.stringify({ type: m.channel, payload: m.payload, ts: m.ts }),
+      })
+    }
+
+    // 3. Forward everything published from here on.
+    const unsubscribe = subscribe(async (m) => {
+      if (closed) return
+      try {
+        await stream.writeSSE({
+          event: 'message',
+          data: JSON.stringify({ type: m.channel, payload: m.payload, ts: m.ts }),
+        })
+      } catch {
+        closed = true
+        unsubscribe()
+      }
+    })
+
+    // 4. Heartbeat — keeps proxies from closing an idle connection, and gives
+    //    the client a liveness signal it can show in the UI.
+    const heartbeat = setInterval(() => {
+      if (closed) return
+      stream.writeSSE({ event: 'ping', data: JSON.stringify({ ts: Date.now() }) }).catch(() => {
+        closed = true
+        unsubscribe()
+        clearInterval(heartbeat)
+      })
+    }, 25_000)
+
+    stream.onAbort(() => {
+      closed = true
+      clearInterval(heartbeat)
+      unsubscribe()
+    })
+
+    // Keep the handler alive until the client disconnects.
+    await new Promise<void>((resolve) => {
+      stream.onAbort(resolve)
+      setTimeout(resolve, 30 * 60 * 1000)
+    })
+  }),
+)
 
 export default app

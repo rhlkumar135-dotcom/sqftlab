@@ -23,21 +23,6 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-// SHOGO:CUSTOM-START preview-prefix
-// The canvas preview proxy mounts this app under /p/<projectId>/ and the client
-// is built with that base, so asset and API requests arrive with the prefix on
-// the path. Without stripping it no route matches, every request falls through
-// to the SPA catch-all below, and the browser receives index.html where it
-// expects a JS module — the bundle never executes and #root stays empty.
-app.use('*', async (c, next) => {
-  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
-  if (!m) return next()
-  const url = new URL(c.req.url)
-  url.pathname = m[1] || '/'
-  return app.fetch(new Request(url, c.req.raw))
-})
-// SHOGO:CUSTOM-END
-
 // Health check endpoint
 app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
 
@@ -67,3 +52,19 @@ const port = Number(process.env.PORT) || 3001
 console.log(`🚀 Server running on http://localhost:${port}`)
 
 Bun.serve({ port, fetch: app.fetch })
+
+
+// SHOGO:CUSTOM-START preview-prefix
+// The canvas preview proxy mounts this app under /p/<projectId>/ and the client
+// is built with that base, so asset and API requests arrive with the prefix on
+// the path. Without stripping it no route matches, every request falls through
+// to the SPA catch-all below, and the browser receives index.html where it
+// expects a JS module — the bundle never executes and #root stays empty.
+app.use('*', async (c, next) => {
+  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
+  if (!m) return next()
+  const url = new URL(c.req.url)
+  url.pathname = m[1] || '/'
+  return app.fetch(new Request(url, c.req.raw))
+})
+// SHOGO:CUSTOM-END

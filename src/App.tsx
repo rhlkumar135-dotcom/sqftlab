@@ -10,6 +10,7 @@ import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
 import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
+import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
 import SNAPSHOT from '@/data/snapshot.json'
 
@@ -127,7 +128,7 @@ const NAV = [
   { id: 'yield' as Page, label: 'Yield Calc', icon: Calculator },
 ]
 
-function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
+function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { currency, setCurrency } = useCurrency()
 
@@ -136,9 +137,9 @@ function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
       {/* Brand gradient strip */}
       <div className="h-[1.5px] w-full" style={{ background: 'linear-gradient(90deg, #2563EB, #6366F1, #0EA5E9)' }} />
 
-      <div className="max-w-[1400px] mx-auto px-4 h-[60px] flex items-center justify-between">
+      <div className="max-w-[1400px] mx-auto px-4 h-[60px] flex items-center justify-between gap-3 min-w-0">
         {/* Logo */}
-        <button onClick={() => setPage('landing')} className="flex items-center gap-2 group">
+        <button onClick={() => setPage('landing')} className="flex items-center gap-2 group shrink-0">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
             <rect width="32" height="32" rx="8" fill="rgba(255,255,255,0.92)" stroke="rgba(37,99,235,0.2)" strokeWidth="0.75"/>
             <rect x="6" y="6" width="20" height="20" rx="2" fill="none" stroke="#2563EB" strokeWidth="0.9" strokeOpacity="0.18" strokeDasharray="2.5 2"/>
@@ -158,7 +159,7 @@ function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
         </button>
 
         {/* Desktop nav */}
-        <div className="hidden md:flex items-center gap-1">
+        <div className="hidden md:flex items-center gap-1 min-w-0 overflow-x-auto [scrollbar-width:none]">
           {NAV.map(n => (
             <button key={n.id} onClick={() => setPage(n.id)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[13px] transition-all duration-200"
@@ -173,7 +174,8 @@ function Nav({ page, setPage }: { page: Page; setPage: (p: Page) => void }) {
         </div>
 
         {/* Right side */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-3 shrink-0">
+          <LiveBadge live={live} />
           {/* Currency pills */}
           <div className="flex gap-0.5 p-0.5 rounded-lg" style={{ background: 'var(--g3)' }}>
             {(['AED', 'USD', 'GBP', 'INR'] as Currency[]).map(c => (
@@ -2764,6 +2766,9 @@ function AppInner() {
   const [selectedCommunity, setSelectedCommunity] = useState('dubai-marina')
   const [selectedListing, setSelectedListing] = useState('')
 
+  // Spec Part 16 — one SSE connection for the whole app.
+  const live = useLiveMarket()
+
   // Deep-link bridge: DataLabel ⓘ tooltips link to #glossary-<slug>, which must
   // open the glossary page before the anchor can be scrolled to.
   useEffect(() => {
@@ -2777,7 +2782,7 @@ function AppInner() {
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--page)', fontFamily: 'var(--font-ui)' }}>
-      <Nav page={page} setPage={setPage} />
+      <Nav page={page} setPage={setPage} live={live} />
       {page === 'landing' && <Landing setPage={setPage} setSelectedListing={setSelectedListing} />}
       {page === 'dashboard' && <HeatmapDashboard setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'community' && <CommunityDetail slug={selectedCommunity} setPage={setPage} />}

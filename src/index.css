@@ -24,6 +24,14 @@ body {
 /* ── Data font ── */
 .mono { font-family: var(--font-data); }
 
+/* ── Spec Part 10.2 naming ──
+   The app styles with .g1–.g4; the spec names these same surfaces
+   .glass-nav / .glass-card / .glass-sub. Aliased so either name works. */
+.glass-nav  { background: var(--g1); backdrop-filter: var(--gblur-nav); -webkit-backdrop-filter: var(--gblur-nav); border-bottom: 1px solid var(--gb); }
+.glass-card { background: var(--g2); backdrop-filter: var(--gblur); -webkit-backdrop-filter: var(--gblur); border: 1px solid var(--gb); border-radius: var(--r); box-shadow: var(--sh-card); }
+.glass-sub  { background: var(--g3); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.75); border-radius: var(--r-md); }
+.glass-card:hover { border-color: rgba(37,99,235,0.30); transform: translateY(-4px); box-shadow: var(--sh-lift); transition: all 300ms var(--ease); }
+
 /* ── Skeleton ── */
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 .sk { background: linear-gradient(90deg, rgba(255,255,255,0.42) 25%, rgba(255,255,255,0.72) 50%, rgba(255,255,255,0.42) 75%); background-size: 200% 100%; animation: shimmer 1.6s infinite; border-radius: 6px; }

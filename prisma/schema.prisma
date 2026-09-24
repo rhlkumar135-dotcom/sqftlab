@@ -80,10 +80,24 @@ model Transaction {
   registeredAt    DateTime @default(now()) @map("registered_at")
   source          String   @default("dld_dubai")
 
+  // Spec Part 4: fields that power Building Intelligence, Institutional Flow
+  // and the Migration Signal. All nullable so the existing rows stay valid.
+  buildingName    String?  @map("building_name")
+  projectName     String?  @map("project_name")
+  masterProject   String?  @map("master_project")
+  floorNumber     Int?     @map("floor_number")
+  buyerType       String?  @map("buyer_type") // individual | corporate
+  buyerNationality String? @map("buyer_nationality")
+
   community Community @relation(fields: [communityId], references: [id])
 
   @@index([communityId])
   @@index([transactionDate])
+  @@index([communityId, transactionDate])
+  @@index([buildingName, communityId]) // building profiles
+  @@index([buyerType, communityId]) // institutional flow
+  @@index([buyerNationality, transactionDate]) // migration signal
+  @@index([pricePerSqft])
   @@map("transactions")
 }
 
@@ -248,4 +262,262 @@ model Subscription {
   user User @relation(fields: [userId], references: [id])
 
   @@map("subscriptions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Spec Part 4 — intelligence models.
+// Where the spec targets Postgres these are ported to SQLite: scalar lists and
+// Json columns become TEXT, and the Postgres materialized views become cached
+// tables recomputed by the intelligence pipeline (see src/server/intelligence).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Rolled-up per-district metrics — replaces the district_summary matview.
+model DistrictMetrics {
+  id             String   @id @default(cuid())
+  district       String // community slug
+  city           String   @default("Dubai")
+  period         String   @default("30d") // 1d | 7d | 30d | 90d | 365d
+  avgPricePsf    Float?   @map("avg_price_psf")
+  medianPricePsf Float?   @map("median_price_psf")
+  medianPrice    Float?   @map("median_price")
+  totalVolume    Int      @default(0) @map("total_volume")
+  totalValueAed  Float    @default(0) @map("total_value_aed")
+  avgYield       Float?   @map("avg_yield")
+  ejariYield     Float?   @map("ejari_yield")
+  priceChange1m  Float?   @map("price_change_1m")
+  priceChange3m  Float?   @map("price_change_3m")
+  priceChange6m  Float?   @map("price_change_6m")
+  priceChange12m Float?   @map("price_change_12m")
+  momentumScore  Float?   @map("momentum_score")
+  listingsCount  Int?     @map("listings_count")
+  dealsCount     Int?     @map("deals_count")
+  supplyScore    Float?   @map("supply_score")
+  calculatedAt   DateTime @default(now()) @map("calculated_at")
+
+  @@unique([district, period])
+  @@index([district])
+  @@index([momentumScore])
+  @@map("district_metrics")
+}
+
+// Spec Part 6.1 — Real Price Index. The canonical AED/sqft number.
+model RealPriceIndex {
+  id               String   @id @default(cuid())
+  district         String
+  propertyType     String   @default("All") // Apartment | Villa | All
+  bedrooms         Int      @default(-1) // -1 = all bedroom counts
+  period           String   @default("daily")
+  indexDate        DateTime @map("index_date")
+  indexValue       Float    @map("index_value")
+  cpiAdjusted      Float?   @map("cpi_adjusted")
+  transactionCount Int      @default(0) @map("transaction_count")
+  baseDate         DateTime @default(now()) @map("base_date")
+  calculatedAt     DateTime @default(now()) @map("calculated_at")
+
+  @@unique([district, propertyType, bedrooms, period, indexDate])
+  @@index([district, indexDate])
+  @@map("real_price_index")
+}
+
+// Spec Part 6.2 — Building Intelligence Profile. The most granular product.
+model BuildingProfile {
+  id                  String @id @default(cuid())
+  buildingNameEn      String @map("building_name_en")
+  communityEn         String @map("community_en")
+  district            String
+
+  totalDldUnits       Int?   @map("total_dld_units")
+  psfTrend3m          Float? @map("psf_trend_3m")
+  psfTrend12m         Float? @map("psf_trend_12m")
+  psfVsCommunity      Float? @map("psf_vs_community")
+  psfVsDistrict       Float? @map("psf_vs_district")
+
+  avgDaysToResale     Float? @map("avg_days_to_resale")
+  liquidityScore      Float? @map("liquidity_score")
+  transactionCount12m Int?   @map("transaction_count_12m")
+
+  ownerOccupierRatio  Float? @map("owner_occupier_ratio")
+  buyerHoldRate       Float? @map("buyer_hold_rate")
+
+  ejariDensity        Float? @map("ejari_density")
+  avgContractedRent   Float? @map("avg_contracted_rent")
+
+  floorPremiumPct     Float? @map("floor_premium_pct")
+  floorPremiumSamples Int?   @map("floor_premium_samples")
+  floorPremiumR2      Float? @map("floor_premium_r2")
+
+  intelligenceScore   Float?   @map("intelligence_score")
+  scoreUpdatedAt      DateTime? @map("score_updated_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([buildingNameEn, communityEn])
+  @@index([district])
+  @@index([intelligenceScore])
+  @@index([communityEn])
+  @@map("building_profiles")
+}
+
+// Spec Part 6.5 — Institutional Flow Tracker (smart money).
+model InstitutionalTransaction {
+  id             String   @id @default(cuid())
+  entityName     String   @map("entity_name")
+  entityType     String   @default("unknown") @map("entity_type")
+  district       String
+  communityEn    String?  @map("community_en")
+  buildingNameEn String?  @map("building_name_en")
+  unitCount      Int      @default(0) @map("unit_count")
+  totalValue     Float    @default(0) @map("total_value")
+  avgPsf         Float?   @map("avg_psf")
+  firstDate      DateTime @map("first_date")
+  lastDate       DateTime @map("last_date")
+  transactionIds String?  @map("transaction_ids") // comma-separated
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([district, firstDate])
+  @@index([entityName])
+  @@map("institutional_transactions")
+}
+
+// Spec Part 6.6 — Construction Pipeline Pressure.
+model SupplyPipeline {
+  id             String   @id @default(cuid())
+  district       String
+  expectedUnits  Int      @default(0) @map("expected_units")
+  expectedQ      String?  @map("expected_q")
+  absorptionRate Float?   @map("absorption_rate")
+  supplyMonths   Float?   @map("supply_months")
+  pressureScore  Float?   @map("pressure_score")
+  calculatedAt   DateTime @default(now()) @map("calculated_at")
+
+  @@unique([district])
+  @@index([district])
+  @@index([pressureScore])
+  @@map("supply_pipeline")
+}
+
+// Spec Part 6.7 — Economic Sensitivity Score.
+model MacroSensitivity {
+  id           String   @id @default(cuid())
+  district     String
+  betaOilPrice Float?   @map("beta_oil_price")
+  betaUsdAed   Float?   @map("beta_usd_aed")
+  betaVix      Float?   @map("beta_vix")
+  betaGdp      Float?   @map("beta_gdp")
+  betaTourism  Float?   @map("beta_tourism")
+  rSquared     Float?   @map("r_squared")
+  calculatedAt DateTime @default(now()) @map("calculated_at")
+
+  @@unique([district])
+  @@index([district])
+  @@map("macro_sensitivity")
+}
+
+// Spec Part 6.4 — Migration Signal (nationality flow).
+model NationalityFlow {
+  id               String   @id @default(cuid())
+  nationality      String
+  district         String
+  month            DateTime
+  transactionCount Int      @default(0) @map("transaction_count")
+  totalValueAed    Float    @default(0) @map("total_value_aed")
+  avgPsf           Float?   @map("avg_psf")
+  shareOfTotal     Float?   @map("share_of_total")
+  calculatedAt     DateTime @default(now()) @map("calculated_at")
+
+  @@unique([nationality, district, month])
+  @@index([nationality, month])
+  @@index([district, month])
+  @@map("nationality_flow")
+}
+
+// Global market summary — powers the KPI strip.
+model MarketSummary {
+  id                String   @id @default(cuid())
+  avgPricePsfDubai  Float?   @map("avg_price_psf_dubai")
+  avgPricePsfAD     Float?   @map("avg_price_psf_ad")
+  totalTransactions Int?     @map("total_transactions")
+  totalValueAed     Float?   @map("total_value_aed")
+  avgRentalYield    Float?   @map("avg_rental_yield")
+  ejariAvgYield     Float?   @map("ejari_avg_yield")
+  momentumIndex     Float?   @map("momentum_index")
+  transactionsDelta Float?   @map("transactions_delta")
+  psfDelta          Float?   @map("psf_delta")
+  yieldDelta        Float?   @map("yield_delta")
+  period            String   @default("30d")
+  computedAt        DateTime @default(now()) @map("computed_at")
+
+  @@index([computedAt])
+  @@map("market_summary")
+}
+
+model ExchangeRate {
+  id        String   @id @default(cuid())
+  base      String   @default("AED")
+  usd       Float?
+  gbp       Float?
+  eur       Float?
+  inr       Float?
+  pkr       Float?
+  cny       Float?
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+
+  @@index([fetchedAt])
+  @@map("exchange_rates")
+}
+
+model MacroIndicator {
+  id        String   @id @default(cuid())
+  indicator String // uae_cpi | uae_gdp | oil_price | vix
+  value     Float
+  period    String
+  source    String
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+
+  @@unique([indicator, period])
+  @@index([indicator, period])
+  @@map("macro_indicators")
+}
+
+model POI {
+  id        String   @id @default(cuid())
+  name      String
+  type      String // metro | bus | school | hospital | mall | park | gym
+  district  String?
+  lat       Float
+  lng       Float
+  tags      String? // JSON-encoded
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+
+  @@index([type])
+  @@index([district])
+  @@map("pois")
+}
+
+// Spec Part 8 — /api/img proxy cache.
+model ImageCache {
+  id          String    @id @default(cuid())
+  externalUrl String    @unique @map("external_url")
+  localPath   String?   @map("local_path")
+  contentType String?   @map("content_type")
+  sizeBytes   Int?      @map("size_bytes")
+  fetchedAt   DateTime  @default(now()) @map("fetched_at")
+  expiresAt   DateTime? @map("expires_at")
+
+  @@map("image_cache")
+}
+
+model ScraperLog {
+  id         String    @id @default(cuid())
+  source     String
+  status     String // running | success | error
+  recordsNew Int?      @map("records_new")
+  recordsUpd Int?      @map("records_upd")
+  errorMsg   String?   @map("error_msg")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  durationMs Int?      @map("duration_ms")
+
+  @@index([source, startedAt])
+  @@map("scraper_logs")
 }
