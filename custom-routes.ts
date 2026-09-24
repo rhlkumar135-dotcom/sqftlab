@@ -66,7 +66,20 @@ app.get('/sqftlab/communities', async (c) => {
       scoreRetail: true, scoreParks: true, scoreWorship: true,
     },
   })
-  return c.json({ communities })
+
+  // Per-district deal count, for the heatmap's Deals layer and the district
+  // side panel. One grouped query rather than a count per community, which
+  // would be N+1 across every district.
+  const dealGroups = await prisma.listing.groupBy({
+    by: ['communityId'],
+    where: { isDeal: true },
+    _count: { _all: true },
+  })
+  const dealsByCommunity = new Map(dealGroups.map((g) => [g.communityId, g._count._all]))
+
+  return c.json({
+    communities: communities.map((c) => ({ ...c, dealCount: dealsByCommunity.get(c.id) ?? 0 })),
+  })
 })
 
 app.get('/sqftlab/communities/:slug', async (c) => {

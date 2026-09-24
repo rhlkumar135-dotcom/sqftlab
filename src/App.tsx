@@ -13,6 +13,10 @@ import { Glossary } from '@/components/Glossary'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
 import SNAPSHOT from '@/data/snapshot.json'
+// Leaflet's stylesheet, bundled rather than pulled from unpkg. The map controls,
+// zoom buttons and tooltip chrome all depend on it, so an unreachable CDN left the
+// heat map visibly broken while the JS kept working.
+import 'leaflet/dist/leaflet.css'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -23,6 +27,7 @@ interface Community {
   priceChange1y: number; transactionCount30d: number; totalTransactions: number
   scoreSchools: number; scoreHealthcare: number; scoreMetro: number
   scoreRetail: number; scoreParks: number; scoreWorship: number
+  dealCount?: number
 }
 
 interface Listing {
@@ -364,9 +369,29 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
 
 // ─── Heatmap Dashboard (Leaflet) ────────────────────────────────────────────
 
+// Part 7.2 — the heatmap's metric layers. Each entry knows how to read its value
+// off a district, how to render it, and whether it diverges around zero, so the
+// toggle stays one source of truth instead of a chain of conditionals.
+type LayerId = 'psf' | 'yield' | 'momentum' | 'deals' | 'volume'
+
+const LAYERS: {
+  id: LayerId
+  label: string
+  value: (c: Community) => number
+  format: (n: number) => string
+  signed?: boolean
+}[] = [
+  { id: 'psf', label: 'PSF', value: (c) => c.medianAedSqft, format: (n) => `AED ${Math.round(n).toLocaleString()}` },
+  { id: 'yield', label: 'Yield', value: (c) => c.grossYieldPct, format: (n) => `${n.toFixed(1)}%` },
+  { id: 'momentum', label: 'Momentum', value: (c) => c.priceChange30d, format: (n) => PCT(n), signed: true },
+  { id: 'deals', label: 'Deals', value: (c) => c.dealCount ?? 0, format: (n) => `${n} ${n === 1 ? 'deal' : 'deals'}` },
+  { id: 'volume', label: 'Volume', value: (c) => c.totalTransactions, format: (n) => `${n.toLocaleString()} txns` },
+]
+
 function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
   const [communities, setCommunities] = useState<Community[]>([])
   const [emirate, setEmirate] = useState('all')
+  const [layer, setLayer] = useState<LayerId>('psf')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const mapRef = useRef<HTMLDivElement>(null)
@@ -385,22 +410,31 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
       const map = L.map(mapRef.current!, { zoomControl: false, attributionControl: true }).setView([25.2, 55.27], 10)
       L.control.zoom({ position: 'topright' }).addTo(map)
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap © CARTO', maxZoom: 19 }).addTo(map)
-      const minPsf = Math.min(...communities.map(c => c.medianAedSqft).filter(v => v > 0))
-      const maxPsf = Math.max(...communities.map(c => c.medianAedSqft))
-      const maxTx = Math.max(...communities.map(c => c.transactionCount30d))
+      const def = LAYERS.find((l) => l.id === layer) ?? LAYERS[0]
+      const vals = communities.map(def.value).filter((v) => Number.isFinite(v))
+      const minV = Math.min(...vals)
+      const maxV = Math.max(...vals)
+      const maxTx = Math.max(...communities.map(c => c.transactionCount30d), 1)
       communities.forEach(c => {
         if (c.latitude === 0 && c.longitude === 0) return
-        const t = (c.medianAedSqft - minPsf) / (maxPsf - minPsf || 1)
+        const v = def.value(c)
+        const t = (v - minV) / (maxV - minV || 1)
         const r = 8 + (c.transactionCount30d / maxTx) * 20
-        const color = t < 0.33 ? 'var(--up)' : t < 0.66 ? 'var(--b500)' : 'var(--b800)'
+        // A signed metric (momentum) diverges around zero, so a falling district
+        // must read as falling; everything else uses the low→high ramp.
+        const color = def.signed
+          ? (v < 0 ? 'var(--down)' : t < 0.5 ? 'var(--b500)' : 'var(--up)')
+          : t < 0.33 ? 'var(--up)' : t < 0.66 ? 'var(--b500)' : 'var(--b800)'
         const circle = L.circleMarker([c.latitude, c.longitude], { radius: r, fillColor: color, fillOpacity: 0.7, color: '#fff', weight: 2 }).addTo(map)
-        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:180px"><div style="font-weight:600;font-size:13px;margin-bottom:4px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">AED ${c.medianAedSqft.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d</div></div><div><div style="font-weight:600">${c.transactionCount30d}</div><div style="color:var(--ink-5);font-size:10px">txns</div></div></div></div>`, { className: 'sqftlab-tooltip' })
+        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">AED ${c.medianAedSqft.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
         circle.on('click', () => { setSelectedCommunity(c.slug); setPage('community') })
       })
       mapInstanceRef.current = map
     }).catch(() => {})
     return () => { if (mapInstanceRef.current) { (mapInstanceRef.current as { remove: () => void }).remove(); mapInstanceRef.current = null } }
-  }, [communities, emirate])
+  }, [communities, emirate, layer])
+
+  const activeLayer = LAYERS.find((l) => l.id === layer) ?? LAYERS[0]
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 py-6">
@@ -417,6 +451,16 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
               className="px-3 py-1.5 rounded-[10px] text-xs font-medium transition-all"
               style={{ background: emirate === e ? 'var(--b600)' : 'transparent', color: emirate === e ? '#fff' : 'var(--ink-4)' }}>
               {e === 'all' ? 'All UAE' : e === 'dubai' ? 'Dubai' : 'Abu Dhabi'}
+            </button>
+          ))}
+        </div>
+        {/* Metric layer toggle — Part 7.2 */}
+        <div className="flex gap-0.5 p-0.5 rounded-[14px] max-w-full overflow-x-auto" style={{ background: 'var(--g2)', border: '1px solid var(--gb)' }}>
+          {LAYERS.map(l => (
+            <button key={l.id} onClick={() => setLayer(l.id)} aria-pressed={layer === l.id}
+              className="px-3 py-1.5 rounded-[10px] text-xs font-medium transition-all whitespace-nowrap"
+              style={{ background: layer === l.id ? 'var(--b600)' : 'transparent', color: layer === l.id ? '#fff' : 'var(--ink-4)' }}>
+              {l.label}
             </button>
           ))}
         </div>
@@ -437,10 +481,20 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
         )}
       </div>
 
-      <div className="flex items-center gap-4 mt-3 text-xs" style={{ color: 'var(--ink-5)' }}>
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--up)' }} /> Low AED/sqft</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b500)' }} /> Medium</div>
-        <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b800)' }} /> High</div>
+      <div className="flex items-center gap-4 mt-3 text-xs flex-wrap" style={{ color: 'var(--ink-5)' }}>
+        {activeLayer.signed ? (
+          <>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--down)' }} /> Falling</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b500)' }} /> Flat</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--up)' }} /> Rising</div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--up)' }} /> Low {activeLayer.label}</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b500)' }} /> Medium</div>
+            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b800)' }} /> High</div>
+          </>
+        )}
         <span>·</span><span>Circle size = transaction volume</span>
       </div>
 
@@ -2298,13 +2352,24 @@ function IntelligencePage({ setPage }: { setPage: (p: Page) => void }) {
 
   useEffect(() => {
     let alive = true
-    fetch('/api/sqftlab/intelligence')
-      .then(async (r) => {
-        const body = await r.json().catch(() => ({}))
-        if (!r.ok) throw new Error(body.error || `Request failed (${r.status})`)
-        return body as IntelligenceData
+    // safeFetch, not a raw fetch. On a host with no API behind it (the static
+    // publish, the canvas preview) this path returns the SPA shell with a 200,
+    // so r.json() rejected, `.catch(() => ({}))` degraded the payload to {},
+    // and because r.ok was true the page then dereferenced data.overview — an
+    // uncaught TypeError that unmounted the whole tree and rendered blank.
+    // safeFetch only accepts real JSON and otherwise serves the register baked
+    // into src/data/snapshot.json at build time.
+    safeFetch<IntelligenceData | null>('/api/sqftlab/intelligence', null)
+      .then((d) => {
+        if (!alive) return
+        // A payload without `overview` is not usable — say so rather than
+        // dereferencing it and taking the page down.
+        if (!d || !d.overview) {
+          setError('Intelligence data is unavailable right now.')
+          return
+        }
+        setData(d)
       })
-      .then((d) => { if (alive) setData(d) })
       .catch((e: Error) => { if (alive) setError(e.message) })
     return () => { alive = false }
   }, [])
