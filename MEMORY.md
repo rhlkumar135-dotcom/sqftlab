@@ -497,3 +497,58 @@ Dubai Pulse DLD key, ADREC/Ejari, Resend, Sentry, WhatsApp Business, Redis.
 Everything degrades gracefully without them. The spec is written for Next.js —
 this app is Vite + React + Hono, so `generateStaticParams`/`next-auth`/`/pages`
 idioms do not apply; use the Shogo SDK for auth instead.
+
+---
+
+## Real data sources — the dataset was entirely synthetic (commit bdc193c)
+
+### What was actually in the database
+
+Every listing and transaction came from `scripts/seed-pg.ts` (`Math.random()`),
+stamped with real source names and rendered in the UI as "DLD · Dubai Pulse API".
+**Production seeded itself on every Railway boot.** Tells: DLD ids are
+`DLD-DUB-<13-digit-ms>-<n>` (one shared timestamp + counter); only 10 distinct
+"agents" across 607 listings; 0 Traheesi permits. I previously described this data
+as real — I inferred provenance from `source` fields and id prefixes instead of
+verifying. Don't do that.
+
+### Three latent bugs meant the real scraper could never run, on ANY database
+
+1. `import { PrismaClient } from '@prisma/client'` — the generated client lives at
+   `src/generated/prisma`; import `prisma` from `src/lib/db` instead.
+2. `upsert({ where: { externalId } })` on a field that was only `@@index`ed, not
+   `@unique`. Fixed in the schema.
+3. `property.size` is `{value, unit}`, not a number — so `areaSqft` was an object
+   (upsert rejected) AND `object > 0` is false, silently forcing `pricePerSqft = 0`.
+
+Also: `mode: 'insensitive'` is **Postgres-only** and throws on SQLite — 2 sites
+(`scraper-pf.ts`, `custom-routes.ts`). Use `src/lib/community-match.ts`.
+
+### Attribution bug worth remembering
+
+The scraper resolved the community from each listing's `location.name`, which for
+PropertyFinder is usually a **building** ("AG Tower", "Building Y16"). That grew
+`communities` 39 → 479 with phantom market areas. Attribute to the **area queried**.
+
+### `shogo generate` trap, round 4 — and a permanent fix for the CORS half
+
+Regeneration again stripped both `SHOGO:CUSTOM` regions and restored the wildcard.
+Permanent fix: set **`"cors": false`** in `shogo.config.json` `serverConfig`. The
+generator then emits no CORS middleware at all, and the durable policy in
+`custom-routes.ts` is the only one. The `asset-routing` region still needs
+re-adding by hand after each schema change.
+
+### Honesty invariants now enforced by tests
+
+- Unconfigured source → cron status `skipped`, never `failed`.
+- Empty transaction-derived output → must carry `insufficientData` + `reason`.
+- `psfSource` is `dld | listing | none`; a community with neither transactions nor
+  sale listings was being labelled `listing`, asserting a source that didn't exist.
+- Test assertions that required populated transaction data now accept
+  "empty AND explained" — otherwise they encode the fabricated world.
+
+### Source availability (verified)
+
+PropertyFinder: keyless, works. Dubai Pulse: reachable, 401 without a key (free
+self-serve). ADREC: **no self-serve API** — subscription by request form; the
+spec's "free, no key" was wrong. ADREC's response mapping is unverified.
