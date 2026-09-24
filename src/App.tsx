@@ -256,8 +256,17 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
     let stopped = false
     const load = () =>
       safeFetch<{ ageMs?: number | null; healthy?: boolean; lastStatus?: string | null } | null>('/api/sqftlab/cron/status', null)
-        .then((d) => { if (!stopped && d) setFresh({ ageMs: d.ageMs ?? null, healthy: !!d.healthy, lastStatus: d.lastStatus ?? null }) })
-        .catch(() => {})
+        .then((d) => {
+          if (stopped) return
+          // A static deployment serves the SPA shell for /api/*, so a "successful"
+          // fetch can still carry HTML. Only trust a payload that looks like ours.
+          if (d && typeof d === 'object' && 'expectedIntervalMs' in d) {
+            setFresh({ ageMs: d.ageMs ?? null, healthy: !!d.healthy, lastStatus: d.lastStatus ?? null })
+          } else {
+            setFresh({ ageMs: null, healthy: false, lastStatus: null })
+          }
+        })
+        .catch(() => { if (!stopped) setFresh({ ageMs: null, healthy: false, lastStatus: null }) })
     load()
     const t = setInterval(load, 60_000)
     return () => { stopped = true; clearInterval(t) }
@@ -276,7 +285,9 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
               <span>
                 {fresh?.ageMs != null
                   ? `Live UAE property intelligence · data refreshed ${relAge(fresh.ageMs)}${fresh.healthy ? '' : ' · refresh overdue'}`
-                  : 'UAE property intelligence · checking data freshness…'}
+                  : fresh
+                    ? 'UAE property intelligence · refreshed hourly'
+                    : 'UAE property intelligence · checking data freshness…'}
               </span>
             </div>
           </FadeIn>
