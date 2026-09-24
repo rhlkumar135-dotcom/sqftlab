@@ -181,3 +181,37 @@ from local. Always `git fetch` and compare before assuming state, then
 - **TASK 11** `Subscription` model. **`GET /api/sqftlab/me`** returns the demo user's
   tier; the `/alerts` Elite gate now resolves against it, so an entitled account sees a
   working page instead of a permanent "Coming soon" overlay.
+
+## Second half of the blank-page bug: the published site (2026-09-24)
+
+Fixing `server.tsx` fixed the **local** preview only. The **published** site was still
+blank, for a related but distinct reason:
+
+- The static publish host serves assets from the **site root**: `/assets/index-*.js`
+  → `200 application/javascript`.
+- But the runtime builds with `--base /p/<projectId>/`, so `index.html` shipped
+  `/p/<id>/assets/index-*.js`. That path matches no file on the static host, so it
+  falls through to the SPA fallback and returns **HTML for a JS module** → blank page.
+
+`/assets/...` works on BOTH hosts (verified on the live site and locally), so the fix
+is to make `index.html` reference root-absolute asset paths.
+
+Two mechanisms, both committed:
+1. **`vite.config.ts` → `relativeAssetBase()` plugin** (authoritative) rewrites the
+   tags via `transformIndexHtml`. The runtime merges this config, so it applies on
+   every build — **but only after the watcher restarts**: `vite build --watch` reads
+   its config once at process start, so editing `vite.config.ts` does NOT take effect
+   on a live watcher.
+2. **`node scripts/fix-html-base.mjs`** rewrites `dist/index.html` in place. Run this
+   after any rebuild and **before publishing** while the plugin is not yet active.
+   Idempotent.
+
+⚠️ Consequence to remember: any rebuild by the current watcher reverts
+`dist/index.html` to the prefixed URLs. If a src change triggers a rebuild, re-run
+`scripts/fix-html-base.mjs` before publishing, or restart the watcher so the plugin
+takes over.
+
+Verified live on 2026-09-24: `/assets/index-*.js` → `200 application/javascript`,
+`#root` innerHTML 23,532 chars, height 1,962px, Markets table with 40 districts,
+forecast chart (R² 0.04, projected Feb 2027 3,749 AED/sqft), Alerts form ungated,
+zero console errors.
