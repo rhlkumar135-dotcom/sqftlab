@@ -24,9 +24,28 @@ ENDPOINTS = [
     "/api/sqftlab/portfolio",
     "/api/sqftlab/watchlist",
     "/api/sqftlab/alerts",
+    "/api/sqftlab/alerts/matches",
+    "/api/sqftlab/alert-rules",
+    "/api/sqftlab/me",
+    "/api/sqftlab/markets",
     "/api/sqftlab/market/analytics",
     "/api/sqftlab/predictions",
     "/api/sqftlab/intelligence",
+]
+
+# The forecast page is per-district, so a single path-level snapshot would serve
+# one district's projection for every district. Capture each one under its full
+# URL (including the query) and let safeFetch prefer the exact-URL key.
+FORECAST_MONTHS = 6
+MARKET_FILTERS = [
+    "/api/sqftlab/markets?emirate=all&type=any",
+    "/api/sqftlab/markets?emirate=dubai&type=any",
+    "/api/sqftlab/markets?emirate=abu_dhabi&type=any",
+    "/api/sqftlab/markets?emirate=sharjah&type=any",
+    "/api/sqftlab/markets?emirate=all&type=apartment",
+    "/api/sqftlab/markets?emirate=all&type=villa",
+    "/api/sqftlab/markets?emirate=all&type=townhouse",
+    "/api/sqftlab/markets?emirate=all&type=commercial",
 ]
 
 
@@ -53,6 +72,23 @@ def main():
             continue
         snap[path] = data
         print(f"  {path:36} ok")
+
+    for path in MARKET_FILTERS:
+        data = get(path)
+        if data is not None:
+            snap[path] = data
+    print(f"  markets: {len(MARKET_FILTERS)} filter combinations captured")
+
+    slugs = [c["slug"] for c in (snap.get("/api/sqftlab/communities", {}).get("communities") or [])]
+    got = 0
+    for slug in slugs:
+        path = f"/api/sqftlab/forecast?district={slug}&months={FORECAST_MONTHS}"
+        data = get(path)
+        if data is None or not data.get("forecast"):
+            continue
+        snap[path] = data
+        got += 1
+    print(f"  forecast: {got}/{len(slugs)} districts captured")
 
     rows = []
     total = None

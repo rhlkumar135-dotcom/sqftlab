@@ -102,7 +102,10 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
   } catch { /* no backend reachable — fall through to the baked snapshot */ }
   // Static deployments (and any moment the API is down) serve the register from a
   // snapshot baked at build time, so the site shows real data instead of placeholders.
-  const baked = (SNAPSHOT as Record<string, unknown>)[url.split('?')[0]]
+  // Prefer an exact-URL key (per-district forecasts, filtered market queries) and
+  // fall back to the path-level entry.
+  const snap = SNAPSHOT as Record<string, unknown>
+  const baked = snap[url] ?? snap[url.split('?')[0]]
   return baked !== undefined ? (baked as T) : fallback
 }
 
