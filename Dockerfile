@@ -16,6 +16,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gawk ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# Railway exports the deployed commit to the build. Declared as an ARG because
+# a Docker build only sees build-stage variables that are explicitly declared —
+# without this, vite.config.ts cannot read it and stamps "unknown" instead.
+# The stamp is what makes "is the live site stale?" answerable from View Source
+# rather than guesswork, so it needs to carry a real revision.
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV RAILWAY_GIT_COMMIT_SHA=${RAILWAY_GIT_COMMIT_SHA}
+
 # Source first, then a single build step: prisma generate + shogo generate +
 # vite build. See scripts/railway-build.sh for what each phase does.
 COPY . .
