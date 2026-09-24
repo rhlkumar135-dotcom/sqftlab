@@ -390,3 +390,50 @@ frankfurter (the old source) **never published INR or PKR**, so both were
 permanently hardcoded and looked like live rates. Now open.er-api.com with a
 5-minute DB cache in `ExchangeRate`. Live values at the time of writing:
 INR 26.09, PKR 75.42.
+
+---
+
+## FIX-12 re-verified, with proof (commit 229fce4)
+
+The `SHOGO:CUSTOM asset-routing` region had reappeared **after `Bun.serve()` and
+after the SPA catch-all** — i.e. registered last, so neither middleware ever ran.
+This is the second time regeneration has relocated a custom region in server.tsx;
+treat "I edited server.tsx" as unverified until `scripts/verify-server-routing.ts`
+passes.
+
+Proof, by stashing the fix and re-running the same harness:
+
+| | before | after |
+|---|---|---|
+| `scripts/verify-server-routing.ts` | **1/6** | **6/6** |
+
+Before, `Cache-Control` was `(none)` everywhere and `/p/<id>/assets/*.js`
+returned `text/html` (index.html) instead of `application/javascript` — the
+bundle never executed, so the canvas preview rendered blank. So "the block
+exists in the file" and "the block runs" are genuinely different questions;
+`verify-server-routing.ts` boots the real app on port 4599 and asks the only
+question that matters.
+
+### Shell gotcha: a stale DATABASE_URL breaks local verify scripts
+
+`DATABASE_URL` was exported in the persistent shell as
+`file:/app/workspace/prisma/dev.db` (workspace root — no such dir), so
+`verify-intel.ts` died with `ConnectionFailed(... 14)` while the managed API
+server was fine (it gets its own value). Export the project path before running
+them:
+
+    export DATABASE_URL="file:$PWD/prisma/dev.db"
+
+### verify-stream hung for 4 minutes
+
+It set `process.exitCode` but never exited, so the open SSE subscription kept the
+event loop alive — the run looked like a timeout even though all 12 assertions
+passed. Now `process.exit()`s in `finally`: 5s, exit 0.
+
+### Verification commands (all green at 229fce4)
+
+    bun run scripts/verify-fixes.ts            # 42/42
+    bun run scripts/verify-intel.ts            # 31/31  (needs DATABASE_URL above)
+    bun run scripts/verify-stream.ts           # 12/12  (~5s)
+    bun run scripts/verify-server-routing.ts   #  6/6
+    bunx tsc --noEmit                          # 0 errors outside src/generated/
