@@ -2,8 +2,8 @@ name = "sqftlab"
 description = "sqftLab - UAE Property Intelligence Platform"
 
 [build]
-builder = "NIXPACKS"
-buildCommand = "bash scripts/railway-build.sh"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "bash scripts/railway-setup.sh"
