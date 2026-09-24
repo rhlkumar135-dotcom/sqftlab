@@ -437,3 +437,63 @@ passed. Now `process.exit()`s in `finally`: 5s, exit 0.
     bun run scripts/verify-stream.ts           # 12/12  (~5s)
     bun run scripts/verify-server-routing.ts   #  6/6
     bunx tsc --noEmit                          # 0 errors outside src/generated/
+
+---
+
+## Hourly refresh cron + server.tsx regeneration, round 3 (commit c232dd7)
+
+### `shogo generate` rewrites server.tsx and STRIPS custom regions
+
+Touching `prisma/schema.prisma` (adding `CronRun`) ran the generator, which
+**deleted both** `SHOGO:CUSTOM` regions from server.tsx **and restored
+`Access-Control-Allow-Origin: *`**. The header's claim "will not be overwritten
+if it exists" is false. Behaviour differs run to run: previously a region was
+preserved-but-relocated; this time it was removed outright. Never trust an edit
+to server.tsx — re-check after every schema change:
+
+    grep -n "SHOGO:CUSTOM-START\|serveStatic\|Bun.serve" server.tsx
+
+### The durable CORS fix
+
+Because the wildcard comes back, the fix lives in `custom-routes.ts`, which is
+never regenerated and is mounted at `/api`:
+
+- headers are applied **after `await next()`** (setting them before writes to a
+  response object the handler then replaces)
+- when the origin is not allowed it **deletes** ACAO/ACAM/ACAH rather than just
+  not setting them — otherwise the generated wildcard survives on /api responses.
+
+### Hourly refresh
+
+`GET|POST /api/sqftlab/cron/hourly?secret=` runs six isolated steps
+(exchangeRates, macro, communityStats, deals, alerts, intelligence), writes a
+`CronRun` row, and returns **207** when some steps failed so "ran clean" is
+distinguishable from "ran but partly fresh". `refreshCommunityStats()` is what
+makes the platform's government-data claim true: 5 grouped queries replace ~160,
+and `psfSource` records dld vs listing. All 39 communities went `listing` → `dld`.
+
+`/cron/status` is public (freshness badge) but hides step detail unless authorised.
+
+### Shell/testing gotchas
+
+- **`safeFetch` + static publish**: `sqftlab.shogo.one/api/*` returns **200 with
+  index.html**, so `r.ok` is true and `r.json()` throws. Validate the payload
+  shape, don't trust the status.
+- **Vite build does not typecheck.** `safeFetch(url, null)` infers `T = null`, so
+  every property access becomes `never` — build green, `tsc` red. Always run tsc.
+- `verify-stream` hard-coded "4 channels"; adding `cron:update` broke it. Update
+  the expectation when the contract genuinely changes.
+- Local verify scripts need `export DATABASE_URL="file:$PWD/prisma/dev.db"` — the
+  persistent shell otherwise points at `/app/workspace/prisma/dev.db`.
+
+### Verification at c232dd7
+
+    verify-fixes 41 · verify-intel 31 · verify-cron 24 · routing 6 · verify-stream 13
+    tsc 0 errors outside src/generated/
+
+### Still credential-blocked (spec Parts B/E/F)
+
+Dubai Pulse DLD key, ADREC/Ejari, Resend, Sentry, WhatsApp Business, Redis.
+Everything degrades gracefully without them. The spec is written for Next.js —
+this app is Vite + React + Hono, so `generateStaticParams`/`next-auth`/`/pages`
+idioms do not apply; use the Shogo SDK for auth instead.
