@@ -284,3 +284,50 @@ libsql path error that looks like a regression but is not.
 `429` (`x-railway-edge: atl1`) on every path, and a non-browser client gets a
 Cloudflare Turnstile "Checking your browser…" page instead of the app. Use the
 View Source stamp from a normal browser to confirm what is live.
+
+---
+
+## 2026-09-24 (later) — "Pro intelligence dashboard not working": the real cause
+
+**The endpoint was never broken.** `GET /api/sqftlab/intelligence` returned correct
+JSON the whole time (12 keys, real values). The bug was in the page's fetch.
+
+`IntelligencePage` used a raw `fetch()` while every other page used the
+`safeFetch` helper (defined near the top of `src/App.tsx`). On any host with no
+API behind it — the static publish, the canvas preview — the response is the SPA
+shell with a **200** status. So:
+
+1. `r.json()` rejects (it is HTML)
+2. the trailing `.catch(() => ({}))` degrades the payload to `{}`
+3. `r.ok` is still **true**, so nothing throws
+4. the page then dereferences `data.overview` → `o.breadth.gainers` → uncaught
+   TypeError → React unmounts the tree → **blank page**
+
+Lesson worth keeping: a `r.ok` check is not a data check. If a fetch can ever be
+answered by an SPA fallback, validate the payload *shape*, or route it through
+`safeFetch` (which only accepts real JSON and otherwise serves
+`src/data/snapshot.json`). Two GET outliers existed; only `/intelligence` was
+unguarded (`/waitlist` had a `.catch`).
+
+**Rebuilt this session** (all had been rolled back; the local checkout keeps
+reverting while `origin/main` keeps the pushed work — check `git status` and
+`git log origin/main` before assuming work is missing):
+
+- Part 7.2 heatmap metric layers: PSF | Yield | Momentum | Deals | Volume, driven
+  by one `LAYERS` table that feeds the toggle, colour ramp, tooltip and legend.
+  Momentum is signed so it diverges around zero. Needs `dealCount` per district —
+  added to `GET /communities` via a single grouped query (not N+1 over 39 rows).
+- Part 9 animations: `framer-motion` + `src/components/anim.tsx`, one `EASE`
+  constant. Nav 400ms, hero tag 500ms, headline words 60ms, KPI count-up 1200ms,
+  card stagger 80ms, hover y-4/300ms.
+- Leaflet's stylesheet is now bundled from `node_modules` instead of unpkg. It
+  was the only CDN dependency in the shell; when unreachable the map controls and
+  tooltips lose all styling while the JS keeps working.
+
+**Verification pattern that earns its keep for animation work:** a build tells you
+nothing about whether a scroll-reveal left content at opacity 0. Query the DOM
+for elements with `opacity < 0.05 && height > 10` and assert the count is 0, and
+assert count-up values settled on real numbers rather than frozen at 0.
+
+⚠️ The two browser agents that ran this session each wrote a stray report `.md`
+into the **workspace root** (not the project). Delete those — don't commit them.
