@@ -215,3 +215,72 @@ Verified live on 2026-09-24: `/assets/index-*.js` → `200 application/javascrip
 `#root` innerHTML 23,532 chars, height 1,962px, Markets table with 40 districts,
 forecast chart (R² 0.04, projected Feb 2027 3,749 AED/sqft), Alerts form ungated,
 zero console errors.
+
+---
+
+## 2026-09-24 — Railway deploy topology, and why "the site looks old"
+
+**Deploy topology (verified via the GitHub deployments API — no Railway login needed):**
+
+| Thing | Value |
+|---|---|
+| GitHub | `rhlkumar135-dotcom/sqftlab`, branch `main` |
+| Railway project | `6fa906c4-c98c-4ed0-beef-62517e7aba41` |
+| Railway service | `sqftlab-v2` — `96ef0019-f86f-4656-b72a-6f81c9f3d9bb` |
+| Environment | `production` — `d44ac2ed-830b-4459-91f8-dc4144e75bbb` |
+| Custom domain | `www.sqftlab.com` (Railway reports it in its commit status) |
+| Build | `Dockerfile` (oven/bun) → `scripts/railway-build.sh` |
+| Start | `scripts/railway-setup.sh` → `bun run server.tsx` on `$PORT` |
+
+Deploys ARE wired: pushing to `main` produces a Railway deployment whose commit
+status reads `Success - www.sqftlab.com`. Check state with
+`GET /repos/rhlkumar135-dotcom/sqftlab/commits/<sha>/status`.
+
+**Traps found while diagnosing "www.sqftlab.com shows an old UI":**
+
+1. **`index.html` had NO `Cache-Control`.** Vite renames assets every build, so a
+   cached shell keeps loading the previous build's asset names — a correctly
+   deployed UI stays invisible indefinitely. `server.tsx` now sends
+   `no-cache, must-revalidate` for HTML and `immutable` for hashed assets.
+2. **The `/p/<projectId>/` rewrite was registered AFTER the SPA catch-all**, so it
+   could never run — Hono dispatches in registration order and the catch-all
+   answers every unmatched path with index.html. Prefixed assets therefore returned
+   `text/html` where a JS module was expected (blank canvas). Moved above the
+   static handlers.
+3. **Unmatched `/api/*` fell through to that same catch-all**, returning HTML with
+   a 200 to API clients. Restored the JSON 404 catch-all — registered as `'*'`,
+   NOT `'/api/*'`, because `server.tsx` mounts that app at `/api`, so its routes
+   are relative (`/sqftlab/...`) and an `/api/*` pattern matches nothing.
+4. **`RAILWAY_GIT_COMMIT_SHA` must be declared as an `ARG`** in the Dockerfile.
+   A Docker build only sees explicitly declared build args; without it the
+   build-identity stamp in `vite.config.ts` writes `"unknown"`.
+5. **`sqrtlab-next/` is a nested git repo committed as a gitlink (mode 160000)
+   with NO `.gitmodules`** — a whole second Next.js app (its own `railway.toml`,
+   `workers/`, `prisma/`, 39MB). A fresh clone yields an EMPTY directory. It is
+   not built by the root Dockerfile, but it is a live foot-gun: if any Railway
+   service's Root Directory is ever pointed there, the build fails on an empty
+   checkout. Decide whether to delete it or make it a real submodule.
+
+**Staleness check — View Source on any host and read the meta tags:**
+
+```
+<meta name="build-sha"  content="<short commit>" />
+<meta name="build-time" content="<ISO timestamp>" />
+```
+
+Emitted by `buildIdentity()` in `vite.config.ts`. A host serving a different SHA,
+or no tag at all, is not serving the current build.
+
+**Verification suites (all green):**
+
+- `bun run scripts/verify-server-routing.ts` — 6/6 routing (prefix, cache headers, JSON 404)
+- `DATABASE_URL="file:./prisma/dev.db" bun run scripts/verify-intel.ts` — 31/31
+- `DATABASE_URL="file:./prisma/dev.db" bun run scripts/verify-stream.ts` — 12/12
+
+⚠️ The two DB-backed suites REQUIRE that `DATABASE_URL`; without it they fail on a
+libsql path error that looks like a regression but is not.
+
+**Cannot be verified from this sandbox:** `www.sqftlab.com` returns Railway-edge
+`429` (`x-railway-edge: atl1`) on every path, and a non-browser client gets a
+Cloudflare Turnstile "Checking your browser…" page instead of the app. Use the
+View Source stamp from a normal browser to confirm what is live.
