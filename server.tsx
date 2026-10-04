@@ -85,12 +85,17 @@ app.use('*', async (c, next) => {
 })
 // SHOGO:CUSTOM-END
 
-// Serve static files in production — AFTER the middleware above, so the prefix
-// rewrite and cache headers actually apply to these responses.
+// ─── Static files + SPA fallback ─────────────────────────────────────────────
+// Deliberately LAST. Hono dispatches in registration order, so the SPA catch-all
+// below answers every unmatched path with index.html — anything registered after
+// it never runs. `shogo generate` moves these back above the custom region on
+// every schema change, which silently turns the asset-routing middleware above
+// into dead code and blanks the preview. `scripts/fix-server-order.ts` repairs
+// the ordering; `scripts/verify-server-routing.ts` detects the regression.
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 
 const port = Number(process.env.PORT) || 3001
 console.log(`🚀 Server running on http://localhost:${port}`)
-
 Bun.serve({ port, fetch: app.fetch })
+

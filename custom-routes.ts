@@ -172,11 +172,6 @@ async function getCallerTier(c: Context): Promise<CallerTier> {
   return (user.subscriptionTier ?? 'free') as CallerTier
 }
 
-/** True when the caller has no account — used to gate premium endpoints. */
-async function isGuest(c: Context): Promise<boolean> {
-  return (await getCallerTier(c)) === 'guest'
-}
-
 /** 401 for a guest hitting a subscriber-only endpoint. */
 function upgradeRequired(c: Context) {
   return c.json(
@@ -1000,10 +995,6 @@ function getUserId(c: Context): string | null {
   return match ? decodeURIComponent(match[1]) : null
 }
 
-function unauthorized(c: Context) {
-  return c.json({ error: 'Unauthorized. Send `Authorization: Bearer <userId>` or a `session` cookie.' }, 401)
-}
-
 // The seeded demo account, resolved by email (falling back to the oldest user)
 // so no cuid is baked into the source.
 async function seededUserId(): Promise<string | null> {
@@ -1017,7 +1008,7 @@ async function seededUserId(): Promise<string | null> {
 
 app.get('/sqftlab/portfolio', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const items = await prisma.portfolio.findMany({
     where: { userId },
@@ -1052,7 +1043,7 @@ app.get('/sqftlab/portfolio', async (c) => {
 // Fields are validated instead.
 app.post('/sqftlab/portfolio', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
   try {
@@ -1109,7 +1100,7 @@ app.post('/sqftlab/portfolio', async (c) => {
 
 app.get('/sqftlab/watchlist', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const items = await prisma.watchlist.findMany({
     where: { userId },
@@ -1240,7 +1231,7 @@ app.get('/sqftlab/listings', async (c) => {
 // shadowing the new CRUD routes.
 app.get('/sqftlab/alert-rules', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const alerts = await prisma.alert.findMany({
     where: { userId },
@@ -1936,7 +1927,7 @@ app.get('/sqftlab/me', async (c) => {
 // GET /sqftlab/alerts — active alerts plus the recent matches they produced.
 app.get('/sqftlab/alerts', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const alerts = await prisma.dealAlert.findMany({
     where: { userId },
@@ -1948,7 +1939,7 @@ app.get('/sqftlab/alerts', async (c) => {
 
 app.get('/sqftlab/alerts/matches', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const matches = await recentMatches(userId)
   return c.json({ matches })
@@ -1958,7 +1949,7 @@ app.get('/sqftlab/alerts/matches', async (c) => {
 // bogus district silently never fires and looks like a broken engine.
 app.post('/sqftlab/alerts', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
   try {
@@ -2008,7 +1999,7 @@ app.post('/sqftlab/alerts', async (c) => {
 // DELETE /sqftlab/alerts/:id — matches cascade via the relation.
 app.delete('/sqftlab/alerts/:id', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   const id = c.req.param('id')
   const existing = await prisma.dealAlert.findFirst({ where: { id, userId } })
@@ -2524,11 +2515,22 @@ app.post('/sqftlab/intelligence/run', async (c) => {
 // Fire the broadcast path without recomputing, so the client can be exercised
 // against a live stream even when nothing has changed on disk.
 app.post('/sqftlab/stream/test-publish', async (c) => {
+  // Track what was actually published. The previous version returned a fixed
+  // list including 'deal:new' regardless of whether a deal existed, so a caller
+  // watching the stream for an event the response promised would wait forever.
+  const published: string[] = []
+
   const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
   publish('market:update', summary ?? { note: 'no market summary computed yet' })
+  published.push('market:update')
+
   const d = (await latestDistrictMetrics())
     .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))[0]
-  if (d) publish('district:update', { district: d.district, momentumScore: d.momentumScore })
+  if (d) {
+    publish('district:update', { district: d.district, momentumScore: d.momentumScore })
+    published.push('district:update')
+  }
+
   const deal = await prisma.listing.findFirst({ where: { isDeal: true } })
   if (deal) {
     publish('deal:new', {
@@ -2537,8 +2539,21 @@ app.post('/sqftlab/stream/test-publish', async (c) => {
       imageUrl: deal.imageUrl, sourceUrl: deal.sourceUrl,
       detectedAt: new Date().toISOString(),
     })
+    published.push('deal:new')
   }
-  return c.json({ ok: true, published: ['market:update', 'district:update', 'deal:new'], ...streamStatus() })
+
+  const skipped = ['district:update', 'deal:new'].filter((ch) => !published.includes(ch))
+  return c.json({
+    ok: true,
+    published,
+    // Nothing to send is a normal state — the 8% deal rule needs DLD medians and
+    // the district feed needs computed metrics. Naming what was skipped keeps a
+    // quiet stream from looking like a broken one.
+    ...(skipped.length
+      ? { skipped, reason: 'No rows matched — deal flags need a 90-day DLD median; district metrics must be computed.' }
+      : {}),
+    ...streamStatus(),
+  })
 })
 
 app.get('/sqftlab/intelligence/status', async (c) => {
@@ -2957,7 +2972,7 @@ app.get('/sqftlab/auth/session', async (c) => {
 // Task C4 — onboarding: role + tracked areas + WhatsApp digest preference.
 app.post('/sqftlab/auth/onboard', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
   try {
@@ -2995,7 +3010,7 @@ app.post('/sqftlab/auth/onboard', async (c) => {
 
 app.get('/sqftlab/api-keys', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
   const keys = await prisma.apiKey.findMany({
     where: { userId, revokedAt: null },
     select: { id: true, prefix: true, name: true, tier: true, callsToday: true, callsMonth: true, lastUsedAt: true, createdAt: true },
@@ -3006,7 +3021,7 @@ app.get('/sqftlab/api-keys', async (c) => {
 
 app.post('/sqftlab/api-keys', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
   try {
@@ -3031,7 +3046,7 @@ app.post('/sqftlab/api-keys', async (c) => {
 
 app.delete('/sqftlab/api-keys/:id', async (c) => {
   const userId = getUserId(c)
-  if (!userId) return unauthorized(c)
+  if (!userId) return upgradeRequired(c)
   const id = c.req.param('id')
   const existing = await prisma.apiKey.findFirst({ where: { id, userId } })
   if (!existing) return c.json({ error: 'API key not found' }, 404)

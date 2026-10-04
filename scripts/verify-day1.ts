@@ -50,6 +50,21 @@ const prisma = new PrismaClient({
 const createdGuestIds: string[] = []
 const demoUser = await prisma.user.findFirst({ where: { email: 'demo@sqftlab.com' } })
 
+// Preflight. Without this, an unreachable API surfaces as a raw
+// ConnectionRefused stack trace pointing at `newGuest()` — and because the throw
+// escapes the try block below, the RESULT line never prints at all. That reads as
+// "the suite produced no result" rather than "the suite could not run", which is
+// exactly how a red run gets mistaken for a green one.
+try {
+  const probe = await fetch(`${API}/health`, { signal: AbortSignal.timeout(5000) })
+  if (!probe.ok) throw new Error(`HTTP ${probe.status}`)
+} catch (e) {
+  console.error(`\n✗ Cannot reach the API at ${API} — ${(e as Error).message}`)
+  console.error(`  Start the server, or target another: API=http://localhost:3101 bun run scripts/verify-day1.ts\n`)
+  await prisma.$disconnect().catch(() => {})
+  process.exit(1)
+}
+
 try {
   console.log('\n── TASK A: schema completeness ─────────────────────────────')
   const tables = (await prisma.$queryRawUnsafe(
@@ -123,9 +138,34 @@ try {
     ['GET /portfolio', '/api/sqftlab/portfolio', undefined],
     ['POST /alerts', '/api/sqftlab/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }],
     ['GET /api-keys', '/api/sqftlab/api-keys', undefined],
+    ['GET /watchlist', '/api/sqftlab/watchlist', undefined],
+    ['GET /alerts/matches', '/api/sqftlab/alerts/matches', undefined],
+    ['GET /alert-rules', '/api/sqftlab/alert-rules', undefined],
+    ['POST /auth/onboard', '/api/sqftlab/auth/onboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }],
   ] as const) {
     const r = await json(path, init ? { ...init, headers: { ...(init.headers ?? {}), Cookie: guest.cookie } } : { headers: { Cookie: guest.cookie } })
     check(`${label} → 401 for a guest`, r.status === 401, r.status)
+    // B3 asks for a 401 *with an upgrade message* — a bare status is not enough,
+    // the client needs something it can render and a route to send them to.
+    check(`${label} → carries message + signInUrl`, r.body?.message && r.body?.signInUrl === '/auth/signin', r.body)
+  }
+
+  // The spec lists POST /sqftlab/cma, /sqftlab/report/property and
+  // /sqftlab/capital-flow/* as guest-blocked. Those routes do not exist in this
+  // app, so there is nothing to gate — asserting their absence keeps the gap
+  // visible instead of implying coverage that isn't there.
+  const absent = new Set<string>()
+  for (const p of ['/api/sqftlab/cma', '/api/sqftlab/report/property', '/api/sqftlab/capital-flow']) {
+    const r = await json(p, { headers: { Cookie: guest.cookie } })
+    if (r.status === 404) absent.add(p)
+  }
+  check('B3 paths absent from this app are 404, not silently allowed', absent.size === 3, [...absent])
+
+  // Payments are disabled, so the subscribe family is a 503 kill switch for
+  // everyone — it short-circuits before any guest check can run.
+  for (const p of ['/api/checkout', '/api/subscribe', '/api/create-payment-intent']) {
+    const r = await json(p, { method: 'POST' })
+    check(`${p} → 503 (payments disabled)`, r.status === 503, r.status)
   }
 
   console.log('\n── TASK C: sign-in ─────────────────────────────────────────')
@@ -238,6 +278,14 @@ try {
     dealsSrc.includes('marketPsfByCommunity') && !/threshold = cm\.medianAedSqft/.test(dealsSrc),
   )
   check('no hardcoded isDeal: false in a read path', !/app\.get\('\/sqftlab\/(deals|listings)'[\s\S]{0,2500}isDeal: false/.test(routes))
+} catch (e) {
+  // Record the throw so the finally block below reports it. Previously a throw
+  // escaped the try body entirely: the finally still printed a RESULT line, but
+  // with fail=0 it read as "nothing failed" when the run had actually aborted
+  // partway through. Recording it here makes the summary tell the truth.
+  const msg = (e as Error).message ?? String(e)
+  failures.push(`threw before completing — ${msg}`)
+  fail++
 } finally {
   // ── Cleanup: remove exactly what this script created ───────────────────────
   const u = await prisma.user.findUnique({ where: { email: TEST_EMAIL } }).catch(() => null)

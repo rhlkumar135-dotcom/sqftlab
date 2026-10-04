@@ -8,19 +8,20 @@ generator client {
 datasource db {
   provider = "sqlite"
 }
+
 // SHOGO:CUSTOM-END
 
 model User {
-  id                    String    @id @default(cuid())
-  email                 String    @unique
-  name                  String?
-  emailVerified         DateTime? @map("email_verified")
-  image                 String?
-  phone                 String?
-  nationality           String?
-  company               String?
-  role                  String? // agent | developer | investor | analyst | other
-  country               String?
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+  phone         String?
+  nationality   String?
+  company       String?
+  role          String? // agent | developer | investor | analyst | other
+  country       String?
 
   // Subscription. `subscriptionTier` then `subscriptionStatus` are the spec's
   // canonical names; `/sqftlab/me` still returns the tier as `tier` so the
@@ -39,30 +40,30 @@ model User {
   stripeCustomerId      String?   @map("stripe_customer_id")
 
   // Notification preferences
-  emailAlerts           Boolean   @default(true) @map("email_alerts")
-  whatsappEnabled       Boolean   @default(false) @map("whatsapp_enabled")
-  whatsappPhone         String?   @map("whatsapp_phone")
+  emailAlerts     Boolean @default(true) @map("email_alerts")
+  whatsappEnabled Boolean @default(false) @map("whatsapp_enabled")
+  whatsappPhone   String? @map("whatsapp_phone")
   // JSON array stored as TEXT — SQLite has no Json column type (see the port note below).
-  whatsappAreas         String    @default("[]") @map("whatsapp_areas")
-  digestFrequency       String    @default("daily") @map("digest_frequency") // daily | weekly | none
+  whatsappAreas   String  @default("[]") @map("whatsapp_areas")
+  digestFrequency String  @default("daily") @map("digest_frequency") // daily | weekly | none
 
   // Onboarding
-  onboardingCompleted   Boolean   @default(false) @map("onboarding_completed")
-  tourCompleted         Boolean   @default(false) @map("tour_completed")
+  onboardingCompleted Boolean @default(false) @map("onboarding_completed")
+  tourCompleted       Boolean @default(false) @map("tour_completed")
 
   // Guest → registered attribution
-  guestId               String?   @map("guest_id")
+  guestId String? @map("guest_id")
 
   // Meta
-  lastLoginAt           DateTime? @map("last_login_at")
-  lastActiveAt          DateTime? @map("last_active_at")
-  registeredVia         String?   @map("registered_via") // google | github | email | magic_link
-  ipAtRegistration      String?   @map("ip_at_registration")
-  referrer              String?
-  utmSource             String?   @map("utm_source")
+  lastLoginAt      DateTime? @map("last_login_at")
+  lastActiveAt     DateTime? @map("last_active_at")
+  registeredVia    String?   @map("registered_via") // google | github | email | magic_link
+  ipAtRegistration String?   @map("ip_at_registration")
+  referrer         String?
+  utmSource        String?   @map("utm_source")
 
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   portfolios   Portfolio[]
   watchlists   Watchlist[]
@@ -78,38 +79,38 @@ model User {
 }
 
 model Community {
-  id                    String   @id @default(cuid())
-  slug                  String   @unique
-  nameEn                String   @map("name_en")
-  nameAr                String?  @map("name_ar")
-  emirate               String   // dubai, abu_dhabi, sharjah
-  latitude              Float
-  longitude             Float
-  medianAedSqft         Float    @map("median_aed_sqft")
-  medianAnnualRentAed   Float    @default(0) @map("median_annual_rent_aed")
-  grossYieldPct         Float    @default(0) @map("gross_yield_pct")
-  neighbourhoodScore    Int      @default(0) @map("neighbourhood_score")
-  priceChange30d        Float    @default(0) @map("price_change_30d")
-  priceChange1y         Float    @default(0) @map("price_change_1y")
-  transactionCount30d   Int      @default(0) @map("transaction_count_30d")
-  totalTransactions     Int      @default(0) @map("total_transactions")
+  id                  String   @id @default(cuid())
+  slug                String   @unique
+  nameEn              String   @map("name_en")
+  nameAr              String?  @map("name_ar")
+  emirate             String // dubai, abu_dhabi, sharjah
+  latitude            Float
+  longitude           Float
+  medianAedSqft       Float    @map("median_aed_sqft")
+  medianAnnualRentAed Float    @default(0) @map("median_annual_rent_aed")
+  grossYieldPct       Float    @default(0) @map("gross_yield_pct")
+  neighbourhoodScore  Int      @default(0) @map("neighbourhood_score")
+  priceChange30d      Float    @default(0) @map("price_change_30d")
+  priceChange1y       Float    @default(0) @map("price_change_1y")
+  transactionCount30d Int      @default(0) @map("transaction_count_30d")
+  totalTransactions   Int      @default(0) @map("total_transactions")
   // Provenance of medianAedSqft: "dld" when derived from the government
   // transaction register, "listing" when it fell back to asking prices.
-  psfSource             String   @default("listing") @map("psf_source")
+  psfSource           String   @default("listing") @map("psf_source")
   // Neighbourhood sub-scores (0-10 each)
-  scoreSchools          Int      @default(0) @map("score_schools")
-  scoreHealthcare       Int      @default(0) @map("score_healthcare")
-  scoreMetro            Int      @default(0) @map("score_metro")
-  scoreRetail           Int      @default(0) @map("score_retail")
-  scoreParks            Int      @default(0) @map("score_parks")
-  scoreWorship          Int      @default(0) @map("score_worship")
-  updatedAt             DateTime @updatedAt @map("updated_at")
+  scoreSchools        Int      @default(0) @map("score_schools")
+  scoreHealthcare     Int      @default(0) @map("score_healthcare")
+  scoreMetro          Int      @default(0) @map("score_metro")
+  scoreRetail         Int      @default(0) @map("score_retail")
+  scoreParks          Int      @default(0) @map("score_parks")
+  scoreWorship        Int      @default(0) @map("score_worship")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
-  transactions  Transaction[]
-  listings      Listing[]
-  portfolios    Portfolio[]
-  watchlists    Watchlist[]
-  alerts        Alert[]
+  transactions Transaction[]
+  listings     Listing[]
+  portfolios   Portfolio[]
+  watchlists   Watchlist[]
+  alerts       Alert[]
 
   @@map("communities")
 }
@@ -130,11 +131,11 @@ model Transaction {
 
   // Spec Part 4: fields that power Building Intelligence, Institutional Flow
   // and the Migration Signal. All nullable so the existing rows stay valid.
-  buildingName    String?  @map("building_name")
-  projectName     String?  @map("project_name")
-  masterProject   String?  @map("master_project")
-  floorNumber     Int?     @map("floor_number")
-  buyerType       String?  @map("buyer_type") // individual | corporate
+  buildingName     String? @map("building_name")
+  projectName      String? @map("project_name")
+  masterProject    String? @map("master_project")
+  floorNumber      Int?    @map("floor_number")
+  buyerType        String? @map("buyer_type") // individual | corporate
   buyerNationality String? @map("buyer_nationality")
 
   community Community @relation(fields: [communityId], references: [id])
@@ -155,9 +156,9 @@ model Listing {
   // only indexed — so `upsert({ where: { externalId } })` was rejected outright
   // and the scraper could never have run on any database.
   externalId      String   @unique @map("external_id")
-  source          String   // bayut, propertyfinder, dubizzle
+  source          String // bayut, propertyfinder, dubizzle
   communityId     String   @map("community_id")
-  purpose         String   // sale, rent
+  purpose         String // sale, rent
   propertyType    String   @map("property_type")
   beds            Int
   baths           Int
@@ -230,19 +231,19 @@ model Watchlist {
 }
 
 model Alert {
-  id              String   @id @default(cuid())
-  userId          String   @map("user_id")
-  communityId     String?  @map("community_id")
-  alertType       String   @map("alert_type") // below_market, new_listing, price_drop, yield_target
-  thresholdPct    Float    @default(10) @map("threshold_pct")
-  yieldTargetPct  Float?   @map("yield_target_pct")
-  propertyType    String?  @map("property_type")
-  beds            Int?
-  notifyPush      Boolean  @default(true) @map("notify_push")
-  notifyEmail     Boolean  @default(true) @map("notify_email")
-  notifyWhatsapp  Boolean  @default(false) @map("notify_whatsapp")
-  isActive        Boolean  @default(true) @map("is_active")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  communityId    String?  @map("community_id")
+  alertType      String   @map("alert_type") // below_market, new_listing, price_drop, yield_target
+  thresholdPct   Float    @default(10) @map("threshold_pct")
+  yieldTargetPct Float?   @map("yield_target_pct")
+  propertyType   String?  @map("property_type")
+  beds           Int?
+  notifyPush     Boolean  @default(true) @map("notify_push")
+  notifyEmail    Boolean  @default(true) @map("notify_email")
+  notifyWhatsapp Boolean  @default(false) @map("notify_whatsapp")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   user      User       @relation(fields: [userId], references: [id])
   community Community? @relation(fields: [communityId], references: [id])
@@ -379,35 +380,35 @@ model RealPriceIndex {
 
 // Spec Part 6.2 — Building Intelligence Profile. The most granular product.
 model BuildingProfile {
-  id                  String @id @default(cuid())
-  buildingNameEn      String @map("building_name_en")
-  communityEn         String @map("community_en")
-  district            String
+  id             String @id @default(cuid())
+  buildingNameEn String @map("building_name_en")
+  communityEn    String @map("community_en")
+  district       String
 
-  totalDldUnits       Int?   @map("total_dld_units")
-  psfTrend3m          Float? @map("psf_trend_3m")
-  psfTrend12m         Float? @map("psf_trend_12m")
-  psfVsCommunity      Float? @map("psf_vs_community")
-  psfVsDistrict       Float? @map("psf_vs_district")
+  totalDldUnits  Int?   @map("total_dld_units")
+  psfTrend3m     Float? @map("psf_trend_3m")
+  psfTrend12m    Float? @map("psf_trend_12m")
+  psfVsCommunity Float? @map("psf_vs_community")
+  psfVsDistrict  Float? @map("psf_vs_district")
 
   avgDaysToResale     Float? @map("avg_days_to_resale")
   liquidityScore      Float? @map("liquidity_score")
   transactionCount12m Int?   @map("transaction_count_12m")
 
-  ownerOccupierRatio  Float? @map("owner_occupier_ratio")
-  buyerHoldRate       Float? @map("buyer_hold_rate")
+  ownerOccupierRatio Float? @map("owner_occupier_ratio")
+  buyerHoldRate      Float? @map("buyer_hold_rate")
 
-  ejariDensity        Float? @map("ejari_density")
-  avgContractedRent   Float? @map("avg_contracted_rent")
+  ejariDensity      Float? @map("ejari_density")
+  avgContractedRent Float? @map("avg_contracted_rent")
 
   floorPremiumPct     Float? @map("floor_premium_pct")
   floorPremiumSamples Int?   @map("floor_premium_samples")
   floorPremiumR2      Float? @map("floor_premium_r2")
 
-  intelligenceScore   Float?   @map("intelligence_score")
-  scoreUpdatedAt      DateTime? @map("score_updated_at")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  intelligenceScore Float?    @map("intelligence_score")
+  scoreUpdatedAt    DateTime? @map("score_updated_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   @@unique([buildingNameEn, communityEn])
   @@index([district])

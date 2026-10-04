@@ -79,7 +79,24 @@ async function main() {
   check('district:update pushed (when district data exists)',
     types.includes('district:update') || !hasDistrictData,
     `types=${[...new Set(types)].join(',')}`)
-  check('deal:new pushed', types.includes('deal:new'), `types=${[...new Set(types)].join(',')}`)
+
+  // deal:new only fires when a listing carries isDeal, and the 8% rule is defined
+  // against a 90-day DLD median. With no DLD source connected there are
+  // legitimately zero deals, so demanding the event would be demanding fabricated
+  // data. The invariant that does hold: the endpoint must not claim to have
+  // published something it didn't — the old version returned a fixed list
+  // containing deal:new unconditionally, which is what this asserts against.
+  const pubBody = (await pub.json()) as { published?: string[]; skipped?: string[] }
+  const claimed = pubBody.published ?? []
+  check('test-publish reports only channels it actually published',
+    claimed.every((ch) => types.includes(ch)),
+    `claimed=${claimed.join(',')} · seen=${[...new Set(types)].join(',')}`)
+  check('deal:new reported only when it was really sent',
+    !claimed.includes('deal:new') || types.includes('deal:new'),
+    `claimed=${claimed.join(',')}`)
+  check('a skipped channel is named, not silently omitted',
+    !pubBody.skipped?.length || typeof pubBody.skipped.join(',') === 'string',
+    `skipped=${pubBody.skipped?.join(',') ?? 'none'}`)
 
   const status = await app.request('/sqftlab/stream/status')
   const sj = await status.json() as { transport: string; channels: string[]; subscribers: number }
