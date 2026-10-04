@@ -14,12 +14,53 @@ model User {
   id                    String    @id @default(cuid())
   email                 String    @unique
   name                  String?
+  emailVerified         DateTime? @map("email_verified")
+  image                 String?
   phone                 String?
   nationality           String?
-  tier                  String    @default("free") // free, pro, elite
-  subscriptionStatus    String    @default("active") @map("subscription_status")
+  company               String?
+  role                  String? // agent | developer | investor | analyst | other
+  country               String?
+
+  // Subscription. `subscriptionTier` then `subscriptionStatus` are the spec's
+  // canonical names; `/sqftlab/me` still returns the tier as `tier` so the
+  // existing client is unchanged.
+  //
+  // `@map("tier")` is deliberate: the Prisma field carries the spec's name while
+  // the physical column keeps its original one. Renaming the column would make
+  // `prisma db push` drop it and lose every stored tier value — and that cannot
+  // be forced here (`--accept-data-loss` is off limits).
+  subscriptionTier      String    @default("free") @map("tier") // free | pro | elite | enterprise | institutional
+  subscriptionStatus    String    @default("active") @map("subscription_status") // active | trialing | past_due | cancelled | inactive
+  subscriptionId        String?   @map("subscription_id")
   subscriptionExpiresAt DateTime? @map("subscription_expires_at")
+  trialEndsAt           DateTime? @map("trial_ends_at")
+  currentPeriodEnd      DateTime? @map("current_period_end")
   stripeCustomerId      String?   @map("stripe_customer_id")
+
+  // Notification preferences
+  emailAlerts           Boolean   @default(true) @map("email_alerts")
+  whatsappEnabled       Boolean   @default(false) @map("whatsapp_enabled")
+  whatsappPhone         String?   @map("whatsapp_phone")
+  // JSON array stored as TEXT — SQLite has no Json column type (see the port note below).
+  whatsappAreas         String    @default("[]") @map("whatsapp_areas")
+  digestFrequency       String    @default("daily") @map("digest_frequency") // daily | weekly | none
+
+  // Onboarding
+  onboardingCompleted   Boolean   @default(false) @map("onboarding_completed")
+  tourCompleted         Boolean   @default(false) @map("tour_completed")
+
+  // Guest → registered attribution
+  guestId               String?   @map("guest_id")
+
+  // Meta
+  lastLoginAt           DateTime? @map("last_login_at")
+  lastActiveAt          DateTime? @map("last_active_at")
+  registeredVia         String?   @map("registered_via") // google | github | email | magic_link
+  ipAtRegistration      String?   @map("ip_at_registration")
+  referrer              String?
+  utmSource             String?   @map("utm_source")
+
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
@@ -28,6 +69,10 @@ model User {
   alerts       Alert[]
   dealAlerts   DealAlert[]
   subscription Subscription?
+  apiKeys      ApiKey[]
+  events       UserEvent[]
+  sessions     Session[]
+  accounts     Account[]
 
   @@map("users")
 }
@@ -207,11 +252,15 @@ model Alert {
 }
 
 model Waitlist {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  source       String   @default("waitlist_page")
-  interestTier String   @default("pro") @map("interest_tier") // pro, elite
-  createdAt    DateTime @default(now()) @map("created_at")
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  company      String?
+  role         String? // agent | developer | investor | bank | other
+  source       String    @default("waitlist_page")
+  interestTier String    @default("pro") @map("interest_tier") // pro, elite
+  invitedAt    DateTime? @map("invited_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   @@map("waitlist")
 }
@@ -299,7 +348,11 @@ model DistrictMetrics {
   supplyScore    Float?   @map("supply_score")
   calculatedAt   DateTime @default(now()) @map("calculated_at")
 
-  @@unique([district, period])
+  // Deliberately an index, not a unique constraint. This table is append-only
+  // (see Task A4): each run ADDS a row so metric history is never destroyed.
+  // A unique constraint would make the second run for the same period fail.
+  // Readers select the newest row per district — see `latestDistrictMetrics()`.
+  @@index([district, period])
   @@index([district])
   @@index([momentumScore])
   @@map("district_metrics")
@@ -430,9 +483,12 @@ model NationalityFlow {
   shareOfTotal     Float?   @map("share_of_total")
   calculatedAt     DateTime @default(now()) @map("calculated_at")
 
-  @@unique([nationality, district, month])
+  // Index, not unique — append-only per Task A4. Each run adds a new snapshot so
+  // the flow history is preserved; readers take the newest `calculatedAt`.
+  @@index([nationality, district, month])
   @@index([nationality, month])
   @@index([district, month])
+  @@index([calculatedAt])
   @@map("nationality_flow")
 }
 
@@ -544,4 +600,119 @@ model CronRun {
 
   @@index([job, startedAt])
   @@map("cron_runs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Day 1 (Task A) — analytics, guest sessions, API keys and the auth backing
+// store. Ported to SQLite: every `Json` field is TEXT holding JSON.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Every significant action, signed in or guest, for funnel analysis.
+model UserEvent {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id") // null for guests
+  guestId   String?  @map("guest_id") // set for guests
+  eventType String   @map("event_type") // page_view | search | community_view | listing_click | sign_up | subscribe | cma_run | pdf_export | api_call | alert_created | chatbot_message
+  eventData String?  @map("event_data") // JSON text: { "community": "Downtown Dubai" }
+  page      String?
+  referrer  String?
+  userAgent String?  @map("user_agent")
+  ip        String?
+  sessionId String?  @map("session_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Nullable because guests have events too. SetNull (not Cascade) so that
+  // deleting an account never deletes its analytics history.
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([guestId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("user_events")
+}
+
+// Anonymous visitors. A guest that later registers is linked via
+// convertedUserId, and their earlier UserEvents are re-attributed.
+model GuestSession {
+  id              String    @id // this IS the guestId held in the cookie
+  fingerprint     String?
+  referrer        String?
+  utmSource       String?   @map("utm_source")
+  utmMedium       String?   @map("utm_medium")
+  utmCampaign     String?   @map("utm_campaign")
+  pagesViewed     Int       @default(0) @map("pages_viewed")
+  searchCount     Int       @default(0) @map("search_count")
+  lastSeenAt      DateTime  @default(now()) @map("last_seen_at")
+  convertedAt     DateTime? @map("converted_at")
+  convertedUserId String?   @map("converted_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([convertedUserId])
+  @@map("guest_sessions")
+}
+
+// Developer-tier API keys. Only the SHA-256 hash is stored — never the key.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  keyHash    String    @unique @map("key_hash")
+  prefix     String // first 12 chars, for display
+  name       String
+  tier       String    @default("pro")
+  callsToday Int       @default(0) @map("calls_today")
+  callsMonth Int       @default(0) @map("calls_month")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// OAuth provider links (Google, GitHub, …).
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refreshToken      String? @map("refresh_token")
+  accessToken       String? @map("access_token")
+  expiresAt         Int?    @map("expires_at")
+  tokenType         String? @map("token_type")
+  scope             String?
+  idToken           String? @map("id_token")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+// Active sessions for the magic-link / OAuth flow.
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// Single-use email magic-link tokens.
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
 }

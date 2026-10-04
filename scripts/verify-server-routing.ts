@@ -21,6 +21,11 @@ if (!bundle) {
 type Case = { name: string; url: string; expectType?: RegExp; expectCache?: RegExp; jsonOk?: boolean }
 const cases: Case[] = [
   { name: 'prefixed asset (canvas preview)', url: `${BASE}/p/${PROJECT}/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
+  // The build uses a relative base, so a nested client route requests
+  // /auth/assets/x.js — without the fold-back that returns the SPA shell and the
+  // page renders blank.
+  { name: 'nested deep-link asset (/auth/signin)', url: `${BASE}/auth/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
+  { name: 'prefixed + nested asset', url: `${BASE}/p/${PROJECT}/auth/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
   // Deliberately hits an unmatched /api path rather than a real endpoint: the
   // point is whether the prefixed request reaches the API layer at all. A real
   // endpoint would also fail if the database is down, which says nothing about

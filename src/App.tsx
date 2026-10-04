@@ -10,6 +10,7 @@ import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
 import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
+import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
 import { ensureSession } from '@/lib/session'
@@ -125,7 +126,7 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin'
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -204,6 +205,10 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
             <span className="live-dot" />
             <span className="text-[9px]" style={{ fontFamily: 'var(--font-data)' }}>Live</span>
           </div>
+          <button onClick={() => setPage('signin')} className="px-3 py-1.5 rounded-full text-xs font-semibold transition-all shrink-0"
+            style={{ color: 'var(--ink-3)', border: '1px solid var(--line)' }}>
+            Sign in
+          </button>
           <button onClick={() => setPage('pricing')} className="px-4 py-1.5 rounded-full text-xs font-semibold transition-all"
             style={{ background: 'var(--b600)', color: '#fff', boxShadow: 'var(--sh-btn)' }}>
             Get access
@@ -2926,11 +2931,17 @@ function AppInner() {
   const live = useLiveMarket()
 
   // Deep-link bridge: DataLabel ⓘ tooltips link to #glossary-<slug>, which must
-  // open the glossary page before the anchor can be scrolled to.
+  // open the glossary page before the anchor can be scrolled to. `#signin` and
+  // `/auth/signin` land on the same page, and the API's sign-in redirect carries
+  // ?signed_in=1 (&welcome=1 for a first-time registration).
   useEffect(() => {
     const onHash = () => {
       if (window.location.hash.startsWith('#glossary-')) setPage('glossary')
+      if (window.location.hash === '#signin') setPage('signin')
     }
+    const path = window.location.pathname.replace(/\/+$/, '')
+    if (path === '/auth/signin' || path === '/signin') setPage('signin')
+    if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -2958,6 +2969,7 @@ function AppInner() {
       {page === 'intelligence' && <IntelligencePage setPage={setPage} />}
       {page === 'waitlist' && <WaitlistPage setPage={setPage} />}
       {page === 'glossary' && <Glossary />}
+      {page === 'signin' && <SignInPage setPage={setPage} />}
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
           <button onClick={() => setPage('analytics')} className="transition-colors hover:text-white">Market Analytics</button>

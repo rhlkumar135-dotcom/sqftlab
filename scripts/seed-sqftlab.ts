@@ -60,7 +60,8 @@ async function main() {
       name: 'Demo Investor',
       phone: '+971501234567',
       nationality: 'Indian',
-      tier: 'elite',
+      subscriptionTier: 'elite',
+      subscriptionStatus: 'active',
     },
   })
   console.log(`User: ${user.id}`)

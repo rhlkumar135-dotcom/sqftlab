@@ -552,3 +552,85 @@ re-adding by hand after each schema change.
 PropertyFinder: keyless, works. Dubai Pulse: reachable, 401 without a key (free
 self-serve). ADREC: **no self-serve API** — subscription by request form; the
 spec's "free, no key" was wrong. ADREC's response mapping is unverified.
+
+### The hourly schedule's `dld >= 1` check is stale — do not chase it
+
+The recurring schedule *"sqftLab hourly data refresh"* verifies its run with
+"communityStats should report dld >= 1 … psf_source should be 'dld'". That
+expectation was written against the **synthetic** dataset (line 473: "All 39
+communities went listing → dld"), which no longer exists — it was removed with
+`scripts/seed-pg.ts` in bdc193c because the rows were fabricated.
+
+Healthy state, verified 2026-09-25T00:00:28Z: `transactions` = **0 rows**,
+communities `psf_source` = 20 `listing` / 25 `none` / **0 `dld`**, so
+`communityStats` reports `dld=0` and `intelligence` reports
+`rpi needs transactions`. That is **correct, not a failure** — `dldSync` has no
+`DUBAI_PULSE_API_KEY` (`.env` holds only `CRON_SECRET`) and so reports `skipped`,
+per the invariant "unconfigured source → `skipped`, never `failed`".
+
+So: a green run with `dld=0` is the expected outcome while DLD is
+credential-blocked. Only treat it as broken if `dldSync` reports `failed`, or if
+`failCount > 0`. Last re-verified 2026-09-27T02:00:28Z by the hourly schedule:
+`okCount=6 failCount=0 skipCount=2`, 1295ms, `dldSync`+`adrecSync` skipped,
+`communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
+(2026-09-26T23:00:28Z run: `okCount=6 failCount=0 skipCount=2`, 2251ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
+Port note: this run reached the API on `localhost:3101` (both 3101 and 8080 answered 200),
+so 3101 does resolve in the current runtime — the line-578 caveat was environment-specific.)
+(2026-09-26T22:00:26Z run: `okCount=6 failCount=0 skipCount=2`, 2106ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
+Note: in the workspace/meta runtime the project API is served on the workspace origin at
+`/api/*` (port 8080), not `localhost:3101` — the port 3101 address from the schedule prompt
+does not resolve there.)
+(2026-09-26T21:00:25Z run: `okCount=6 failCount=0 skipCount=2`, 1773ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
+(2026-09-26T20:00:24Z run: `okCount=6 failCount=0 skipCount=2`, 1746ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
+(2026-09-26T19:00:21Z run: `okCount=6 failCount=0 skipCount=2`, 3082ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
+(2026-09-26T16:00:23Z run: `okCount=6 failCount=0 skipCount=2`, 1943ms, `dldSync`+`adrecSync`
+skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
+(2026-09-26T11:00:25Z run: 1985ms — same shape.)
+(2026-09-26T09:00:24Z run: 1537ms — same shape.)
+(Earlier 2026-09-26T08:00:21Z run: `okCount=6 failCount=0 skipCount=2`, 1642ms;
+2026-09-26T07:00:17Z run: 2731ms — same shape.)
+On 2026-09-26 the schedule prompt itself was rewritten to encode this criterion
+(failCount 0 + unconfigured sources `skipped`), so future hourly runs no longer
+chase the fabricated-world `dld >= 1` assertion.
+(`/api/sqftlab/sources` shows DLD `connected:false`, `envVar: DUBAI_PULSE_API_KEY`.)
+Making `dld >= 1` actually
+true requires either a real Dubai
+Pulse key or re-introducing fake data — the latter is exactly what the audit
+removed.
+
+## 2026-09-25 04:00 — "test all changes deployed to github and railway"
+
+**GitHub is in sync and Railway is deploying it.** `main` = `806372c` locally and on
+`origin` (0 ahead / 0 behind). `GET /repos/.../deployments` shows `railway-app[bot]`
+created a `sqftlab-v2 / production` deployment for every recent commit, the
+`806372c` one **success** at 22:44:05Z and the older ones `inactive` — so the
+newest commit is live, and line 76 above ("Railway never auto-deploys") is
+**stale**: the integration webhook has since been reconnected.
+
+**The `deploy.yml` workflow is a no-op that still shows green.** Its job list for
+`806372c` is `Checkout ✓ · Check Railway secrets ✓ · Install Railway CLI skipped ·
+Deploy skipped · Verify health skipped`. With no `RAILWAY_TOKEN` /
+`RAILWAY_SERVICE_NAME` / `RAILWAY_PROJECT_ID` repo secrets it takes the
+notice-and-exit path (by design). So a green Actions run means "deploy skipped",
+never "deployed" — read the Railway deployment status, not the Actions badge.
+
+**Local suites are green at `806372c`** (run against the project server on 3101;
+the two DB-backed ones need `export DATABASE_URL="file:$PWD/prisma/dev.db"` or
+they die on the stale shell value):
+`verify-fixes 41/41 · verify-intel 27/27 · verify-cron 31/31 · verify-stream 13/13 ·
+verify-server-routing 6/6`, and `tsc --noEmit` reports **0 errors outside
+`src/generated/`** (63 inside it — generated CRUD boilerplate, pre-existing).
+
+**Live HTTP still cannot be verified from this sandbox** (unchanged from line 283):
+`curl` to `www.sqftlab.com` gets a Railway-edge `429 rate limited` (12-byte body,
+`x-railway-edge`), and a real Chrome session via the browser agent gets Cloudflare
+Turnstile "Checking your browser…" on `/`, `/api/sqftlab/stats` and
+`/api/sqftlab/intelligence` alike — so neither the `build-sha` meta nor the
+production data can be read from a datacenter IP. The apex `sqftlab.com` answers
+`301 → www`. The build stamp itself is proven to work (`dist/index.html` carries
+`build-sha=806372c`); only the reading of production's copy is blocked.

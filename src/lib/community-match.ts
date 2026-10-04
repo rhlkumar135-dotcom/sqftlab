@@ -34,16 +34,23 @@ export function invalidateCommunityCache(): void {
  * Resolve an area name as it appears in a portal's data to a community row.
  * Exact (case-insensitive) match wins, then containment in either direction, so
  * "Dubai Marina" still resolves against "Marina" and vice versa.
+ *
+ * Matching against `slug` as well as `nameEn` is load-bearing: portals label
+ * areas by their short form ("JVC", "DSO", "DIFC") while several communities
+ * carry the spelled-out name ("Jumeirah Village Circle"). Comparing only
+ * `nameEn` meant none of those resolved, so the scraper invented a duplicate
+ * community for an area it already had.
  */
 export async function findCommunityByName(name: string): Promise<CommunityRow | null> {
   const needle = (name ?? '').trim().toLowerCase()
   if (!needle) return null
 
   const rows = await load()
+  const keys = (r: CommunityRow) => [r.nameEn, r.slug].map((k) => (k ?? '').toLowerCase())
+
   return (
-    rows.find((r) => r.nameEn.toLowerCase() === needle) ??
-    rows.find((r) => r.nameEn.toLowerCase().includes(needle)) ??
-    rows.find((r) => needle.includes(r.nameEn.toLowerCase())) ??
+    rows.find((r) => keys(r).some((k) => k === needle)) ??
+    rows.find((r) => keys(r).some((k) => k.includes(needle) || needle.includes(k))) ??
     null
   )
 }

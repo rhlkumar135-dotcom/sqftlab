@@ -50,11 +50,22 @@ app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 //    built with that base, so asset requests arrive with the prefix on the path.
 //    Without this rewrite the browser receives index.html where it expects a JS
 //    module, the bundle never executes and the page renders blank.
+//
+//    The build uses a RELATIVE base, so the same thing happens on any nested
+//    client route: /auth/signin resolves `./assets/x.js` to /auth/assets/x.js.
+//    Any nested path pointing at the assets directory is folded back to the root.
 app.use('*', async (c, next) => {
-  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
-  if (!m) return next()
   const url = new URL(c.req.url)
-  url.pathname = m[1] || '/'
+  let path = url.pathname
+
+  const preview = path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
+  if (preview) path = preview[1] || '/'
+
+  const nested = path.match(/^\/.+\/(assets\/.+)$/)
+  if (nested) path = `/${nested[1]}`
+
+  if (path === url.pathname) return next()
+  url.pathname = path
   return app.fetch(new Request(url, c.req.raw))
 })
 

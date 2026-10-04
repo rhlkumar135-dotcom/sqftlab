@@ -70,7 +70,7 @@ async function main() {
   const user = await prisma.user.upsert({
     where: { email: 'demo@sqftlab.com' },
     update: {},
-    create: { email: 'demo@sqftlab.com', name: 'Demo Investor', phone: '+971501234567', nationality: 'Indian', tier: 'elite' },
+    create: { email: 'demo@sqftlab.com', name: 'Demo Investor', phone: '+971501234567', nationality: 'Indian', subscriptionTier: 'elite', subscriptionStatus: 'active' },
   })
   console.log(`User: ${user.id}`)
 

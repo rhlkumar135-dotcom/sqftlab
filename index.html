@@ -11,6 +11,22 @@
     <!-- Leaflet's stylesheet is bundled via src/App.tsx, not loaded from a CDN:
          the map is core UI and must not depend on a third-party host. -->
 
+    <!-- The client is built with a RELATIVE asset base (`./assets/…`) so one
+         bundle works both at `/` and at `/p/<projectId>/`. That breaks any
+         nested entry path: at `/auth/signin` the relative refs resolve to
+         `/auth/assets/…`, the static handler falls through to the SPA shell, and
+         the browser receives HTML where it expects a JS module — a blank page.
+         So client routes are entered through the root path plus a hash, and this
+         runs before the module script so the redirect wins the race. -->
+    <script>
+      ;(function () {
+        var path = location.pathname.replace(/\/+$/, '')
+        if (!path || path.indexOf('/p/') === 0) return
+        var routes = { '/auth/signin': '#signin', '/signin': '#signin' }
+        var hash = routes[path]
+        if (hash) location.replace('/' + hash)
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

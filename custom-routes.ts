@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { streamSSE } from 'hono/streaming'
+import { randomBytes, createHash } from 'node:crypto'
 import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
 import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
@@ -11,11 +12,15 @@ import {
   runIntelligencePipeline, computeYieldCurve, migrationSurges, applyScenario,
   computeRealPriceIndex, computeBuildingProfiles, computeSupplyPipeline,
   computeInstitutionalFlow, computeMigrationSignal, computeDistrictMetrics,
-  computeMarketSummary, ALL_BEDS,
+  computeMarketSummary, latestDistrictMetrics, ALL_BEDS,
 } from './src/lib/intelligence'
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 
-const app = new Hono()
+// Hono needs the context variables declared for `c.set`/`c.get` to type-check.
+// `guestId` is the anonymous-visitor cookie value (Task B).
+type AppVariables = { guestId: string }
+
+const app = new Hono<{ Variables: AppVariables }>()
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 //
@@ -43,7 +48,9 @@ app.use('*', async (c, next) => {
       c.res.headers.set('Access-Control-Max-Age', '86400')
       if (isProd) c.res.headers.set('Vary', 'Origin')
     }
-    return c.text('', 204)
+    // `c.text('', 204)` fails Hono's typings: 204 is not a ContentfulStatusCode
+    // because it must carry no body. `c.body(null, 204)` is the correct form.
+    return c.body(null, 204)
   }
 
   await next()
@@ -69,6 +76,141 @@ app.use('*', async (c, next) => {
     c.res.headers.set('Vary', 'Origin')
   }
 })
+
+// ─── Guest sessions (Task B) ─────────────────────────────────────────────────
+//
+// Anonymous visitors get a `sqftlab_guest` cookie so their browsing is
+// attributed if they later register. Two deliberate departures from the spec
+// sketch, both to avoid a database write on every request:
+//
+//   1. The middleware only mints/reads the cookie. The GuestSession ROW is
+//      created lazily by `ensureGuestSession()`, which runs on the first tracked
+//      event. Inserting from the middleware would add a row for every health
+//      probe, cron call and bot hit.
+//   2. `pagesViewed` is incremented from `trackEvent`, not the middleware, for
+//      the same reason.
+
+const GUEST_COOKIE = 'sqftlab_guest'
+const GUEST_MAX_AGE = 30 * 24 * 3600 // 30 days, per spec
+
+function readGuestId(c: Context): string | null {
+  const cookie = c.req.header('Cookie') ?? ''
+  const m = cookie.match(new RegExp(`(?:^|;\\s*)${GUEST_COOKIE}=([^;]+)`))
+  return m ? decodeURIComponent(m[1]) : null
+}
+
+app.use('*', async (c, next) => {
+  const existing = readGuestId(c)
+  let minted: string | null = null
+
+  if (existing) {
+    c.set('guestId', existing)
+  } else if (c.req.method !== 'OPTIONS') {
+    const fresh = randomBytes(16).toString('hex')
+    minted = fresh
+    c.set('guestId', fresh)
+  }
+
+  await next()
+
+  if (minted) {
+    try {
+      c.res.headers.append(
+        'Set-Cookie',
+        `${GUEST_COOKIE}=${minted}; Path=/; Max-Age=${GUEST_MAX_AGE}; SameSite=Lax`,
+      )
+    } catch {
+      // Response already committed (streaming) — the cookie is best-effort.
+    }
+  }
+})
+
+/** Creates the GuestSession row for the current cookie. Never fatal. */
+async function ensureGuestSession(c: Context, opts: { touch?: boolean } = {}): Promise<void> {
+  const guestId = c.get('guestId') as string | undefined
+  if (!guestId) return
+  try {
+    const url = new URL(c.req.url)
+    await prisma.guestSession.upsert({
+      where: { id: guestId },
+      create: {
+        id: guestId,
+        referrer: c.req.header('Referer') ?? null,
+        utmSource: url.searchParams.get('utm_source'),
+        utmMedium: url.searchParams.get('utm_medium'),
+        utmCampaign: url.searchParams.get('utm_campaign'),
+        lastSeenAt: new Date(),
+      },
+      update: opts.touch
+        ? { lastSeenAt: new Date(), pagesViewed: { increment: 1 } }
+        : { lastSeenAt: new Date() },
+    })
+  } catch {
+    // Never fail a request over anonymous-session bookkeeping.
+  }
+}
+
+type CallerTier = 'guest' | 'free' | 'pro' | 'enterprise' | 'institutional'
+
+/**
+ * What the caller is allowed to see.
+ *
+ * NOTE: `getUserId()` reads a caller-supplied identifier — it IDENTIFIES, it does
+ * not AUTHENTICATE. This gate controls the *product experience* (what a guest may
+ * browse), not access control: anyone can claim any id by sending it as a bearer
+ * token. Security requires the auth layer, not a different tier check.
+ */
+async function getCallerTier(c: Context): Promise<CallerTier> {
+  const userId = getUserId(c)
+  if (!userId) return 'guest'
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { subscriptionTier: true, subscriptionStatus: true },
+  })
+  if (!user) return 'guest'
+  if (user.subscriptionStatus !== 'active' && user.subscriptionStatus !== 'trialing') return 'free'
+  return (user.subscriptionTier ?? 'free') as CallerTier
+}
+
+/** True when the caller has no account — used to gate premium endpoints. */
+async function isGuest(c: Context): Promise<boolean> {
+  return (await getCallerTier(c)) === 'guest'
+}
+
+/** 401 for a guest hitting a subscriber-only endpoint. */
+function upgradeRequired(c: Context) {
+  return c.json(
+    {
+      error: 'Unauthorized',
+      limited: true,
+      message: 'This feature needs a free sqftLab account. Sign in to continue.',
+      signInUrl: '/auth/signin',
+    },
+    401,
+  )
+}
+
+/** Fire-and-forget analytics. Never let tracking break a request. */
+async function trackEvent(c: Context, eventType: string, data?: Record<string, unknown>): Promise<void> {
+  try {
+    const userId = getUserId(c)
+    const guestId = (c.get('guestId') as string | undefined) ?? null
+    await prisma.userEvent.create({
+      data: {
+        userId: userId ?? null,
+        guestId: userId ? null : guestId,
+        eventType,
+        eventData: data ? JSON.stringify(data) : null,
+        page: new URL(c.req.url).pathname,
+        referrer: c.req.header('Referer') ?? null,
+        userAgent: c.req.header('User-Agent')?.slice(0, 200) ?? null,
+      },
+    })
+    if (!userId) await ensureGuestSession(c, { touch: eventType === 'page_view' })
+  } catch {
+    // Fire-and-forget.
+  }
+}
 
 // ─── Health & diagnostics ─────────────────────────────────────────────────────
 
@@ -134,10 +276,32 @@ app.get('/sqftlab/communities', async (c) => {
   })
   const dealsByCommunity = new Map(dealGroups.map((g) => [g.communityId, g._count._all]))
 
+  // Task B3 — guests get a teaser (6 of 39 districts); signed-in callers get all.
+  const tier = await getCallerTier(c)
+  const enriched = communities.map((x) => ({ ...x, dealCount: dealsByCommunity.get(x.id) ?? 0 }))
+  const visible = tier === 'guest' ? enriched.slice(0, 6) : enriched
+
+  await trackEvent(c, 'community_list', { tier, returned: visible.length, total: enriched.length })
+
   return c.json({
-    communities: communities.map((c) => ({ ...c, dealCount: dealsByCommunity.get(c.id) ?? 0 })),
+    communities: visible,
+    ...(tier === 'guest'
+      ? { limited: true, message: 'Sign in to see all communities', signInUrl: '/auth/signin' }
+      : {}),
   })
 })
+
+// Fields that make up the paid neighbourhood-score breakdown. Guests see the
+// single headline score, not the components.
+const GUEST_HIDDEN_COMMUNITY_FIELDS = [
+  'scoreSchools', 'scoreHealthcare', 'scoreMetro', 'scoreRetail', 'scoreParks', 'scoreWorship',
+] as const
+
+function redactCommunityForGuest<T extends Record<string, unknown>>(community: T) {
+  const out: Record<string, unknown> = { ...community }
+  for (const k of GUEST_HIDDEN_COMMUNITY_FIELDS) delete out[k]
+  return out
+}
 
 app.get('/sqftlab/communities/:slug', async (c) => {
   const slug = c.req.param('slug')
@@ -149,6 +313,21 @@ app.get('/sqftlab/communities/:slug', async (c) => {
     },
   })
   if (!community) return c.json({ error: 'Community not found' }, 404)
+
+  // Task B3 — guests see headline metrics but not the score breakdown, and no
+  // nationality mix. (This payload carries no nationality data at all, so there
+  // is nothing to redact for that part; the breakdown is the real gate.)
+  const tier = await getCallerTier(c)
+  await trackEvent(c, 'community_view', { slug, tier })
+
+  if (tier === 'guest') {
+    return c.json({
+      community: redactCommunityForGuest(community),
+      limited: true,
+      message: 'Sign in to see the full neighbourhood score breakdown.',
+      signInUrl: '/auth/signin',
+    })
+  }
   return c.json({ community })
 })
 
@@ -231,14 +410,22 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
   // "DLD · Dubai Pulse API" made the chart assert a government source no matter
   // what the rows were, including while the table held generated data.
   const present = new Set(transactions.map((t) => t.source))
+  // Transaction.source defaults to 'dld_dubai', not 'dld' — matching only the
+  // bare 'dld' string meant every real DLD row fell through to the raw-value
+  // branch and the chart was labelled "dld_dubai", an internal identifier
+  // rather than a source a reader would recognise.
+  const isDld = (s: string) => s === 'dld' || s === 'dld_dubai' || s === 'dubai_pulse'
+  const isAdrec = (s: string) => s === 'adrec' || s === 'adrec_abudhabi'
+  const hasDld = [...present].some(isDld)
+  const hasAdrec = [...present].some(isAdrec)
   const sourceLabel =
     present.size === 0
       ? 'unknown'
-      : present.has('dld') && present.has('adrec')
+      : hasDld && hasAdrec
         ? 'DLD + ADREC'
-        : present.has('dld')
+        : hasDld
           ? 'DLD (Dubai Pulse)'
-          : present.has('adrec')
+          : hasAdrec
             ? 'ADREC (Abu Dhabi)'
             : [...present].join(', ')
 
@@ -296,7 +483,26 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
     })
   }
 
-  return c.json({ trend, period, dataSource: sourceLabel, sources: [...present] })
+  // Task B3 — guests get a 3-month window; the 12/36/60-month series is a
+  // subscriber feature.
+  const tier = await getCallerTier(c)
+  const visibleTrend = tier === 'guest' ? trend.slice(-3) : trend
+  await trackEvent(c, 'trend_view', { slug, period, tier })
+
+  return c.json({
+    trend: visibleTrend,
+    period,
+    dataSource: sourceLabel,
+    sources: [...present],
+    ...(tier === 'guest'
+      ? {
+          limited: true,
+          monthsShown: 3,
+          message: 'Sign in for the full price history',
+          signInUrl: '/auth/signin',
+        }
+      : {}),
+  })
 })
 
 // ─── Yield Calculator ────────────────────────────────────────────────────────
@@ -577,8 +783,7 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
 // It used to be defined here, which meant the cron would have needed a copy.
 
 app.get('/sqftlab/scrape', async (c) => {
-  const secret = c.req.query('secret')
-  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
 
   const startedAt = Date.now()
   let totalSaved = 0
@@ -787,7 +992,11 @@ function getUserId(c: Context): string | null {
   const auth = c.req.header('Authorization')
   if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
   const cookie = c.req.header('Cookie') ?? ''
-  const match = cookie.match(/(?:^|;\s*)session=([^;]+)/)
+  // `next-auth.session-token` is the cookie name establishSession() issues.
+  // Bare `session` stays accepted as a fallback for earlier links.
+  const match =
+    cookie.match(/(?:^|;\s*)(?:__Secure-)?next-auth\.session-token=([^;]+)/) ??
+    cookie.match(/(?:^|;\s*)session=([^;]+)/)
   return match ? decodeURIComponent(match[1]) : null
 }
 
@@ -915,8 +1124,7 @@ app.get('/sqftlab/watchlist', async (c) => {
 // Re-run deal detection without a full scrape. Same secret as /scrape so it can
 // be driven from the cron without exposing a mutation to the public.
 app.get('/sqftlab/detect-deals', async (c) => {
-  const secret = c.req.query('secret')
-  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
 
   const dealsDetected = await detectDeals()
   return c.json({ ok: true, dealsDetected })
@@ -980,7 +1188,24 @@ app.get('/sqftlab/listings', async (c) => {
     prisma.listing.count({ where }),
   ])
 
-  return c.json({ listings, total, page, pages: Math.ceil(total / limit) })
+  // Task B3 — guests get the first 10 rows and no deal badge. `isDeal` is the
+  // paid signal (it is the whole point of the deals feed), so it is stripped
+  // rather than merely hidden in the UI.
+  const tier = await getCallerTier(c)
+  const visibleListings =
+    tier === 'guest' ? listings.slice(0, 10).map(({ isDeal: _isDeal, ...rest }) => rest) : listings
+
+  await trackEvent(c, 'search', { tier, returned: visibleListings.length, total })
+
+  return c.json({
+    listings: visibleListings,
+    total,
+    page,
+    pages: Math.ceil(total / limit),
+    ...(tier === 'guest'
+      ? { limited: true, message: 'Sign in to browse every listing', signInUrl: '/auth/signin' }
+      : {}),
+  })
 })
 
 // ─── Alerts ──────────────────────────────────────────────────────────────────
@@ -1670,10 +1895,17 @@ app.get('/sqftlab/me', async (c) => {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, name: true, tier: true, subscriptionStatus: true },
+    select: {
+      id: true, email: true, name: true, image: true, role: true,
+      subscriptionTier: true, subscriptionStatus: true, onboardingCompleted: true, guestId: true,
+    },
   })
   if (!user) return c.json({ error: 'No user account configured' }, 404)
-  return c.json({ user })
+
+  // `tier` is kept in the response because the client reads it; the DB field is
+  // `subscriptionTier` (Task A3). Both names are returned so neither breaks.
+  const { subscriptionTier, ...rest } = user
+  return c.json({ user: { ...rest, tier: subscriptionTier, subscriptionTier } })
 })
 
 // GET /sqftlab/alerts — active alerts plus the recent matches they produced.
@@ -1970,10 +2202,16 @@ app.get('/sqftlab/migration', async (c) => {
   const district = c.req.query('district')
   const where = district ? { district } : {}
 
+  const latestFlowAt = await prisma.nationalityFlow.findFirst({
+    orderBy: { calculatedAt: 'desc' }, select: { calculatedAt: true },
+  })
   const [flows, surges] = await Promise.all([
-    prisma.nationalityFlow.findMany({
-      where, orderBy: [{ month: 'desc' }, { transactionCount: 'desc' }], take: 100,
-    }),
+    latestFlowAt
+      ? prisma.nationalityFlow.findMany({
+          where: { ...where, calculatedAt: latestFlowAt.calculatedAt },
+          orderBy: [{ month: 'desc' }, { transactionCount: 'desc' }], take: 100,
+        })
+      : Promise.resolve([]),
     migrationSurges(20),
   ])
 
@@ -1995,11 +2233,16 @@ app.get('/sqftlab/migration', async (c) => {
 // ─── 6.5 Institutional Flow Tracker ─────────────────────────────────────────
 app.get('/sqftlab/flow', async (c) => {
   const district = c.req.query('district')
-  const clusters = await prisma.institutionalTransaction.findMany({
-    where: district ? { district } : {},
-    orderBy: { totalValue: 'desc' },
-    take: 50,
+  const latestClusterAt = await prisma.institutionalTransaction.findFirst({
+    orderBy: { createdAt: 'desc' }, select: { createdAt: true },
   })
+  const clusters = latestClusterAt
+    ? await prisma.institutionalTransaction.findMany({
+        where: { ...(district ? { district } : {}), createdAt: latestClusterAt.createdAt },
+        orderBy: { totalValue: 'desc' },
+        take: 50,
+      })
+    : []
   if (!clusters.length) {
     return c.json({
       clusters: [], insufficientData: true,
@@ -2087,7 +2330,9 @@ app.post('/sqftlab/macro/scenario', async (c) => {
 // ─── District metrics + market summary ──────────────────────────────────────
 app.get('/sqftlab/districts', async (c) => {
   const emirate = c.req.query('emirate')
-  const metrics = await prisma.districtMetrics.findMany({ orderBy: { momentumScore: 'desc' } })
+  // Append-only table (Task A4) — latest row per district, not every past run.
+  const metrics = (await latestDistrictMetrics())
+    .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))
   const communities = await prisma.community.findMany({
     select: { slug: true, nameEn: true, nameAr: true, emirate: true, latitude: true, longitude: true, medianAedSqft: true, grossYieldPct: true, neighbourhoodScore: true },
   })
@@ -2234,9 +2479,9 @@ app.post('/sqftlab/intelligence/run', async (c) => {
       migration: result.migration, flow: result.flow, metrics: result.metrics,
       durationMs: result.durationMs, generatedAt: result.generatedAt,
     })
-    const topDistricts = await prisma.districtMetrics.findMany({
-      orderBy: { momentumScore: 'desc' }, take: 10,
-    })
+    const topDistricts = (await latestDistrictMetrics())
+      .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))
+      .slice(0, 10)
     for (const d of topDistricts) {
       publish('district:update', {
         district: d.district, avgPricePsf: d.avgPricePsf,
@@ -2256,7 +2501,8 @@ app.post('/sqftlab/intelligence/run', async (c) => {
 app.post('/sqftlab/stream/test-publish', async (c) => {
   const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
   publish('market:update', summary ?? { note: 'no market summary computed yet' })
-  const d = await prisma.districtMetrics.findFirst({ orderBy: { momentumScore: 'desc' } })
+  const d = (await latestDistrictMetrics())
+    .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))[0]
   if (d) publish('district:update', { district: d.district, momentumScore: d.momentumScore })
   const deal = await prisma.listing.findFirst({ where: { isDeal: true } })
   if (deal) {
@@ -2436,6 +2682,337 @@ app.get('/sqftlab/stream/market', (c) =>
     })
   }),
 )
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Auth (Task C) — email magic link + Google OAuth handshake
+//
+// PORT NOTE: the spec targets NextAuth v5, which is a Next.js library and cannot
+// run inside this Hono + Vite app. The behaviour is implemented natively here:
+// single-use tokens in `verification_tokens`, a `sessions` row per sign-in,
+// guest→user attribution, and Google as an optional OAuth provider.
+//
+// IDENTITY MODEL: `getUserId()` trusts a caller-supplied token. That IDENTIFIES
+// but does not AUTHENTICATE — the same caveat as every other endpoint. Swapping
+// in real session verification is a contained change to that one function.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The cookie name `getUserId()` already reads, so the whole API accepts the
+// signed-in identity without touching a single existing handler.
+const SESSION_COOKIE = 'next-auth.session-token'
+const SESSION_TTL_DAYS = 30
+
+/** Send the sign-in link. Returns 'unconfigured' when no mail transport exists. */
+async function sendMagicLinkEmail(to: string, link: string): Promise<'sent' | 'unconfigured'> {
+  const { createEmailOptional } = await import('@shogo-ai/sdk/email/server')
+  const email = createEmailOptional()
+  if (!email) return 'unconfigured'
+  await email.send({
+    to,
+    subject: 'Your sqftLab sign-in link',
+    html:
+      `<p>Click below to sign in to sqftLab:</p>` +
+      `<p><a href="${link}">${link}</a></p>` +
+      `<p>This link expires in 15 minutes. If you didn't request it, ignore this email.</p>`,
+  })
+  return 'sent'
+}
+
+/** Exchange a validated magic-link token for a session cookie + Session row. */
+async function establishSession(
+  c: Context,
+  user: { id: string; email: string },
+  opts: { registeredVia: string; name?: string | null; image?: string | null },
+) {
+  const sessionToken = randomBytes(32).toString('hex')
+  const expires = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 3600 * 1000)
+
+  await prisma.session.create({ data: { sessionToken, userId: user.id, expires } })
+
+  // Task C3 — attribute the anonymous session to this user.
+  const guestId = c.get('guestId')
+  if (guestId) {
+    await prisma.guestSession
+      .update({ where: { id: guestId }, data: { convertedAt: new Date(), convertedUserId: user.id } })
+      .catch(() => {})
+    await prisma.user.update({ where: { id: user.id }, data: { guestId } }).catch(() => {})
+    await prisma.userEvent
+      .updateMany({ where: { guestId, userId: null }, data: { userId: user.id } })
+      .catch(() => {})
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date(), lastActiveAt: new Date(), registeredVia: opts.registeredVia },
+  })
+
+  c.header(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${user.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_DAYS * 24 * 3600}`,
+  )
+  await trackEvent(c, 'sign_up', { via: opts.registeredVia })
+}
+
+// Request a sign-in link.
+app.post('/sqftlab/auth/magic-link', async (c) => {
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return c.json({ error: 'A valid email address is required.' }, 400)
+  }
+
+  const token = randomBytes(32).toString('hex')
+  await prisma.verificationToken.create({
+    data: { identifier: email, token, expires: new Date(Date.now() + 15 * 60 * 1000) },
+  })
+
+  const link = `${new URL(c.req.url).origin}/api/sqftlab/auth/verify?token=${token}&email=${encodeURIComponent(email)}`
+
+  let delivery: 'sent' | 'unconfigured' = 'unconfigured'
+  try {
+    delivery = await sendMagicLinkEmail(email, link)
+  } catch {
+    delivery = 'unconfigured'
+  }
+
+  await trackEvent(c, 'sign_up', { step: 'magic_link_requested' })
+
+  return c.json({
+    ok: true,
+    delivery,
+    // Only returned when no transport is configured, so the flow stays testable
+    // locally. Once SMTP_* / RESEND_API_KEY exist this key disappears.
+    ...(delivery === 'unconfigured' ? { devLink: link } : {}),
+    message:
+      delivery === 'sent'
+        ? 'Check your inbox for the sign-in link.'
+        : 'Email delivery is not configured on this deployment. The link is returned below instead.',
+  })
+})
+
+// Consume the link. Single-use: the token is deleted before the session is made.
+app.get('/sqftlab/auth/verify', async (c) => {
+  const token = c.req.query('token') ?? ''
+  const email = (c.req.query('email') ?? '').trim().toLowerCase()
+  if (!token || !email) return c.json({ error: 'token and email are required.' }, 400)
+
+  const record = await prisma.verificationToken.findFirst({ where: { token, identifier: email } })
+  if (!record) return c.json({ error: 'This sign-in link is invalid or has already been used.' }, 400)
+  if (record.expires < new Date()) {
+    await prisma.verificationToken.deleteMany({ where: { token } })
+    return c.json({ error: 'This sign-in link has expired. Request a new one.' }, 400)
+  }
+  await prisma.verificationToken.deleteMany({ where: { token } })
+
+  const existing = await prisma.user.findUnique({ where: { email } })
+  const user = existing
+    ? existing
+    : await prisma.user.create({
+        data: {
+          email,
+          registeredVia: 'magic_link',
+          ipAtRegistration: c.req.header('x-forwarded-for') ?? null,
+          referrer: c.req.header('Referer') ?? null,
+        },
+      })
+
+  await establishSession(c, user, { registeredVia: 'magic_link' })
+
+  // An email client follows this with a plain browser GET, so land the visitor
+  // back in the app rather than on raw JSON.
+  const onboarded = existing?.onboardingCompleted ?? false
+  return c.redirect(`/?signed_in=1&welcome=${onboarded ? '0' : '1'}`, 302)
+})
+
+// Google OAuth handshake. Optional: reports status instead of failing when the
+// provider credentials are absent.
+app.get('/sqftlab/auth/google', (c) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID
+  if (!clientId) {
+    return c.json(
+      {
+        ok: false,
+        provider: 'google',
+        configured: false,
+        message:
+          'Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then add the callback URL below to the Google console.',
+        callbackUrl: `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`,
+      },
+      501,
+    )
+  }
+  const redirectUri = `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+  url.searchParams.set('client_id', clientId)
+  url.searchParams.set('redirect_uri', redirectUri)
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('scope', 'openid email profile')
+  url.searchParams.set('prompt', 'select_account')
+  return c.redirect(url.toString(), 302)
+})
+
+app.get('/sqftlab/auth/google/callback', async (c) => {
+  const code = c.req.query('code')
+  const clientId = process.env.GOOGLE_CLIENT_ID
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+  if (!clientId || !clientSecret) return c.json({ error: 'Google OAuth is not configured.' }, 501)
+  if (!code) return c.json({ error: 'Missing authorization code.' }, 400)
+
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`,
+        grant_type: 'authorization_code',
+      }),
+    })
+    if (!tokenRes.ok) return c.json({ error: `Google token exchange failed (${tokenRes.status}).` }, 502)
+    const tokens = (await tokenRes.json()) as { access_token?: string }
+    if (!tokens.access_token) return c.json({ error: 'Google returned no access token.' }, 502)
+
+    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    })
+    if (!profileRes.ok) return c.json({ error: 'Could not read the Google profile.' }, 502)
+    const profile = (await profileRes.json()) as { email?: string; name?: string; picture?: string; sub?: string }
+    if (!profile.email) return c.json({ error: 'Google profile has no email.' }, 502)
+
+    const email = profile.email.toLowerCase()
+    const existing = await prisma.user.findUnique({ where: { email } })
+    const user =
+      existing ??
+      (await prisma.user.create({
+        data: { email, name: profile.name ?? null, image: profile.picture ?? null, registeredVia: 'google' },
+      }))
+
+    await prisma.account
+      .create({
+        data: {
+          userId: user.id,
+          type: 'oauth',
+          provider: 'google',
+          providerAccountId: profile.sub ?? email,
+        },
+      })
+      .catch(() => {})
+
+    await establishSession(c, user, { registeredVia: 'google' })
+    return c.redirect(`/?signed_in=1&welcome=${existing?.onboardingCompleted ? '0' : '1'}`, 302)
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : 'Google sign-in failed.' }, 502)
+  }
+})
+
+// Who am I, according to the session cookie.
+app.get('/sqftlab/auth/session', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return c.json({ authenticated: false, tier: 'guest' })
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true, email: true, name: true, image: true, role: true,
+      subscriptionTier: true, subscriptionStatus: true,
+      onboardingCompleted: true, tourCompleted: true, guestId: true, registeredVia: true,
+    },
+  })
+  if (!user) return c.json({ authenticated: false, tier: 'guest' })
+  const { subscriptionTier, ...rest } = user
+  return c.json({ authenticated: true, tier: subscriptionTier, subscriptionTier, user: rest })
+})
+
+// Task C4 — onboarding: role + tracked areas + WhatsApp digest preference.
+app.post('/sqftlab/auth/onboard', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+
+  const role = typeof body.role === 'string' ? body.role : null
+  const areas = Array.isArray(body.areas) ? body.areas.filter((a): a is string => typeof a === 'string') : []
+  const whatsappEnabled = body.whatsappEnabled === true
+  const whatsappPhone = typeof body.whatsappPhone === 'string' ? body.whatsappPhone : null
+
+  if (role && !['investor', 'agent', 'developer', 'analyst', 'other'].includes(role)) {
+    return c.json({ error: 'role must be investor | agent | developer | analyst | other' }, 400)
+  }
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      ...(role ? { role } : {}),
+      ...(whatsappEnabled ? { whatsappEnabled: true, whatsappPhone } : {}),
+      // Stored as JSON text — SQLite has no Json column type.
+      whatsappAreas: JSON.stringify(areas),
+      onboardingCompleted: true,
+    },
+    select: { id: true, role: true, whatsappAreas: true, onboardingCompleted: true },
+  })
+
+  await trackEvent(c, 'sign_up', { step: 'onboarding_complete', role, areas: areas.length })
+  return c.json({ ok: true, user })
+})
+
+// ─── Developer API keys (Task A: ApiKey model) ───────────────────────────────
+
+app.get('/sqftlab/api-keys', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+  const keys = await prisma.apiKey.findMany({
+    where: { userId, revokedAt: null },
+    select: { id: true, prefix: true, name: true, tier: true, callsToday: true, callsMonth: true, lastUsedAt: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  })
+  return c.json({ keys })
+})
+
+app.post('/sqftlab/api-keys', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled key'
+
+  const raw = `sqft_${randomBytes(24).toString('hex')}`
+  const keyHash = createHash('sha256').update(raw).digest('hex')
+
+  const created = await prisma.apiKey.create({
+    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier: 'pro' },
+    select: { id: true, prefix: true, name: true, tier: true, createdAt: true },
+  })
+  await trackEvent(c, 'api_call', { action: 'create_key' })
+
+  // The only time the plaintext key exists outside the caller's own storage.
+  return c.json({ ok: true, key: raw, meta: created })
+})
+
+app.delete('/sqftlab/api-keys/:id', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return unauthorized(c)
+  const id = c.req.param('id')
+  const existing = await prisma.apiKey.findFirst({ where: { id, userId } })
+  if (!existing) return c.json({ error: 'API key not found' }, 404)
+  await prisma.apiKey.update({ where: { id }, data: { revokedAt: new Date() } })
+  return c.json({ ok: true, revoked: id })
+})
 
 // Catch-all — must be registered LAST so every real route wins.
 //

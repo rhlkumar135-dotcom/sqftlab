@@ -86,11 +86,20 @@ console.log(`\n# FIX-05 — price trend from real transactions`)
     'two consecutive calls are identical (no random flicker)',
     JSON.stringify(a.body) === JSON.stringify(b.body),
   )
+  // Decide "has data" from the payload, not from the label. The old check
+  // compared dataSource against the literal 'dld_transactions', which the
+  // handler never emits — it derives the label from the rows' `source` column
+  // ('DLD (Dubai Pulse)' once transactions exist). That coupling made the test
+  // fail on a perfectly healthy response.
   const src = a.body?.dataSource
-  if (src === 'dld_transactions') {
-    const months = (a.body.trend ?? []).filter((t: any) => t.medianPrice !== null)
-    check('trend has real monthly medians', months.length > 0, `${months.length} months with data`)
-    check('null-filled months are null, not 0', (a.body.trend ?? []).some((t: any) => t.medianPrice === null))
+  const monthsWithData = (a.body.trend ?? []).filter((t: any) => t.medianPrice !== null)
+  if (monthsWithData.length > 0) {
+    check('trend has real monthly medians', true, `${monthsWithData.length} months with data`)
+    check(
+      'null-filled months are null, not 0',
+      (a.body.trend ?? []).some((t: any) => t.medianPrice === null),
+    )
+    check('dataSource names a real source, not an internal id', src !== 'dld_dubai' && src !== 'unknown', src)
   } else {
     check('honest no-data path (not fabricated)', src === 'no_transaction_data', src)
   }

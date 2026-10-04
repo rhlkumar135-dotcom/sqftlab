@@ -544,7 +544,9 @@ export async function computeMigrationSignal() {
   const rows = await loadSales()
   const withNat = rows.filter((t) => t.buyerNationality)
   if (!withNat.length) {
-    await prisma.nationalityFlow.deleteMany({})
+    // Task A4 — append-only. This used to deleteMany({}) the whole table.
+    // Reporting insufficientData is enough; wiping the previous run's snapshot
+    // destroyed history the product is built on.
     return { flows: 0, insufficientData: true, reason: 'No transactions carry buyerNationality yet.' }
   }
   const communities = await communityMap()
@@ -563,7 +565,9 @@ export async function computeMigrationSignal() {
     totalsByDistrictMonth.set(k, (totalsByDistrictMonth.get(k) ?? 0) + 1)
   }
 
-  await prisma.nationalityFlow.deleteMany({})
+  // Task A4 — append-only. No deleteMany: each run ADDS a snapshot. One fixed
+  // instant per run lets readers select exactly the newest batch.
+  const runAt = new Date()
   let written = 0
   for (const [k, group] of grouped) {
     const [nationality, communityId, monthIso] = k.split('||')
@@ -578,6 +582,7 @@ export async function computeMigrationSignal() {
         totalValueAed: group.reduce((s, t) => s + t.priceAed, 0),
         avgPsf: group.reduce((s, t) => s + t.pricePerSqft, 0) / group.length,
         shareOfTotal: (group.length / total) * 100,
+        calculatedAt: runAt,
       },
     })
     written++
@@ -587,7 +592,15 @@ export async function computeMigrationSignal() {
 
 /** MoM surge detection — spec 6.4 flags any nationality up >25% month on month. */
 export async function migrationSurges(limit = 20) {
+  // Append-only table (Task A4): read only the newest snapshot. Without this
+  // filter the same nationality/district/month appears once per past run, and
+  // the month-on-month comparison below would run against stale duplicates.
+  const latest = await prisma.nationalityFlow.findFirst({
+    orderBy: { calculatedAt: 'desc' }, select: { calculatedAt: true },
+  })
+  if (!latest) return []
   const rows = await prisma.nationalityFlow.findMany({
+    where: { calculatedAt: latest.calculatedAt },
     orderBy: [{ nationality: 'asc' }, { district: 'asc' }, { month: 'asc' }],
   })
   const out: {
@@ -620,7 +633,8 @@ export async function computeInstitutionalFlow() {
   const rows = await loadSales()
   const corporate = rows.filter((t) => t.buyerType === 'corporate')
   if (!corporate.length) {
-    await prisma.institutionalTransaction.deleteMany({})
+    // Task A4 principle — append-only. Do not wipe prior clusters just because
+    // this run found none.
     return { clusters: 0, insufficientData: true, reason: 'No transactions carry buyerType=corporate yet.' }
   }
   const communities = await communityMap()
@@ -634,7 +648,10 @@ export async function computeInstitutionalFlow() {
     else byEntity.set(k, [t])
   }
 
-  await prisma.institutionalTransaction.deleteMany({})
+  // Task A4 principle — append-only, no deleteMany. `createdAt` is passed
+  // explicitly so every row in a run shares one instant, which is what lets a
+  // reader select exactly the newest batch.
+  const runAt = new Date()
   let clusters = 0
   for (const [k, group] of byEntity) {
     const sorted = [...group].sort((a, b) => a.transactionDate.getTime() - b.transactionDate.getTime())
@@ -656,6 +673,7 @@ export async function computeInstitutionalFlow() {
           firstDate: bucket[0].transactionDate,
           lastDate: bucket[bucket.length - 1].transactionDate,
           transactionIds: bucket.map((t) => t.id).join(','),
+          createdAt: runAt,
         },
       })
       clusters++
@@ -921,18 +939,33 @@ export async function computeDistrictMetrics() {
       calculatedAt: new Date(),
     }
 
-    await prisma.districtMetrics.upsert({
-      where: { district_period: { district: c.slug, period: '30d' } },
-      create: { district: c.slug, period: '30d', ...payload },
-      update: payload,
+    // Task A4 — append-only. This was an upsert(), which overwrote the previous
+    // run's row and destroyed the metric history the product is built on. Each
+    // run now ADDS a row; readers use `latestDistrictMetrics()`.
+    await prisma.districtMetrics.create({
+      data: { district: c.slug, period: '30d', ...payload },
     })
     written++
   }
   return { districts: written }
 }
 
+/**
+ * The newest DistrictMetrics row per district.
+ *
+ * `district_metrics` is append-only (Task A4), so a plain `findMany()` returns
+ * one row per past run and callers would multi-count. Every reader must go
+ * through this helper rather than querying the table directly.
+ */
+export async function latestDistrictMetrics() {
+  const rows = await prisma.districtMetrics.findMany({ orderBy: { calculatedAt: 'desc' } })
+  const newest = new Map<string, (typeof rows)[number]>()
+  for (const r of rows) if (!newest.has(r.district)) newest.set(r.district, r)
+  return [...newest.values()]
+}
+
 export async function computeMarketSummary() {
-  const metrics = await prisma.districtMetrics.findMany()
+  const metrics = await latestDistrictMetrics()
   if (!metrics.length) return { computed: false }
 
   const communities = await communityMap()
@@ -959,9 +992,9 @@ export async function computeMarketSummary() {
     computedAt: new Date(),
   }
 
-  const existing = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
-  if (existing) await prisma.marketSummary.update({ where: { id: existing.id }, data: summary })
-  else await prisma.marketSummary.create({ data: summary })
+  // Task A4 — append-only: `create` only, never update-in-place. Historical
+  // summaries are the product; readers take the newest `computedAt`.
+  await prisma.marketSummary.create({ data: summary })
 
   return { computed: true, ...summary }
 }

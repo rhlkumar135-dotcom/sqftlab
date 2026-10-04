@@ -24,7 +24,9 @@
   },
   "include": [
     "src/**/*",
-    "*.config.ts"
+    "*.config.ts",
+    "custom-routes.ts",
+    "server.tsx"
   ],
   "watchOptions": {
     "excludeDirectories": [
