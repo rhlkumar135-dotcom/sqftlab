@@ -694,3 +694,62 @@ cannot pick them up until a credential is restored.
 
 **`day1_sqftlab.patch` in the repo root is a stray `git format-patch` export** of
 `e6501e0` (105 KB). Left untracked deliberately — not staged, not committed.
+
+---
+
+## Session — Day 1 spec audit (`sqftlab_day01_final.md`)
+
+**Most of Day 1 was already built.** `e6501e0` ("Day 1: DB schema complete, guest
+mode, sign-in page, trend/auth/isDeal fixes") covers TASK A–F. Audit result:
+
+- **A** ✅ 21/22 models present (`PortfolioProperty` absent; `Portfolio` fills that
+  slot — the spec says "Portfolio / PortfolioProperty"). **User model has every
+  A3 field.** A4 append-only respected: no `deleteMany` on Transaction,
+  DistrictMetrics, MarketSummary, ScraperLog, NationalityFlow, UserEvent,
+  GuestSession.
+- **B** ✅ guest cookie, `getCallerTier`, `trackEvent`, 6-community / 10-listing /
+  3-month limits, `signInUrl`.
+- **C** ✅ magic link + Google handshake, `SignInPage` with the exact tagline,
+  3-step onboarding, guest→user attribution.
+- **D/E/F** ✅ trend from real transactions, no `DEMO_USER_ID`, `isDeal` at 8%
+  below the 90-day DLD median.
+
+**What was actually wrong (all fixed):**
+
+1. **`upgradeRequired` was dead; `unauthorized` was used.** The spec-compliant
+   helper (error + `limited` + message + `signInUrl`) was called **0** times; the
+   developer-facing one ("Send `Authorization: Bearer <userId>`") **12** times.
+   All 12 routes now use `upgradeRequired`; `unauthorized` deleted. Also deleted
+   `isGuest()` — also 0 calls, and provably equivalent to its caller's own check.
+   **Lesson: grep for a helper's *usages*, not its definition. A defined-but-unused
+   function is invisible to tests and reads as implemented.**
+2. **`/stream/test-publish` lied.** Returned a hardcoded
+   `published: ['market:update','district:update','deal:new']` regardless of what it
+   sent. Now reports what it published + names what it skipped.
+3. **`server.tsx` regeneration trap, third occurrence.** `prisma format` re-emitted
+   the file with the asset-routing region below the SPA catch-all → `1/8` routing.
+   `scripts/fix-server-order.ts` now repairs the ordering idempotently. **Run it
+   after every schema edit; `verify-server-routing.ts` is what actually detects it
+   ("is the block in the file" ≠ "does the block run").**
+4. **`verify-day1.ts` had a `finally` but no `catch`.** A mid-run throw escaped the
+   body while the `finally` still printed `RESULT: N passed, 0 failed` — a partial
+   run read as clean. Added a catch that records the throw. Also added a preflight:
+   an unreachable API used to crash inside `newGuest()` with a raw
+   ConnectionRefused trace and print no RESULT line at all.
+5. **`verify-stream.ts` demanded `deal:new` unconditionally.** The 8% rule needs a
+   90-day DLD median; with no DLD key, zero deals is the correct output. Replaced
+   with "the endpoint must not claim a channel it did not publish".
+
+**Suites: day1 83 · fixes 41 · cron 31 · intel 27 · routing 8 · stream 15.** tsc
+clean outside `src/generated/`. Build green. Commit `29f377a`.
+
+**Spec paths that do not exist in this app** (so nothing to gate, asserted as 404):
+`POST /sqftlab/cma`, `POST /sqftlab/report/property`, `GET /sqftlab/capital-flow/*`.
+`POST /sqftlab/subscribe` maps to `/api/checkout|subscribe|create-payment-intent`,
+which return **503** (payments disabled) before any guest check runs.
+
+**Push still blocked** — no credential survives a runtime restart. Four commits
+unpushed: `e6501e0`, `134d126`, `009a428`, `29f377a`.
+
+**`day1_sqftlab.patch`** in the repo root remains a stray `git format-patch` export
+of `e6501e0` (105 KB), untracked and deliberately uncommitted.
