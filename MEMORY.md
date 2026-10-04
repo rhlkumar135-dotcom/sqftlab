@@ -751,5 +751,10 @@ which return **503** (payments disabled) before any guest check runs.
 **Push still blocked** — no credential survives a runtime restart. Four commits
 unpushed: `e6501e0`, `134d126`, `009a428`, `29f377a`.
 
-**`day1_sqftlab.patch`** in the repo root remains a stray `git format-patch` export
-of `e6501e0` (105 KB), untracked and deliberately uncommitted.
+**`day1_sqftlab.patch`** (repo root, 105 KB) is a **user-named Day 1 deliverable**,
+not a stray. I first wrote it off as leftover tooling output; the user corrected
+that — the name follows their own document convention (`sqftlab_dayNN_*.md`), so
+`dayNN_sqftlab.*` is the family. Verified byte-identical to
+`git format-patch -1 e6501e0 --stdout` (18 files), so it is a faithful export of
+the Day 1 commit rather than a truncated artifact. Now tracked in git so it
+travels with the push and survives a workspace reset.

@@ -1,0 +1,2295 @@
+From e6501e0ee322cf5a9cbf4c0d037c9c7f06a71265 Mon Sep 17 00:00:00 2001
+From: Shogo <agent@shogo.ai>
+Date: Sun, 4 Oct 2026 19:14:43 +0000
+Subject: [PATCH] Day 1: DB schema complete, guest mode, sign-in page,
+ trend/auth/isDeal fixes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+TASK A — schema: UserEvent, GuestSession, ScraperLog, ApiKey, Waitlist models
+and the User attribution/onboarding columns; append-only policy enforced on
+DistrictMetrics, MarketSummary, NationalityFlow and derivatives.
+
+TASK B — guest mode: sqftlab_guest cookie + GuestSession tracking, getCallerTier
+limits (6 communities, 3-month trend, 10 listings, no deal badge), 401 upgrade
+responses on cma/portfolio/api-keys/alerts, fire-and-forget UserEvent tracking.
+
+TASK C — sign-in: magic-link + Google sign-in page with 3-step onboarding,
+single-use tokens, guest-to-user attribution, deep-linkable /auth/signin.
+
+TASK D — trend: real transaction aggregation replacing Math.random().
+
+TASK E — auth: getUserId() now reads the cookie establishSession() actually
+issues (next-auth.session-token). Reading 'session' meant no session cookie ever
+authenticated — /auth/session, onboarding and /api-keys all returned 401.
+
+TASK F — isDeal: flag at 8% below the area's 90-day DLD median, computed from
+one grouped query. Was 12% off the listing median; rent rows kept stale flags.
+
+Also: /scrape and /detect-deals now use the CRON_SECRET helper instead of a
+hardcoded literal; nested asset paths fold back to the root so deep links render.
+
+Co-authored-by: Shogo Agent <agent@shogo.ai>
+---
+ MEMORY.md                        |  82 ++++
+ bun.lock                         |   5 +
+ custom-routes.ts                 | 633 +++++++++++++++++++++++++++++--
+ index.html                       |  16 +
+ package.json                     |   1 +
+ prisma/schema.prisma             | 189 ++++++++-
+ scripts/seed-pg.ts               |   2 +-
+ scripts/seed-sqftlab.ts          |   3 +-
+ scripts/verify-day1.ts           | 263 +++++++++++++
+ scripts/verify-fixes.ts          |  17 +-
+ scripts/verify-server-routing.ts |   5 +
+ server.tsx                       |  17 +-
+ src/App.tsx                      |  16 +-
+ src/components/SignInPage.tsx    | 319 ++++++++++++++++
+ src/lib/community-match.ts       |  13 +-
+ src/lib/deals.ts                 |  86 ++++-
+ src/lib/intelligence.ts          |  57 ++-
+ tsconfig.json                    |   4 +-
+ 18 files changed, 1645 insertions(+), 83 deletions(-)
+ create mode 100644 scripts/verify-day1.ts
+ create mode 100644 src/components/SignInPage.tsx
+
+diff --git a/MEMORY.md b/MEMORY.md
+index 921c67a..fc01774 100644
+--- a/MEMORY.md
++++ b/MEMORY.md
+@@ -552,3 +552,85 @@ re-adding by hand after each schema change.
+ PropertyFinder: keyless, works. Dubai Pulse: reachable, 401 without a key (free
+ self-serve). ADREC: **no self-serve API** — subscription by request form; the
+ spec's "free, no key" was wrong. ADREC's response mapping is unverified.
++
++### The hourly schedule's `dld >= 1` check is stale — do not chase it
++
++The recurring schedule *"sqftLab hourly data refresh"* verifies its run with
++"communityStats should report dld >= 1 … psf_source should be 'dld'". That
++expectation was written against the **synthetic** dataset (line 473: "All 39
++communities went listing → dld"), which no longer exists — it was removed with
++`scripts/seed-pg.ts` in bdc193c because the rows were fabricated.
++
++Healthy state, verified 2026-09-25T00:00:28Z: `transactions` = **0 rows**,
++communities `psf_source` = 20 `listing` / 25 `none` / **0 `dld`**, so
++`communityStats` reports `dld=0` and `intelligence` reports
++`rpi needs transactions`. That is **correct, not a failure** — `dldSync` has no
++`DUBAI_PULSE_API_KEY` (`.env` holds only `CRON_SECRET`) and so reports `skipped`,
++per the invariant "unconfigured source → `skipped`, never `failed`".
++
++So: a green run with `dld=0` is the expected outcome while DLD is
++credential-blocked. Only treat it as broken if `dldSync` reports `failed`, or if
++`failCount > 0`. Last re-verified 2026-09-27T02:00:28Z by the hourly schedule:
++`okCount=6 failCount=0 skipCount=2`, 1295ms, `dldSync`+`adrecSync` skipped,
++`communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
++(2026-09-26T23:00:28Z run: `okCount=6 failCount=0 skipCount=2`, 2251ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
++Port note: this run reached the API on `localhost:3101` (both 3101 and 8080 answered 200),
++so 3101 does resolve in the current runtime — the line-578 caveat was environment-specific.)
++(2026-09-26T22:00:26Z run: `okCount=6 failCount=0 skipCount=2`, 2106ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.
++Note: in the workspace/meta runtime the project API is served on the workspace origin at
++`/api/*` (port 8080), not `localhost:3101` — the port 3101 address from the schedule prompt
++does not resolve there.)
++(2026-09-26T21:00:25Z run: `okCount=6 failCount=0 skipCount=2`, 1773ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
++(2026-09-26T20:00:24Z run: `okCount=6 failCount=0 skipCount=2`, 1746ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
++(2026-09-26T19:00:21Z run: `okCount=6 failCount=0 skipCount=2`, 3082ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
++(2026-09-26T16:00:23Z run: `okCount=6 failCount=0 skipCount=2`, 1943ms, `dldSync`+`adrecSync`
++skipped, `communityStats` `dld=0` / 20 `listing` / 25 `none`, `transactions` still 0 rows — healthy.)
++(2026-09-26T11:00:25Z run: 1985ms — same shape.)
++(2026-09-26T09:00:24Z run: 1537ms — same shape.)
++(Earlier 2026-09-26T08:00:21Z run: `okCount=6 failCount=0 skipCount=2`, 1642ms;
++2026-09-26T07:00:17Z run: 2731ms — same shape.)
++On 2026-09-26 the schedule prompt itself was rewritten to encode this criterion
++(failCount 0 + unconfigured sources `skipped`), so future hourly runs no longer
++chase the fabricated-world `dld >= 1` assertion.
++(`/api/sqftlab/sources` shows DLD `connected:false`, `envVar: DUBAI_PULSE_API_KEY`.)
++Making `dld >= 1` actually
++true requires either a real Dubai
++Pulse key or re-introducing fake data — the latter is exactly what the audit
++removed.
++
++## 2026-09-25 04:00 — "test all changes deployed to github and railway"
++
++**GitHub is in sync and Railway is deploying it.** `main` = `806372c` locally and on
++`origin` (0 ahead / 0 behind). `GET /repos/.../deployments` shows `railway-app[bot]`
++created a `sqftlab-v2 / production` deployment for every recent commit, the
++`806372c` one **success** at 22:44:05Z and the older ones `inactive` — so the
++newest commit is live, and line 76 above ("Railway never auto-deploys") is
++**stale**: the integration webhook has since been reconnected.
++
++**The `deploy.yml` workflow is a no-op that still shows green.** Its job list for
++`806372c` is `Checkout ✓ · Check Railway secrets ✓ · Install Railway CLI skipped ·
++Deploy skipped · Verify health skipped`. With no `RAILWAY_TOKEN` /
++`RAILWAY_SERVICE_NAME` / `RAILWAY_PROJECT_ID` repo secrets it takes the
++notice-and-exit path (by design). So a green Actions run means "deploy skipped",
++never "deployed" — read the Railway deployment status, not the Actions badge.
++
++**Local suites are green at `806372c`** (run against the project server on 3101;
++the two DB-backed ones need `export DATABASE_URL="file:$PWD/prisma/dev.db"` or
++they die on the stale shell value):
++`verify-fixes 41/41 · verify-intel 27/27 · verify-cron 31/31 · verify-stream 13/13 ·
++verify-server-routing 6/6`, and `tsc --noEmit` reports **0 errors outside
++`src/generated/`** (63 inside it — generated CRUD boilerplate, pre-existing).
++
++**Live HTTP still cannot be verified from this sandbox** (unchanged from line 283):
++`curl` to `www.sqftlab.com` gets a Railway-edge `429 rate limited` (12-byte body,
++`x-railway-edge`), and a real Chrome session via the browser agent gets Cloudflare
++Turnstile "Checking your browser…" on `/`, `/api/sqftlab/stats` and
++`/api/sqftlab/intelligence` alike — so neither the `build-sha` meta nor the
++production data can be read from a datacenter IP. The apex `sqftlab.com` answers
++`301 → www`. The build stamp itself is proven to work (`dist/index.html` carries
++`build-sha=806372c`); only the reading of production's copy is blocked.
+diff --git a/bun.lock b/bun.lock
+index f86b1b2..869897d 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -31,6 +31,7 @@
+       "devDependencies": {
+         "@prisma/internals": "^7.3.0",
+         "@tailwindcss/postcss": "^4.1.18",
++        "@types/bun": "^1.4.2",
+         "@types/node": "^22.0.0",
+         "@types/pg": "^8.23.1",
+         "@types/react": "^19.0.0",
+@@ -529,6 +530,8 @@
+ 
+     "@types/babel__traverse": ["@types/babel__traverse@7.28.0", "", { "dependencies": { "@babel/types": "^7.28.2" } }, "sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q=="],
+ 
++    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
++
+     "@types/d3-array": ["@types/d3-array@3.2.2", "", {}, "sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw=="],
+ 
+     "@types/d3-color": ["@types/d3-color@3.1.3", "", {}, "sha512-iO90scth9WAbmgv7ogoq57O9YpKmFBbmoEoCHDB2xMBY0+/KVrqAaCDyCE16dUspeOvIxFFRI+0sEtqDqy2b4A=="],
+@@ -601,6 +604,8 @@
+ 
+     "browserslist": ["browserslist@4.28.1", "", { "dependencies": { "baseline-browser-mapping": "^2.9.0", "caniuse-lite": "^1.0.30001759", "electron-to-chromium": "^1.5.263", "node-releases": "^2.0.27", "update-browserslist-db": "^1.2.0" }, "bin": { "browserslist": "cli.js" } }, "sha512-ZC5Bd0LgJXgwGqUknZY/vkUQ04r8NXnJZ3yYi4vDmSiZmC/pdSN0NbNRPxZpbtO4uAfDUAFffO8IZoM3Gj8IkA=="],
+ 
++    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
++
+     "bundle-name": ["bundle-name@4.1.0", "", { "dependencies": { "run-applescript": "^7.0.0" } }, "sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q=="],
+ 
+     "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
+diff --git a/custom-routes.ts b/custom-routes.ts
+index 1ee75f8..9eb289a 100644
+--- a/custom-routes.ts
++++ b/custom-routes.ts
+@@ -1,6 +1,7 @@
+ import { Hono } from 'hono'
+ import type { Context } from 'hono'
+ import { streamSSE } from 'hono/streaming'
++import { randomBytes, createHash } from 'node:crypto'
+ import { prisma } from './src/lib/db'
+ import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
+ import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
+@@ -11,11 +12,15 @@ import {
+   runIntelligencePipeline, computeYieldCurve, migrationSurges, applyScenario,
+   computeRealPriceIndex, computeBuildingProfiles, computeSupplyPipeline,
+   computeInstitutionalFlow, computeMigrationSignal, computeDistrictMetrics,
+-  computeMarketSummary, ALL_BEDS,
++  computeMarketSummary, latestDistrictMetrics, ALL_BEDS,
+ } from './src/lib/intelligence'
+ import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
+ 
+-const app = new Hono()
++// Hono needs the context variables declared for `c.set`/`c.get` to type-check.
++// `guestId` is the anonymous-visitor cookie value (Task B).
++type AppVariables = { guestId: string }
++
++const app = new Hono<{ Variables: AppVariables }>()
+ 
+ // ─── CORS ────────────────────────────────────────────────────────────────────
+ //
+@@ -43,7 +48,9 @@ app.use('*', async (c, next) => {
+       c.res.headers.set('Access-Control-Max-Age', '86400')
+       if (isProd) c.res.headers.set('Vary', 'Origin')
+     }
+-    return c.text('', 204)
++    // `c.text('', 204)` fails Hono's typings: 204 is not a ContentfulStatusCode
++    // because it must carry no body. `c.body(null, 204)` is the correct form.
++    return c.body(null, 204)
+   }
+ 
+   await next()
+@@ -70,6 +77,141 @@ app.use('*', async (c, next) => {
+   }
+ })
+ 
++// ─── Guest sessions (Task B) ─────────────────────────────────────────────────
++//
++// Anonymous visitors get a `sqftlab_guest` cookie so their browsing is
++// attributed if they later register. Two deliberate departures from the spec
++// sketch, both to avoid a database write on every request:
++//
++//   1. The middleware only mints/reads the cookie. The GuestSession ROW is
++//      created lazily by `ensureGuestSession()`, which runs on the first tracked
++//      event. Inserting from the middleware would add a row for every health
++//      probe, cron call and bot hit.
++//   2. `pagesViewed` is incremented from `trackEvent`, not the middleware, for
++//      the same reason.
++
++const GUEST_COOKIE = 'sqftlab_guest'
++const GUEST_MAX_AGE = 30 * 24 * 3600 // 30 days, per spec
++
++function readGuestId(c: Context): string | null {
++  const cookie = c.req.header('Cookie') ?? ''
++  const m = cookie.match(new RegExp(`(?:^|;\\s*)${GUEST_COOKIE}=([^;]+)`))
++  return m ? decodeURIComponent(m[1]) : null
++}
++
++app.use('*', async (c, next) => {
++  const existing = readGuestId(c)
++  let minted: string | null = null
++
++  if (existing) {
++    c.set('guestId', existing)
++  } else if (c.req.method !== 'OPTIONS') {
++    const fresh = randomBytes(16).toString('hex')
++    minted = fresh
++    c.set('guestId', fresh)
++  }
++
++  await next()
++
++  if (minted) {
++    try {
++      c.res.headers.append(
++        'Set-Cookie',
++        `${GUEST_COOKIE}=${minted}; Path=/; Max-Age=${GUEST_MAX_AGE}; SameSite=Lax`,
++      )
++    } catch {
++      // Response already committed (streaming) — the cookie is best-effort.
++    }
++  }
++})
++
++/** Creates the GuestSession row for the current cookie. Never fatal. */
++async function ensureGuestSession(c: Context, opts: { touch?: boolean } = {}): Promise<void> {
++  const guestId = c.get('guestId') as string | undefined
++  if (!guestId) return
++  try {
++    const url = new URL(c.req.url)
++    await prisma.guestSession.upsert({
++      where: { id: guestId },
++      create: {
++        id: guestId,
++        referrer: c.req.header('Referer') ?? null,
++        utmSource: url.searchParams.get('utm_source'),
++        utmMedium: url.searchParams.get('utm_medium'),
++        utmCampaign: url.searchParams.get('utm_campaign'),
++        lastSeenAt: new Date(),
++      },
++      update: opts.touch
++        ? { lastSeenAt: new Date(), pagesViewed: { increment: 1 } }
++        : { lastSeenAt: new Date() },
++    })
++  } catch {
++    // Never fail a request over anonymous-session bookkeeping.
++  }
++}
++
++type CallerTier = 'guest' | 'free' | 'pro' | 'enterprise' | 'institutional'
++
++/**
++ * What the caller is allowed to see.
++ *
++ * NOTE: `getUserId()` reads a caller-supplied identifier — it IDENTIFIES, it does
++ * not AUTHENTICATE. This gate controls the *product experience* (what a guest may
++ * browse), not access control: anyone can claim any id by sending it as a bearer
++ * token. Security requires the auth layer, not a different tier check.
++ */
++async function getCallerTier(c: Context): Promise<CallerTier> {
++  const userId = getUserId(c)
++  if (!userId) return 'guest'
++  const user = await prisma.user.findUnique({
++    where: { id: userId },
++    select: { subscriptionTier: true, subscriptionStatus: true },
++  })
++  if (!user) return 'guest'
++  if (user.subscriptionStatus !== 'active' && user.subscriptionStatus !== 'trialing') return 'free'
++  return (user.subscriptionTier ?? 'free') as CallerTier
++}
++
++/** True when the caller has no account — used to gate premium endpoints. */
++async function isGuest(c: Context): Promise<boolean> {
++  return (await getCallerTier(c)) === 'guest'
++}
++
++/** 401 for a guest hitting a subscriber-only endpoint. */
++function upgradeRequired(c: Context) {
++  return c.json(
++    {
++      error: 'Unauthorized',
++      limited: true,
++      message: 'This feature needs a free sqftLab account. Sign in to continue.',
++      signInUrl: '/auth/signin',
++    },
++    401,
++  )
++}
++
++/** Fire-and-forget analytics. Never let tracking break a request. */
++async function trackEvent(c: Context, eventType: string, data?: Record<string, unknown>): Promise<void> {
++  try {
++    const userId = getUserId(c)
++    const guestId = (c.get('guestId') as string | undefined) ?? null
++    await prisma.userEvent.create({
++      data: {
++        userId: userId ?? null,
++        guestId: userId ? null : guestId,
++        eventType,
++        eventData: data ? JSON.stringify(data) : null,
++        page: new URL(c.req.url).pathname,
++        referrer: c.req.header('Referer') ?? null,
++        userAgent: c.req.header('User-Agent')?.slice(0, 200) ?? null,
++      },
++    })
++    if (!userId) await ensureGuestSession(c, { touch: eventType === 'page_view' })
++  } catch {
++    // Fire-and-forget.
++  }
++}
++
+ // ─── Health & diagnostics ─────────────────────────────────────────────────────
+ 
+ // Report the *shape* of DATABASE_URL without leaking credentials. The literal
+@@ -134,11 +276,33 @@ app.get('/sqftlab/communities', async (c) => {
+   })
+   const dealsByCommunity = new Map(dealGroups.map((g) => [g.communityId, g._count._all]))
+ 
++  // Task B3 — guests get a teaser (6 of 39 districts); signed-in callers get all.
++  const tier = await getCallerTier(c)
++  const enriched = communities.map((x) => ({ ...x, dealCount: dealsByCommunity.get(x.id) ?? 0 }))
++  const visible = tier === 'guest' ? enriched.slice(0, 6) : enriched
++
++  await trackEvent(c, 'community_list', { tier, returned: visible.length, total: enriched.length })
++
+   return c.json({
+-    communities: communities.map((c) => ({ ...c, dealCount: dealsByCommunity.get(c.id) ?? 0 })),
++    communities: visible,
++    ...(tier === 'guest'
++      ? { limited: true, message: 'Sign in to see all communities', signInUrl: '/auth/signin' }
++      : {}),
+   })
+ })
+ 
++// Fields that make up the paid neighbourhood-score breakdown. Guests see the
++// single headline score, not the components.
++const GUEST_HIDDEN_COMMUNITY_FIELDS = [
++  'scoreSchools', 'scoreHealthcare', 'scoreMetro', 'scoreRetail', 'scoreParks', 'scoreWorship',
++] as const
++
++function redactCommunityForGuest<T extends Record<string, unknown>>(community: T) {
++  const out: Record<string, unknown> = { ...community }
++  for (const k of GUEST_HIDDEN_COMMUNITY_FIELDS) delete out[k]
++  return out
++}
++
+ app.get('/sqftlab/communities/:slug', async (c) => {
+   const slug = c.req.param('slug')
+   const community = await prisma.community.findUnique({
+@@ -149,6 +313,21 @@ app.get('/sqftlab/communities/:slug', async (c) => {
+     },
+   })
+   if (!community) return c.json({ error: 'Community not found' }, 404)
++
++  // Task B3 — guests see headline metrics but not the score breakdown, and no
++  // nationality mix. (This payload carries no nationality data at all, so there
++  // is nothing to redact for that part; the breakdown is the real gate.)
++  const tier = await getCallerTier(c)
++  await trackEvent(c, 'community_view', { slug, tier })
++
++  if (tier === 'guest') {
++    return c.json({
++      community: redactCommunityForGuest(community),
++      limited: true,
++      message: 'Sign in to see the full neighbourhood score breakdown.',
++      signInUrl: '/auth/signin',
++    })
++  }
+   return c.json({ community })
+ })
+ 
+@@ -231,14 +410,22 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
+   // "DLD · Dubai Pulse API" made the chart assert a government source no matter
+   // what the rows were, including while the table held generated data.
+   const present = new Set(transactions.map((t) => t.source))
++  // Transaction.source defaults to 'dld_dubai', not 'dld' — matching only the
++  // bare 'dld' string meant every real DLD row fell through to the raw-value
++  // branch and the chart was labelled "dld_dubai", an internal identifier
++  // rather than a source a reader would recognise.
++  const isDld = (s: string) => s === 'dld' || s === 'dld_dubai' || s === 'dubai_pulse'
++  const isAdrec = (s: string) => s === 'adrec' || s === 'adrec_abudhabi'
++  const hasDld = [...present].some(isDld)
++  const hasAdrec = [...present].some(isAdrec)
+   const sourceLabel =
+     present.size === 0
+       ? 'unknown'
+-      : present.has('dld') && present.has('adrec')
++      : hasDld && hasAdrec
+         ? 'DLD + ADREC'
+-        : present.has('dld')
++        : hasDld
+           ? 'DLD (Dubai Pulse)'
+-          : present.has('adrec')
++          : hasAdrec
+             ? 'ADREC (Abu Dhabi)'
+             : [...present].join(', ')
+ 
+@@ -296,7 +483,26 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
+     })
+   }
+ 
+-  return c.json({ trend, period, dataSource: sourceLabel, sources: [...present] })
++  // Task B3 — guests get a 3-month window; the 12/36/60-month series is a
++  // subscriber feature.
++  const tier = await getCallerTier(c)
++  const visibleTrend = tier === 'guest' ? trend.slice(-3) : trend
++  await trackEvent(c, 'trend_view', { slug, period, tier })
++
++  return c.json({
++    trend: visibleTrend,
++    period,
++    dataSource: sourceLabel,
++    sources: [...present],
++    ...(tier === 'guest'
++      ? {
++          limited: true,
++          monthsShown: 3,
++          message: 'Sign in for the full price history',
++          signInUrl: '/auth/signin',
++        }
++      : {}),
++  })
+ })
+ 
+ // ─── Yield Calculator ────────────────────────────────────────────────────────
+@@ -577,8 +783,7 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
+ // It used to be defined here, which meant the cron would have needed a copy.
+ 
+ app.get('/sqftlab/scrape', async (c) => {
+-  const secret = c.req.query('secret')
+-  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
++  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
+ 
+   const startedAt = Date.now()
+   let totalSaved = 0
+@@ -787,7 +992,11 @@ function getUserId(c: Context): string | null {
+   const auth = c.req.header('Authorization')
+   if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
+   const cookie = c.req.header('Cookie') ?? ''
+-  const match = cookie.match(/(?:^|;\s*)session=([^;]+)/)
++  // `next-auth.session-token` is the cookie name establishSession() issues.
++  // Bare `session` stays accepted as a fallback for earlier links.
++  const match =
++    cookie.match(/(?:^|;\s*)(?:__Secure-)?next-auth\.session-token=([^;]+)/) ??
++    cookie.match(/(?:^|;\s*)session=([^;]+)/)
+   return match ? decodeURIComponent(match[1]) : null
+ }
+ 
+@@ -915,8 +1124,7 @@ app.get('/sqftlab/watchlist', async (c) => {
+ // Re-run deal detection without a full scrape. Same secret as /scrape so it can
+ // be driven from the cron without exposing a mutation to the public.
+ app.get('/sqftlab/detect-deals', async (c) => {
+-  const secret = c.req.query('secret')
+-  if (secret !== 'sqftlab-cron-2026') return c.json({ error: 'unauthorized' }, 401)
++  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
+ 
+   const dealsDetected = await detectDeals()
+   return c.json({ ok: true, dealsDetected })
+@@ -980,7 +1188,24 @@ app.get('/sqftlab/listings', async (c) => {
+     prisma.listing.count({ where }),
+   ])
+ 
+-  return c.json({ listings, total, page, pages: Math.ceil(total / limit) })
++  // Task B3 — guests get the first 10 rows and no deal badge. `isDeal` is the
++  // paid signal (it is the whole point of the deals feed), so it is stripped
++  // rather than merely hidden in the UI.
++  const tier = await getCallerTier(c)
++  const visibleListings =
++    tier === 'guest' ? listings.slice(0, 10).map(({ isDeal: _isDeal, ...rest }) => rest) : listings
++
++  await trackEvent(c, 'search', { tier, returned: visibleListings.length, total })
++
++  return c.json({
++    listings: visibleListings,
++    total,
++    page,
++    pages: Math.ceil(total / limit),
++    ...(tier === 'guest'
++      ? { limited: true, message: 'Sign in to browse every listing', signInUrl: '/auth/signin' }
++      : {}),
++  })
+ })
+ 
+ // ─── Alerts ──────────────────────────────────────────────────────────────────
+@@ -1670,10 +1895,17 @@ app.get('/sqftlab/me', async (c) => {
+ 
+   const user = await prisma.user.findUnique({
+     where: { id: userId },
+-    select: { id: true, email: true, name: true, tier: true, subscriptionStatus: true },
++    select: {
++      id: true, email: true, name: true, image: true, role: true,
++      subscriptionTier: true, subscriptionStatus: true, onboardingCompleted: true, guestId: true,
++    },
+   })
+   if (!user) return c.json({ error: 'No user account configured' }, 404)
+-  return c.json({ user })
++
++  // `tier` is kept in the response because the client reads it; the DB field is
++  // `subscriptionTier` (Task A3). Both names are returned so neither breaks.
++  const { subscriptionTier, ...rest } = user
++  return c.json({ user: { ...rest, tier: subscriptionTier, subscriptionTier } })
+ })
+ 
+ // GET /sqftlab/alerts — active alerts plus the recent matches they produced.
+@@ -1970,10 +2202,16 @@ app.get('/sqftlab/migration', async (c) => {
+   const district = c.req.query('district')
+   const where = district ? { district } : {}
+ 
++  const latestFlowAt = await prisma.nationalityFlow.findFirst({
++    orderBy: { calculatedAt: 'desc' }, select: { calculatedAt: true },
++  })
+   const [flows, surges] = await Promise.all([
+-    prisma.nationalityFlow.findMany({
+-      where, orderBy: [{ month: 'desc' }, { transactionCount: 'desc' }], take: 100,
+-    }),
++    latestFlowAt
++      ? prisma.nationalityFlow.findMany({
++          where: { ...where, calculatedAt: latestFlowAt.calculatedAt },
++          orderBy: [{ month: 'desc' }, { transactionCount: 'desc' }], take: 100,
++        })
++      : Promise.resolve([]),
+     migrationSurges(20),
+   ])
+ 
+@@ -1995,11 +2233,16 @@ app.get('/sqftlab/migration', async (c) => {
+ // ─── 6.5 Institutional Flow Tracker ─────────────────────────────────────────
+ app.get('/sqftlab/flow', async (c) => {
+   const district = c.req.query('district')
+-  const clusters = await prisma.institutionalTransaction.findMany({
+-    where: district ? { district } : {},
+-    orderBy: { totalValue: 'desc' },
+-    take: 50,
++  const latestClusterAt = await prisma.institutionalTransaction.findFirst({
++    orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+   })
++  const clusters = latestClusterAt
++    ? await prisma.institutionalTransaction.findMany({
++        where: { ...(district ? { district } : {}), createdAt: latestClusterAt.createdAt },
++        orderBy: { totalValue: 'desc' },
++        take: 50,
++      })
++    : []
+   if (!clusters.length) {
+     return c.json({
+       clusters: [], insufficientData: true,
+@@ -2087,7 +2330,9 @@ app.post('/sqftlab/macro/scenario', async (c) => {
+ // ─── District metrics + market summary ──────────────────────────────────────
+ app.get('/sqftlab/districts', async (c) => {
+   const emirate = c.req.query('emirate')
+-  const metrics = await prisma.districtMetrics.findMany({ orderBy: { momentumScore: 'desc' } })
++  // Append-only table (Task A4) — latest row per district, not every past run.
++  const metrics = (await latestDistrictMetrics())
++    .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))
+   const communities = await prisma.community.findMany({
+     select: { slug: true, nameEn: true, nameAr: true, emirate: true, latitude: true, longitude: true, medianAedSqft: true, grossYieldPct: true, neighbourhoodScore: true },
+   })
+@@ -2234,9 +2479,9 @@ app.post('/sqftlab/intelligence/run', async (c) => {
+       migration: result.migration, flow: result.flow, metrics: result.metrics,
+       durationMs: result.durationMs, generatedAt: result.generatedAt,
+     })
+-    const topDistricts = await prisma.districtMetrics.findMany({
+-      orderBy: { momentumScore: 'desc' }, take: 10,
+-    })
++    const topDistricts = (await latestDistrictMetrics())
++      .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))
++      .slice(0, 10)
+     for (const d of topDistricts) {
+       publish('district:update', {
+         district: d.district, avgPricePsf: d.avgPricePsf,
+@@ -2256,7 +2501,8 @@ app.post('/sqftlab/intelligence/run', async (c) => {
+ app.post('/sqftlab/stream/test-publish', async (c) => {
+   const summary = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+   publish('market:update', summary ?? { note: 'no market summary computed yet' })
+-  const d = await prisma.districtMetrics.findFirst({ orderBy: { momentumScore: 'desc' } })
++  const d = (await latestDistrictMetrics())
++    .sort((a, b) => (b.momentumScore ?? 0) - (a.momentumScore ?? 0))[0]
+   if (d) publish('district:update', { district: d.district, momentumScore: d.momentumScore })
+   const deal = await prisma.listing.findFirst({ where: { isDeal: true } })
+   if (deal) {
+@@ -2437,6 +2683,337 @@ app.get('/sqftlab/stream/market', (c) =>
+   }),
+ )
+ 
++// ═══════════════════════════════════════════════════════════════════════════
++// Auth (Task C) — email magic link + Google OAuth handshake
++//
++// PORT NOTE: the spec targets NextAuth v5, which is a Next.js library and cannot
++// run inside this Hono + Vite app. The behaviour is implemented natively here:
++// single-use tokens in `verification_tokens`, a `sessions` row per sign-in,
++// guest→user attribution, and Google as an optional OAuth provider.
++//
++// IDENTITY MODEL: `getUserId()` trusts a caller-supplied token. That IDENTIFIES
++// but does not AUTHENTICATE — the same caveat as every other endpoint. Swapping
++// in real session verification is a contained change to that one function.
++// ═══════════════════════════════════════════════════════════════════════════
++
++// The cookie name `getUserId()` already reads, so the whole API accepts the
++// signed-in identity without touching a single existing handler.
++const SESSION_COOKIE = 'next-auth.session-token'
++const SESSION_TTL_DAYS = 30
++
++/** Send the sign-in link. Returns 'unconfigured' when no mail transport exists. */
++async function sendMagicLinkEmail(to: string, link: string): Promise<'sent' | 'unconfigured'> {
++  const { createEmailOptional } = await import('@shogo-ai/sdk/email/server')
++  const email = createEmailOptional()
++  if (!email) return 'unconfigured'
++  await email.send({
++    to,
++    subject: 'Your sqftLab sign-in link',
++    html:
++      `<p>Click below to sign in to sqftLab:</p>` +
++      `<p><a href="${link}">${link}</a></p>` +
++      `<p>This link expires in 15 minutes. If you didn't request it, ignore this email.</p>`,
++  })
++  return 'sent'
++}
++
++/** Exchange a validated magic-link token for a session cookie + Session row. */
++async function establishSession(
++  c: Context,
++  user: { id: string; email: string },
++  opts: { registeredVia: string; name?: string | null; image?: string | null },
++) {
++  const sessionToken = randomBytes(32).toString('hex')
++  const expires = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 3600 * 1000)
++
++  await prisma.session.create({ data: { sessionToken, userId: user.id, expires } })
++
++  // Task C3 — attribute the anonymous session to this user.
++  const guestId = c.get('guestId')
++  if (guestId) {
++    await prisma.guestSession
++      .update({ where: { id: guestId }, data: { convertedAt: new Date(), convertedUserId: user.id } })
++      .catch(() => {})
++    await prisma.user.update({ where: { id: user.id }, data: { guestId } }).catch(() => {})
++    await prisma.userEvent
++      .updateMany({ where: { guestId, userId: null }, data: { userId: user.id } })
++      .catch(() => {})
++  }
++
++  await prisma.user.update({
++    where: { id: user.id },
++    data: { lastLoginAt: new Date(), lastActiveAt: new Date(), registeredVia: opts.registeredVia },
++  })
++
++  c.header(
++    'Set-Cookie',
++    `${SESSION_COOKIE}=${user.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_DAYS * 24 * 3600}`,
++  )
++  await trackEvent(c, 'sign_up', { via: opts.registeredVia })
++}
++
++// Request a sign-in link.
++app.post('/sqftlab/auth/magic-link', async (c) => {
++  let body: Record<string, unknown>
++  try {
++    body = await c.req.json()
++  } catch {
++    return c.json({ error: 'Request body must be JSON.' }, 400)
++  }
++
++  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
++  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
++    return c.json({ error: 'A valid email address is required.' }, 400)
++  }
++
++  const token = randomBytes(32).toString('hex')
++  await prisma.verificationToken.create({
++    data: { identifier: email, token, expires: new Date(Date.now() + 15 * 60 * 1000) },
++  })
++
++  const link = `${new URL(c.req.url).origin}/api/sqftlab/auth/verify?token=${token}&email=${encodeURIComponent(email)}`
++
++  let delivery: 'sent' | 'unconfigured' = 'unconfigured'
++  try {
++    delivery = await sendMagicLinkEmail(email, link)
++  } catch {
++    delivery = 'unconfigured'
++  }
++
++  await trackEvent(c, 'sign_up', { step: 'magic_link_requested' })
++
++  return c.json({
++    ok: true,
++    delivery,
++    // Only returned when no transport is configured, so the flow stays testable
++    // locally. Once SMTP_* / RESEND_API_KEY exist this key disappears.
++    ...(delivery === 'unconfigured' ? { devLink: link } : {}),
++    message:
++      delivery === 'sent'
++        ? 'Check your inbox for the sign-in link.'
++        : 'Email delivery is not configured on this deployment. The link is returned below instead.',
++  })
++})
++
++// Consume the link. Single-use: the token is deleted before the session is made.
++app.get('/sqftlab/auth/verify', async (c) => {
++  const token = c.req.query('token') ?? ''
++  const email = (c.req.query('email') ?? '').trim().toLowerCase()
++  if (!token || !email) return c.json({ error: 'token and email are required.' }, 400)
++
++  const record = await prisma.verificationToken.findFirst({ where: { token, identifier: email } })
++  if (!record) return c.json({ error: 'This sign-in link is invalid or has already been used.' }, 400)
++  if (record.expires < new Date()) {
++    await prisma.verificationToken.deleteMany({ where: { token } })
++    return c.json({ error: 'This sign-in link has expired. Request a new one.' }, 400)
++  }
++  await prisma.verificationToken.deleteMany({ where: { token } })
++
++  const existing = await prisma.user.findUnique({ where: { email } })
++  const user = existing
++    ? existing
++    : await prisma.user.create({
++        data: {
++          email,
++          registeredVia: 'magic_link',
++          ipAtRegistration: c.req.header('x-forwarded-for') ?? null,
++          referrer: c.req.header('Referer') ?? null,
++        },
++      })
++
++  await establishSession(c, user, { registeredVia: 'magic_link' })
++
++  // An email client follows this with a plain browser GET, so land the visitor
++  // back in the app rather than on raw JSON.
++  const onboarded = existing?.onboardingCompleted ?? false
++  return c.redirect(`/?signed_in=1&welcome=${onboarded ? '0' : '1'}`, 302)
++})
++
++// Google OAuth handshake. Optional: reports status instead of failing when the
++// provider credentials are absent.
++app.get('/sqftlab/auth/google', (c) => {
++  const clientId = process.env.GOOGLE_CLIENT_ID
++  if (!clientId) {
++    return c.json(
++      {
++        ok: false,
++        provider: 'google',
++        configured: false,
++        message:
++          'Google sign-in is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then add the callback URL below to the Google console.',
++        callbackUrl: `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`,
++      },
++      501,
++    )
++  }
++  const redirectUri = `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`
++  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
++  url.searchParams.set('client_id', clientId)
++  url.searchParams.set('redirect_uri', redirectUri)
++  url.searchParams.set('response_type', 'code')
++  url.searchParams.set('scope', 'openid email profile')
++  url.searchParams.set('prompt', 'select_account')
++  return c.redirect(url.toString(), 302)
++})
++
++app.get('/sqftlab/auth/google/callback', async (c) => {
++  const code = c.req.query('code')
++  const clientId = process.env.GOOGLE_CLIENT_ID
++  const clientSecret = process.env.GOOGLE_CLIENT_SECRET
++  if (!clientId || !clientSecret) return c.json({ error: 'Google OAuth is not configured.' }, 501)
++  if (!code) return c.json({ error: 'Missing authorization code.' }, 400)
++
++  try {
++    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
++      body: new URLSearchParams({
++        code,
++        client_id: clientId,
++        client_secret: clientSecret,
++        redirect_uri: `${new URL(c.req.url).origin}/api/sqftlab/auth/google/callback`,
++        grant_type: 'authorization_code',
++      }),
++    })
++    if (!tokenRes.ok) return c.json({ error: `Google token exchange failed (${tokenRes.status}).` }, 502)
++    const tokens = (await tokenRes.json()) as { access_token?: string }
++    if (!tokens.access_token) return c.json({ error: 'Google returned no access token.' }, 502)
++
++    const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
++      headers: { Authorization: `Bearer ${tokens.access_token}` },
++    })
++    if (!profileRes.ok) return c.json({ error: 'Could not read the Google profile.' }, 502)
++    const profile = (await profileRes.json()) as { email?: string; name?: string; picture?: string; sub?: string }
++    if (!profile.email) return c.json({ error: 'Google profile has no email.' }, 502)
++
++    const email = profile.email.toLowerCase()
++    const existing = await prisma.user.findUnique({ where: { email } })
++    const user =
++      existing ??
++      (await prisma.user.create({
++        data: { email, name: profile.name ?? null, image: profile.picture ?? null, registeredVia: 'google' },
++      }))
++
++    await prisma.account
++      .create({
++        data: {
++          userId: user.id,
++          type: 'oauth',
++          provider: 'google',
++          providerAccountId: profile.sub ?? email,
++        },
++      })
++      .catch(() => {})
++
++    await establishSession(c, user, { registeredVia: 'google' })
++    return c.redirect(`/?signed_in=1&welcome=${existing?.onboardingCompleted ? '0' : '1'}`, 302)
++  } catch (e) {
++    return c.json({ error: e instanceof Error ? e.message : 'Google sign-in failed.' }, 502)
++  }
++})
++
++// Who am I, according to the session cookie.
++app.get('/sqftlab/auth/session', async (c) => {
++  const userId = getUserId(c)
++  if (!userId) return c.json({ authenticated: false, tier: 'guest' })
++  const user = await prisma.user.findUnique({
++    where: { id: userId },
++    select: {
++      id: true, email: true, name: true, image: true, role: true,
++      subscriptionTier: true, subscriptionStatus: true,
++      onboardingCompleted: true, tourCompleted: true, guestId: true, registeredVia: true,
++    },
++  })
++  if (!user) return c.json({ authenticated: false, tier: 'guest' })
++  const { subscriptionTier, ...rest } = user
++  return c.json({ authenticated: true, tier: subscriptionTier, subscriptionTier, user: rest })
++})
++
++// Task C4 — onboarding: role + tracked areas + WhatsApp digest preference.
++app.post('/sqftlab/auth/onboard', async (c) => {
++  const userId = getUserId(c)
++  if (!userId) return unauthorized(c)
++
++  let body: Record<string, unknown>
++  try {
++    body = await c.req.json()
++  } catch {
++    return c.json({ error: 'Request body must be JSON.' }, 400)
++  }
++
++  const role = typeof body.role === 'string' ? body.role : null
++  const areas = Array.isArray(body.areas) ? body.areas.filter((a): a is string => typeof a === 'string') : []
++  const whatsappEnabled = body.whatsappEnabled === true
++  const whatsappPhone = typeof body.whatsappPhone === 'string' ? body.whatsappPhone : null
++
++  if (role && !['investor', 'agent', 'developer', 'analyst', 'other'].includes(role)) {
++    return c.json({ error: 'role must be investor | agent | developer | analyst | other' }, 400)
++  }
++
++  const user = await prisma.user.update({
++    where: { id: userId },
++    data: {
++      ...(role ? { role } : {}),
++      ...(whatsappEnabled ? { whatsappEnabled: true, whatsappPhone } : {}),
++      // Stored as JSON text — SQLite has no Json column type.
++      whatsappAreas: JSON.stringify(areas),
++      onboardingCompleted: true,
++    },
++    select: { id: true, role: true, whatsappAreas: true, onboardingCompleted: true },
++  })
++
++  await trackEvent(c, 'sign_up', { step: 'onboarding_complete', role, areas: areas.length })
++  return c.json({ ok: true, user })
++})
++
++// ─── Developer API keys (Task A: ApiKey model) ───────────────────────────────
++
++app.get('/sqftlab/api-keys', async (c) => {
++  const userId = getUserId(c)
++  if (!userId) return unauthorized(c)
++  const keys = await prisma.apiKey.findMany({
++    where: { userId, revokedAt: null },
++    select: { id: true, prefix: true, name: true, tier: true, callsToday: true, callsMonth: true, lastUsedAt: true, createdAt: true },
++    orderBy: { createdAt: 'desc' },
++  })
++  return c.json({ keys })
++})
++
++app.post('/sqftlab/api-keys', async (c) => {
++  const userId = getUserId(c)
++  if (!userId) return unauthorized(c)
++
++  let body: Record<string, unknown>
++  try {
++    body = await c.req.json()
++  } catch {
++    return c.json({ error: 'Request body must be JSON.' }, 400)
++  }
++  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled key'
++
++  const raw = `sqft_${randomBytes(24).toString('hex')}`
++  const keyHash = createHash('sha256').update(raw).digest('hex')
++
++  const created = await prisma.apiKey.create({
++    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier: 'pro' },
++    select: { id: true, prefix: true, name: true, tier: true, createdAt: true },
++  })
++  await trackEvent(c, 'api_call', { action: 'create_key' })
++
++  // The only time the plaintext key exists outside the caller's own storage.
++  return c.json({ ok: true, key: raw, meta: created })
++})
++
++app.delete('/sqftlab/api-keys/:id', async (c) => {
++  const userId = getUserId(c)
++  if (!userId) return unauthorized(c)
++  const id = c.req.param('id')
++  const existing = await prisma.apiKey.findFirst({ where: { id, userId } })
++  if (!existing) return c.json({ error: 'API key not found' }, 404)
++  await prisma.apiKey.update({ where: { id }, data: { revokedAt: new Date() } })
++  return c.json({ ok: true, revoked: id })
++})
++
+ // Catch-all — must be registered LAST so every real route wins.
+ //
+ // The pattern is '*' and not '/api/*': server.tsx mounts this app with
+diff --git a/index.html b/index.html
+index 53a7a73..a32a427 100644
+--- a/index.html
++++ b/index.html
+@@ -11,6 +11,22 @@
+     <!-- Leaflet's stylesheet is bundled via src/App.tsx, not loaded from a CDN:
+          the map is core UI and must not depend on a third-party host. -->
+ 
++    <!-- The client is built with a RELATIVE asset base (`./assets/…`) so one
++         bundle works both at `/` and at `/p/<projectId>/`. That breaks any
++         nested entry path: at `/auth/signin` the relative refs resolve to
++         `/auth/assets/…`, the static handler falls through to the SPA shell, and
++         the browser receives HTML where it expects a JS module — a blank page.
++         So client routes are entered through the root path plus a hash, and this
++         runs before the module script so the redirect wins the race. -->
++    <script>
++      ;(function () {
++        var path = location.pathname.replace(/\/+$/, '')
++        if (!path || path.indexOf('/p/') === 0) return
++        var routes = { '/auth/signin': '#signin', '/signin': '#signin' }
++        var hash = routes[path]
++        if (hash) location.replace('/' + hash)
++      })()
++    </script>
+   </head>
+   <body>
+     <div id="root"></div>
+diff --git a/package.json b/package.json
+index fbbca01..947a806 100644
+--- a/package.json
++++ b/package.json
+@@ -47,6 +47,7 @@
+   "devDependencies": {
+     "@prisma/internals": "^7.3.0",
+     "@tailwindcss/postcss": "^4.1.18",
++    "@types/bun": "^1.4.2",
+     "@types/node": "^22.0.0",
+     "@types/pg": "^8.23.1",
+     "@types/react": "^19.0.0",
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 446caef..caee213 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -14,12 +14,53 @@ model User {
+   id                    String    @id @default(cuid())
+   email                 String    @unique
+   name                  String?
++  emailVerified         DateTime? @map("email_verified")
++  image                 String?
+   phone                 String?
+   nationality           String?
+-  tier                  String    @default("free") // free, pro, elite
+-  subscriptionStatus    String    @default("active") @map("subscription_status")
++  company               String?
++  role                  String? // agent | developer | investor | analyst | other
++  country               String?
++
++  // Subscription. `subscriptionTier` then `subscriptionStatus` are the spec's
++  // canonical names; `/sqftlab/me` still returns the tier as `tier` so the
++  // existing client is unchanged.
++  //
++  // `@map("tier")` is deliberate: the Prisma field carries the spec's name while
++  // the physical column keeps its original one. Renaming the column would make
++  // `prisma db push` drop it and lose every stored tier value — and that cannot
++  // be forced here (`--accept-data-loss` is off limits).
++  subscriptionTier      String    @default("free") @map("tier") // free | pro | elite | enterprise | institutional
++  subscriptionStatus    String    @default("active") @map("subscription_status") // active | trialing | past_due | cancelled | inactive
++  subscriptionId        String?   @map("subscription_id")
+   subscriptionExpiresAt DateTime? @map("subscription_expires_at")
++  trialEndsAt           DateTime? @map("trial_ends_at")
++  currentPeriodEnd      DateTime? @map("current_period_end")
+   stripeCustomerId      String?   @map("stripe_customer_id")
++
++  // Notification preferences
++  emailAlerts           Boolean   @default(true) @map("email_alerts")
++  whatsappEnabled       Boolean   @default(false) @map("whatsapp_enabled")
++  whatsappPhone         String?   @map("whatsapp_phone")
++  // JSON array stored as TEXT — SQLite has no Json column type (see the port note below).
++  whatsappAreas         String    @default("[]") @map("whatsapp_areas")
++  digestFrequency       String    @default("daily") @map("digest_frequency") // daily | weekly | none
++
++  // Onboarding
++  onboardingCompleted   Boolean   @default(false) @map("onboarding_completed")
++  tourCompleted         Boolean   @default(false) @map("tour_completed")
++
++  // Guest → registered attribution
++  guestId               String?   @map("guest_id")
++
++  // Meta
++  lastLoginAt           DateTime? @map("last_login_at")
++  lastActiveAt          DateTime? @map("last_active_at")
++  registeredVia         String?   @map("registered_via") // google | github | email | magic_link
++  ipAtRegistration      String?   @map("ip_at_registration")
++  referrer              String?
++  utmSource             String?   @map("utm_source")
++
+   createdAt             DateTime  @default(now()) @map("created_at")
+   updatedAt             DateTime  @updatedAt @map("updated_at")
+ 
+@@ -28,6 +69,10 @@ model User {
+   alerts       Alert[]
+   dealAlerts   DealAlert[]
+   subscription Subscription?
++  apiKeys      ApiKey[]
++  events       UserEvent[]
++  sessions     Session[]
++  accounts     Account[]
+ 
+   @@map("users")
+ }
+@@ -207,11 +252,15 @@ model Alert {
+ }
+ 
+ model Waitlist {
+-  id           String   @id @default(cuid())
+-  email        String   @unique
+-  source       String   @default("waitlist_page")
+-  interestTier String   @default("pro") @map("interest_tier") // pro, elite
+-  createdAt    DateTime @default(now()) @map("created_at")
++  id           String    @id @default(cuid())
++  email        String    @unique
++  name         String?
++  company      String?
++  role         String? // agent | developer | investor | bank | other
++  source       String    @default("waitlist_page")
++  interestTier String    @default("pro") @map("interest_tier") // pro, elite
++  invitedAt    DateTime? @map("invited_at")
++  createdAt    DateTime  @default(now()) @map("created_at")
+ 
+   @@map("waitlist")
+ }
+@@ -299,7 +348,11 @@ model DistrictMetrics {
+   supplyScore    Float?   @map("supply_score")
+   calculatedAt   DateTime @default(now()) @map("calculated_at")
+ 
+-  @@unique([district, period])
++  // Deliberately an index, not a unique constraint. This table is append-only
++  // (see Task A4): each run ADDS a row so metric history is never destroyed.
++  // A unique constraint would make the second run for the same period fail.
++  // Readers select the newest row per district — see `latestDistrictMetrics()`.
++  @@index([district, period])
+   @@index([district])
+   @@index([momentumScore])
+   @@map("district_metrics")
+@@ -430,9 +483,12 @@ model NationalityFlow {
+   shareOfTotal     Float?   @map("share_of_total")
+   calculatedAt     DateTime @default(now()) @map("calculated_at")
+ 
+-  @@unique([nationality, district, month])
++  // Index, not unique — append-only per Task A4. Each run adds a new snapshot so
++  // the flow history is preserved; readers take the newest `calculatedAt`.
++  @@index([nationality, district, month])
+   @@index([nationality, month])
+   @@index([district, month])
++  @@index([calculatedAt])
+   @@map("nationality_flow")
+ }
+ 
+@@ -545,3 +601,118 @@ model CronRun {
+   @@index([job, startedAt])
+   @@map("cron_runs")
+ }
++
++// ═══════════════════════════════════════════════════════════════════════════
++// Day 1 (Task A) — analytics, guest sessions, API keys and the auth backing
++// store. Ported to SQLite: every `Json` field is TEXT holding JSON.
++// ═══════════════════════════════════════════════════════════════════════════
++
++// Every significant action, signed in or guest, for funnel analysis.
++model UserEvent {
++  id        String   @id @default(cuid())
++  userId    String?  @map("user_id") // null for guests
++  guestId   String?  @map("guest_id") // set for guests
++  eventType String   @map("event_type") // page_view | search | community_view | listing_click | sign_up | subscribe | cma_run | pdf_export | api_call | alert_created | chatbot_message
++  eventData String?  @map("event_data") // JSON text: { "community": "Downtown Dubai" }
++  page      String?
++  referrer  String?
++  userAgent String?  @map("user_agent")
++  ip        String?
++  sessionId String?  @map("session_id")
++  createdAt DateTime @default(now()) @map("created_at")
++
++  // Nullable because guests have events too. SetNull (not Cascade) so that
++  // deleting an account never deletes its analytics history.
++  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
++
++  @@index([userId, createdAt])
++  @@index([guestId, createdAt])
++  @@index([eventType, createdAt])
++  @@map("user_events")
++}
++
++// Anonymous visitors. A guest that later registers is linked via
++// convertedUserId, and their earlier UserEvents are re-attributed.
++model GuestSession {
++  id              String    @id // this IS the guestId held in the cookie
++  fingerprint     String?
++  referrer        String?
++  utmSource       String?   @map("utm_source")
++  utmMedium       String?   @map("utm_medium")
++  utmCampaign     String?   @map("utm_campaign")
++  pagesViewed     Int       @default(0) @map("pages_viewed")
++  searchCount     Int       @default(0) @map("search_count")
++  lastSeenAt      DateTime  @default(now()) @map("last_seen_at")
++  convertedAt     DateTime? @map("converted_at")
++  convertedUserId String?   @map("converted_user_id")
++  createdAt       DateTime  @default(now()) @map("created_at")
++
++  @@index([createdAt])
++  @@index([convertedUserId])
++  @@map("guest_sessions")
++}
++
++// Developer-tier API keys. Only the SHA-256 hash is stored — never the key.
++model ApiKey {
++  id         String    @id @default(cuid())
++  userId     String    @map("user_id")
++  keyHash    String    @unique @map("key_hash")
++  prefix     String // first 12 chars, for display
++  name       String
++  tier       String    @default("pro")
++  callsToday Int       @default(0) @map("calls_today")
++  callsMonth Int       @default(0) @map("calls_month")
++  lastUsedAt DateTime? @map("last_used_at")
++  revokedAt  DateTime? @map("revoked_at")
++  createdAt  DateTime  @default(now()) @map("created_at")
++
++  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
++
++  @@index([userId])
++  @@map("api_keys")
++}
++
++// OAuth provider links (Google, GitHub, …).
++model Account {
++  id                String  @id @default(cuid())
++  userId            String  @map("user_id")
++  type              String
++  provider          String
++  providerAccountId String  @map("provider_account_id")
++  refreshToken      String? @map("refresh_token")
++  accessToken       String? @map("access_token")
++  expiresAt         Int?    @map("expires_at")
++  tokenType         String? @map("token_type")
++  scope             String?
++  idToken           String? @map("id_token")
++
++  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
++
++  @@unique([provider, providerAccountId])
++  @@index([userId])
++  @@map("accounts")
++}
++
++// Active sessions for the magic-link / OAuth flow.
++model Session {
++  id           String   @id @default(cuid())
++  sessionToken String   @unique @map("session_token")
++  userId       String   @map("user_id")
++  expires      DateTime
++  createdAt    DateTime @default(now()) @map("created_at")
++
++  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
++
++  @@index([userId])
++  @@map("sessions")
++}
++
++// Single-use email magic-link tokens.
++model VerificationToken {
++  identifier String
++  token      String   @unique
++  expires    DateTime
++
++  @@unique([identifier, token])
++  @@map("verification_tokens")
++}
+diff --git a/scripts/seed-pg.ts b/scripts/seed-pg.ts
+index 9621e87..20ac964 100644
+--- a/scripts/seed-pg.ts
++++ b/scripts/seed-pg.ts
+@@ -70,7 +70,7 @@ async function main() {
+   const user = await prisma.user.upsert({
+     where: { email: 'demo@sqftlab.com' },
+     update: {},
+-    create: { email: 'demo@sqftlab.com', name: 'Demo Investor', phone: '+971501234567', nationality: 'Indian', tier: 'elite' },
++    create: { email: 'demo@sqftlab.com', name: 'Demo Investor', phone: '+971501234567', nationality: 'Indian', subscriptionTier: 'elite', subscriptionStatus: 'active' },
+   })
+   console.log(`User: ${user.id}`)
+ 
+diff --git a/scripts/seed-sqftlab.ts b/scripts/seed-sqftlab.ts
+index cb8d5de..6f115ed 100644
+--- a/scripts/seed-sqftlab.ts
++++ b/scripts/seed-sqftlab.ts
+@@ -60,7 +60,8 @@ async function main() {
+       name: 'Demo Investor',
+       phone: '+971501234567',
+       nationality: 'Indian',
+-      tier: 'elite',
++      subscriptionTier: 'elite',
++      subscriptionStatus: 'active',
+     },
+   })
+   console.log(`User: ${user.id}`)
+diff --git a/scripts/verify-day1.ts b/scripts/verify-day1.ts
+new file mode 100644
+index 0000000..54ae400
+--- /dev/null
++++ b/scripts/verify-day1.ts
+@@ -0,0 +1,263 @@
++/**
++ * Day 1 verification — Task A (schema), B (guest mode), C (sign-in), D/E/F (fixes).
++ *
++ * Run against the live API:  bun run scripts/verify-day1.ts
++ * Override the target with API=http://localhost:3001
++ *
++ * Cleans up after itself: the test user, its sessions, and the guest rows and
++ * events it creates are all deleted at the end.
++ */
++import { marketPsfByCommunity, DEAL_DISCOUNT_THRESHOLD } from '../src/lib/deals'
++
++const API = process.env.API ?? 'http://localhost:3101'
++const TEST_EMAIL = `day1-verify-${Date.now()}@example.com`
++
++let pass = 0
++let fail = 0
++const failures: string[] = []
++
++function check(name: string, ok: boolean, detail?: unknown) {
++  if (ok) {
++    pass++
++    console.log(`  ✓ ${name}`)
++  } else {
++    fail++
++    failures.push(name)
++    console.log(`  ✗ ${name}${detail !== undefined ? ` — ${JSON.stringify(detail).slice(0, 200)}` : ''}`)
++  }
++}
++
++async function json(path: string, init?: RequestInit) {
++  const r = await fetch(`${API}${path}`, init)
++  const body = await r.json().catch(() => ({}))
++  return { status: r.status, body: body as Record<string, unknown>, headers: r.headers }
++}
++
++// A guest is identified only by the sqftlab_guest cookie.
++async function newGuest(): Promise<{ cookie: string; guestId: string }> {
++  const r = await fetch(`${API}/api/sqftlab/communities`)
++  const raw = r.headers.get('set-cookie') ?? ''
++  const m = raw.match(/sqftlab_guest=([^;]+)/)
++  return { cookie: m ? `sqftlab_guest=${m[1]}` : '', guestId: m?.[1] ?? '' }
++}
++
++const { PrismaClient } = await import('../src/generated/prisma/client.js')
++const { PrismaLibSql } = await import('@prisma/adapter-libsql')
++const prisma = new PrismaClient({
++  adapter: new PrismaLibSql({ url: process.env.DATABASE_URL! }),
++})
++
++const createdGuestIds: string[] = []
++const demoUser = await prisma.user.findFirst({ where: { email: 'demo@sqftlab.com' } })
++
++try {
++  console.log('\n── TASK A: schema completeness ─────────────────────────────')
++  const tables = (await prisma.$queryRawUnsafe(
++    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
++  )) as { name: string }[]
++  const names = tables.map((t) => t.name)
++  for (const t of ['user_events', 'guest_sessions', 'api_keys', 'accounts', 'sessions', 'verification_tokens', 'waitlist'])
++    check(`table ${t} exists`, names.includes(t))
++
++  const userCols = (await prisma.$queryRawUnsafe('PRAGMA table_info(users)')) as { name: string }[]
++  const cols = userCols.map((c) => c.name)
++  for (const c of ['subscription_status', 'whatsapp_phone', 'guest_id', 'registered_via', 'onboarding_completed', 'last_login_at', 'role', 'company', 'country'])
++    check(`users.${c} exists`, cols.includes(c))
++  check('users.subscriptionTier mapped to physical column "tier" (no data loss)', cols.includes('tier'))
++
++  const demo = await prisma.user.findFirst({ where: { email: 'demo@sqftlab.com' } })
++  check('demo user kept subscriptionTier=elite across the rename', demo?.subscriptionTier === 'elite', demo?.subscriptionTier)
++
++  console.log('\n── TASK A4: append-only history ────────────────────────────')
++  const intel = await Bun.file('src/lib/intelligence.ts').text()
++  check('no nationalityFlow.deleteMany', !intel.includes('nationalityFlow.deleteMany'))
++  check('no institutionalTransaction.deleteMany', !intel.includes('institutionalTransaction.deleteMany'))
++  check('districtMetrics uses create() not upsert()', !/districtMetrics\.upsert/.test(intel))
++  check('marketSummary does not update in place', !/marketSummary\.update/.test(intel))
++
++  console.log('\n── TASK B: guest mode ──────────────────────────────────────')
++  const guest = await newGuest()
++  createdGuestIds.push(guest.guestId)
++  check('sqftlab_guest cookie is set for a new visitor', guest.cookie.startsWith('sqftlab_guest='))
++  check('guestId is 32 hex chars', /^[0-9a-f]{32}$/.test(guest.guestId), guest.guestId)
++
++  // Trigger a tracked event so the GuestSession row is materialised.
++  await fetch(`${API}/api/sqftlab/communities`, { headers: { Cookie: guest.cookie } })
++  const gs = await prisma.guestSession.findUnique({ where: { id: guest.guestId } })
++  check('GuestSession row created', Boolean(gs))
++
++  const gComm = await json('/api/sqftlab/communities', { headers: { Cookie: guest.cookie } })
++  const gList = (gComm.body.communities as unknown[]) ?? []
++  check('guest sees exactly 6 communities', gList.length === 6, gList.length)
++  check('guest response carries limited:true', gComm.body.limited === true)
++  check('guest response carries signInUrl', gComm.body.signInUrl === '/auth/signin')
++
++  const aComm = await json('/api/sqftlab/communities', {
++    headers: { Authorization: `Bearer ${demoUser?.id}` },
++  })
++  const totalCommunities = await prisma.community.count()
++  const aCommN = (aComm.body.communities as unknown[])?.length
++  check(
++    'signed-in caller sees every community',
++    aCommN === totalCommunities,
++    `${aCommN} of ${totalCommunities}`,
++  )
++  check('signed-in response carries no limited flag', aComm.body.limited === undefined)
++
++  const gSlug = await json('/api/sqftlab/communities/dubai-marina', { headers: { Cookie: guest.cookie } })
++  const gCommunity = (gSlug.body.community ?? {}) as Record<string, unknown>
++  check('guest community hides scoreSchools', gCommunity.scoreSchools === undefined)
++  check('guest community still exposes neighbourhoodScore', gCommunity.neighbourhoodScore !== undefined)
++
++  const gTrend = await json('/api/sqftlab/communities/dubai-marina/trend', { headers: { Cookie: guest.cookie } })
++  const gTrendLen = ((gTrend.body.trend as unknown[]) ?? []).length
++  check('guest trend limited to 3 months', gTrendLen <= 3, gTrendLen)
++
++  const gListings = await json('/api/sqftlab/listings', { headers: { Cookie: guest.cookie } })
++  const gl = (gListings.body.listings as Record<string, unknown>[]) ?? []
++  check('guest listings capped at 10', gl.length <= 10, gl.length)
++  check('guest listings strip the isDeal badge', gl.every((l) => l.isDeal === undefined))
++
++  console.log('\n── TASK B3: guest blocks ───────────────────────────────────')
++  for (const [label, path, init] of [
++    ['GET /portfolio', '/api/sqftlab/portfolio', undefined],
++    ['POST /alerts', '/api/sqftlab/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }],
++    ['GET /api-keys', '/api/sqftlab/api-keys', undefined],
++  ] as const) {
++    const r = await json(path, init ? { ...init, headers: { ...(init.headers ?? {}), Cookie: guest.cookie } } : { headers: { Cookie: guest.cookie } })
++    check(`${label} → 401 for a guest`, r.status === 401, r.status)
++  }
++
++  console.log('\n── TASK C: sign-in ─────────────────────────────────────────')
++  const ml = await json('/api/sqftlab/auth/magic-link', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json', Cookie: guest.cookie },
++    body: JSON.stringify({ email: TEST_EMAIL }),
++  })
++  check('magic-link request accepted', ml.status === 200, ml.status)
++  check('delivery is honestly reported (no mail transport configured)', ml.body.delivery === 'unconfigured', ml.body.delivery)
++  const devLink = String(ml.body.devLink ?? '')
++  check('dev link returned while unconfigured', devLink.includes('/api/sqftlab/auth/verify?token='))
++
++  const badEmail = await json('/api/sqftlab/auth/magic-link', {
++    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'nope' }),
++  })
++  check('invalid email → 400', badEmail.status === 400, badEmail.status)
++
++  const verifyRes = await fetch(devLink, { redirect: 'manual', headers: { Cookie: guest.cookie } })
++  check('verify redirects into the app', [302, 303, 307].includes(verifyRes.status), verifyRes.status)
++  const sessionCookieRaw = verifyRes.headers.get('set-cookie') ?? ''
++  const sessionCookie = (sessionCookieRaw.match(/next-auth\.session-token=[^;]+/) ?? [''])[0]
++  check('session cookie issued', sessionCookie.startsWith('next-auth.session-token='))
++
++  const reuse = await fetch(devLink, { redirect: 'manual' })
++  check('magic-link token is single-use', reuse.status === 400, reuse.status)
++
++  const created = await prisma.user.findUnique({ where: { email: TEST_EMAIL } })
++  check('user row created with registeredVia=magic_link', created?.registeredVia === 'magic_link', created?.registeredVia)
++  check('guest session linked to the new user', created?.guestId === guest.guestId, created?.guestId)
++
++  const converted = await prisma.guestSession.findUnique({ where: { id: guest.guestId } })
++  check('GuestSession marked converted', converted?.convertedUserId === created?.id)
++
++  const attributed = await prisma.userEvent.count({ where: { guestId: guest.guestId, userId: created?.id ?? 'x' } })
++  check('guest events re-attributed to the user', attributed > 0, attributed)
++
++  const sess = await json('/api/sqftlab/auth/session', { headers: { Cookie: sessionCookie } })
++  check('auth/session reports authenticated', sess.body.authenticated === true, sess.body)
++
++  const onb = await json('/api/sqftlab/auth/onboard', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json', Cookie: sessionCookie },
++    body: JSON.stringify({ role: 'investor', areas: ['dubai-marina'], whatsappEnabled: false }),
++  })
++  check('onboarding accepted', onb.status === 200, onb.status)
++  const onbUser = await prisma.user.findUnique({ where: { email: TEST_EMAIL } })
++  check('onboardingCompleted persisted', onbUser?.onboardingCompleted === true)
++  check('role persisted', onbUser?.role === 'investor', onbUser?.role)
++
++  const google = await fetch(`${API}/api/sqftlab/auth/google`, { redirect: 'manual' })
++  check('google reports unconfigured rather than 500', google.status === 501, google.status)
++
++  const keysAuthed = await json('/api/sqftlab/api-keys', { headers: { Cookie: sessionCookie } })
++  check('api-keys lists for a signed-in caller', keysAuthed.status === 200 && Array.isArray(keysAuthed.body.keys), keysAuthed.status)
++
++  const newKey = await json('/api/sqftlab/api-keys', {
++    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sessionCookie }, body: JSON.stringify({ name: 'day1-check' }),
++  })
++  check('api key issued with sqft_ prefix', String(newKey.body.key ?? '').startsWith('sqft_'))
++  const keyRow = await prisma.apiKey.findFirst({ where: { userId: created!.id } })
++  check('only the SHA-256 hash is stored (no plaintext)', keyRow !== null && keyRow.keyHash !== newKey.body.key && keyRow.keyHash.length === 64)
++
++  console.log('\n── TASK D: real trend data ─────────────────────────────────')
++  const t1 = await json('/api/sqftlab/communities/dubai-marina/trend')
++  const t2 = await json('/api/sqftlab/communities/dubai-marina/trend')
++  check('trend is stable across refreshes (no Math.random)', JSON.stringify(t1.body) === JSON.stringify(t2.body))
++  const routes = await Bun.file('custom-routes.ts').text()
++  check('custom-routes has no Math.random in a trend handler', !/trend[\s\S]{0,2000}Math\.random/.test(routes))
++
++  console.log('\n── TASK E: no hardcoded demo user ──────────────────────────')
++  check('DEMO_USER_ID gone from custom-routes.ts', !routes.includes('DEMO_USER_ID'))
++  check('getUserId() resolves the caller per request', routes.includes('function getUserId'))
++
++  console.log('\n── TASK F: isDeal computed ─────────────────────────────────')
++  const deals = await json('/api/sqftlab/deals')
++  check('deals endpoint responds', deals.status === 200, deals.status)
++  const dealRows = (deals.body.deals ?? []) as unknown[]
++  check('deals payload is an array', Array.isArray(dealRows))
++  check(
++    'no rentals carry a deal flag (deals are sale-only)',
++    (await prisma.listing.count({ where: { isDeal: true, purpose: { not: 'sale' } } })) === 0,
++  )
++
++  // Validate the rule against the data rather than asserting a row count. The
++  // 90-day median needs real DLD transactions, and DUBAI_PULSE_API_KEY is unset,
++  // so this dataset currently has none — zero deals is the correct answer to
++  // zero input, and a non-zero count would mean the flags were fabricated.
++  const medians = await marketPsfByCommunity()
++  const saleRows = await prisma.listing.findMany({
++    where: { purpose: 'sale' },
++    select: { communityId: true, pricePerSqft: true, isDeal: true },
++  })
++  const violations = saleRows.filter((l) => {
++    const m = medians.get(l.communityId)
++    if (!m || m <= 100) return false
++    const expected = l.pricePerSqft > 0 && l.pricePerSqft < m * DEAL_DISCOUNT_THRESHOLD
++    return expected !== l.isDeal
++  }).length
++  const flagged = await prisma.listing.count({ where: { isDeal: true } })
++  console.log(
++    `  · ${flagged} flagged · ${saleRows.length} sale listings · ${medians.size} communities with a 90-day DLD median`,
++  )
++  check('every flag agrees with the 8% rule (0 violations)', violations === 0, violations)
++
++  const dealsSrc = await Bun.file('src/lib/deals.ts').text()
++  check('deal threshold is 8% below market', dealsSrc.includes('DEAL_DISCOUNT_THRESHOLD = 0.92'))
++  check(
++    'deal detection uses the 90-day DLD median, not the listing median',
++    dealsSrc.includes('marketPsfByCommunity') && !/threshold = cm\.medianAedSqft/.test(dealsSrc),
++  )
++  check('no hardcoded isDeal: false in a read path', !/app\.get\('\/sqftlab\/(deals|listings)'[\s\S]{0,2500}isDeal: false/.test(routes))
++} finally {
++  // ── Cleanup: remove exactly what this script created ───────────────────────
++  const u = await prisma.user.findUnique({ where: { email: TEST_EMAIL } }).catch(() => null)
++  if (u) {
++    await prisma.apiKey.deleteMany({ where: { userId: u.id } })
++    await prisma.session.deleteMany({ where: { userId: u.id } })
++    await prisma.userEvent.deleteMany({ where: { userId: u.id } })
++    await prisma.user.delete({ where: { id: u.id } })
++  }
++  await prisma.verificationToken.deleteMany({ where: { identifier: TEST_EMAIL } })
++  for (const id of createdGuestIds) {
++    if (!id) continue
++    await prisma.userEvent.deleteMany({ where: { guestId: id } })
++    await prisma.guestSession.deleteMany({ where: { id } })
++  }
++  await prisma.$disconnect()
++
++  console.log(`\n${'═'.repeat(60)}`)
++  console.log(`RESULT: ${pass} passed, ${fail} failed`)
++  if (fail) console.log(`FAILED: ${failures.join(' | ')}`)
++  console.log('═'.repeat(60))
++  process.exitCode = fail ? 1 : 0
++}
+diff --git a/scripts/verify-fixes.ts b/scripts/verify-fixes.ts
+index 16a9fb7..d996548 100644
+--- a/scripts/verify-fixes.ts
++++ b/scripts/verify-fixes.ts
+@@ -86,11 +86,20 @@ console.log(`\n# FIX-05 — price trend from real transactions`)
+     'two consecutive calls are identical (no random flicker)',
+     JSON.stringify(a.body) === JSON.stringify(b.body),
+   )
++  // Decide "has data" from the payload, not from the label. The old check
++  // compared dataSource against the literal 'dld_transactions', which the
++  // handler never emits — it derives the label from the rows' `source` column
++  // ('DLD (Dubai Pulse)' once transactions exist). That coupling made the test
++  // fail on a perfectly healthy response.
+   const src = a.body?.dataSource
+-  if (src === 'dld_transactions') {
+-    const months = (a.body.trend ?? []).filter((t: any) => t.medianPrice !== null)
+-    check('trend has real monthly medians', months.length > 0, `${months.length} months with data`)
+-    check('null-filled months are null, not 0', (a.body.trend ?? []).some((t: any) => t.medianPrice === null))
++  const monthsWithData = (a.body.trend ?? []).filter((t: any) => t.medianPrice !== null)
++  if (monthsWithData.length > 0) {
++    check('trend has real monthly medians', true, `${monthsWithData.length} months with data`)
++    check(
++      'null-filled months are null, not 0',
++      (a.body.trend ?? []).some((t: any) => t.medianPrice === null),
++    )
++    check('dataSource names a real source, not an internal id', src !== 'dld_dubai' && src !== 'unknown', src)
+   } else {
+     check('honest no-data path (not fabricated)', src === 'no_transaction_data', src)
+   }
+diff --git a/scripts/verify-server-routing.ts b/scripts/verify-server-routing.ts
+index 6389e6a..750279b 100644
+--- a/scripts/verify-server-routing.ts
++++ b/scripts/verify-server-routing.ts
+@@ -21,6 +21,11 @@ if (!bundle) {
+ type Case = { name: string; url: string; expectType?: RegExp; expectCache?: RegExp; jsonOk?: boolean }
+ const cases: Case[] = [
+   { name: 'prefixed asset (canvas preview)', url: `${BASE}/p/${PROJECT}/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
++  // The build uses a relative base, so a nested client route requests
++  // /auth/assets/x.js — without the fold-back that returns the SPA shell and the
++  // page renders blank.
++  { name: 'nested deep-link asset (/auth/signin)', url: `${BASE}/auth/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
++  { name: 'prefixed + nested asset', url: `${BASE}/p/${PROJECT}/auth/assets/${bundle}`, expectType: /javascript/, expectCache: /immutable/ },
+   // Deliberately hits an unmatched /api path rather than a real endpoint: the
+   // point is whether the prefixed request reaches the API layer at all. A real
+   // endpoint would also fail if the database is down, which says nothing about
+diff --git a/server.tsx b/server.tsx
+index af85160..b6cf1ba 100644
+--- a/server.tsx
++++ b/server.tsx
+@@ -50,11 +50,22 @@ app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
+ //    built with that base, so asset requests arrive with the prefix on the path.
+ //    Without this rewrite the browser receives index.html where it expects a JS
+ //    module, the bundle never executes and the page renders blank.
++//
++//    The build uses a RELATIVE base, so the same thing happens on any nested
++//    client route: /auth/signin resolves `./assets/x.js` to /auth/assets/x.js.
++//    Any nested path pointing at the assets directory is folded back to the root.
+ app.use('*', async (c, next) => {
+-  const m = c.req.path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
+-  if (!m) return next()
+   const url = new URL(c.req.url)
+-  url.pathname = m[1] || '/'
++  let path = url.pathname
++
++  const preview = path.match(/^\/p\/[A-Za-z0-9_-]+(\/.*)?$/)
++  if (preview) path = preview[1] || '/'
++
++  const nested = path.match(/^\/.+\/(assets\/.+)$/)
++  if (nested) path = `/${nested[1]}`
++
++  if (path === url.pathname) return next()
++  url.pathname = path
+   return app.fetch(new Request(url, c.req.raw))
+ })
+ 
+diff --git a/src/App.tsx b/src/App.tsx
+index 99c9b12..950d9da 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -10,6 +10,7 @@ import { Sparkline } from '@/components/Sparkline'
+ import { FeatureGate } from '@/components/FeatureGate'
+ import { ForecastChart } from '@/components/ForecastChart'
+ import { Glossary } from '@/components/Glossary'
++import SignInPage from '@/components/SignInPage'
+ import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
+ import { getRiskFlags } from '@/lib/verdict'
+ import { ensureSession } from '@/lib/session'
+@@ -125,7 +126,7 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
+ 
+ // ─── Navigation ──────────────────────────────────────────────────────────────
+ 
+-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary'
++type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin'
+ 
+ const NAV = [
+   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
+@@ -204,6 +205,10 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void;
+             <span className="live-dot" />
+             <span className="text-[9px]" style={{ fontFamily: 'var(--font-data)' }}>Live</span>
+           </div>
++          <button onClick={() => setPage('signin')} className="px-3 py-1.5 rounded-full text-xs font-semibold transition-all shrink-0"
++            style={{ color: 'var(--ink-3)', border: '1px solid var(--line)' }}>
++            Sign in
++          </button>
+           <button onClick={() => setPage('pricing')} className="px-4 py-1.5 rounded-full text-xs font-semibold transition-all"
+             style={{ background: 'var(--b600)', color: '#fff', boxShadow: 'var(--sh-btn)' }}>
+             Get access
+@@ -2926,11 +2931,17 @@ function AppInner() {
+   const live = useLiveMarket()
+ 
+   // Deep-link bridge: DataLabel ⓘ tooltips link to #glossary-<slug>, which must
+-  // open the glossary page before the anchor can be scrolled to.
++  // open the glossary page before the anchor can be scrolled to. `#signin` and
++  // `/auth/signin` land on the same page, and the API's sign-in redirect carries
++  // ?signed_in=1 (&welcome=1 for a first-time registration).
+   useEffect(() => {
+     const onHash = () => {
+       if (window.location.hash.startsWith('#glossary-')) setPage('glossary')
++      if (window.location.hash === '#signin') setPage('signin')
+     }
++    const path = window.location.pathname.replace(/\/+$/, '')
++    if (path === '/auth/signin' || path === '/signin') setPage('signin')
++    if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
+     onHash()
+     window.addEventListener('hashchange', onHash)
+     return () => window.removeEventListener('hashchange', onHash)
+@@ -2958,6 +2969,7 @@ function AppInner() {
+       {page === 'intelligence' && <IntelligencePage setPage={setPage} />}
+       {page === 'waitlist' && <WaitlistPage setPage={setPage} />}
+       {page === 'glossary' && <Glossary />}
++      {page === 'signin' && <SignInPage setPage={setPage} />}
+       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
+         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
+           <button onClick={() => setPage('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
+diff --git a/src/components/SignInPage.tsx b/src/components/SignInPage.tsx
+new file mode 100644
+index 0000000..1014a75
+--- /dev/null
++++ b/src/components/SignInPage.tsx
+@@ -0,0 +1,319 @@
++import { useEffect, useState } from 'react'
++import { Mail, ArrowRight, Check } from 'lucide-react'
++
++// Sign-in (Task C) — email magic link + Google, on the sqftLab design system.
++//
++// PORT NOTE: the spec targets NextAuth v5, a Next.js library that cannot run in
++// this Vite SPA. The endpoints below are the native equivalent (see the auth
++// section of custom-routes.ts). Google reports itself as unconfigured rather
++// than failing when GOOGLE_CLIENT_ID is absent.
++//
++// IDENTITY MODEL: the session cookie identifies the caller to the API. It is not
++// a security boundary — the API takes the presented token at face value, exactly
++// as it already did before this page existed.
++
++const CARD_STYLE: React.CSSProperties = {
++  background: 'rgba(255,255,255,0.7)',
++  backdropFilter: 'blur(12px)',
++  WebkitBackdropFilter: 'blur(12px)',
++  border: '1px solid rgba(255,255,255,0.6)',
++  boxShadow: '0 1px 2px rgba(16,24,40,0.04), 0 12px 32px rgba(16,24,40,0.08)',
++}
++
++const ROLES = ['investor', 'agent', 'developer', 'analyst', 'other'] as const
++const TOP_AREAS = [
++  'dubai-marina', 'downtown-dubai', 'jumeirah-village-circle', 'business-bay',
++  'palm-jumeirah', 'difc', 'arabian-ranches', 'dubai-hills-estate',
++  'jumeirah-lake-towers', 'al-reem-island',
++]
++
++type Step = 'signin' | 'sent' | 'onboard'
++
++export default function SignInPage({
++  reason,
++  setPage,
++}: {
++  reason?: string
++  setPage: (p: 'landing' | 'dashboard') => void
++}) {
++  const [step, setStep] = useState<Step>('signin')
++  const [email, setEmail] = useState('')
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState('')
++  const [notice, setNotice] = useState('')
++  const [devLink, setDevLink] = useState<string | null>(null)
++  const [googleConfigured, setGoogleConfigured] = useState<boolean | null>(null)
++
++  // Onboarding state (Task C4)
++  const [role, setRole] = useState<string>('')
++  const [areas, setAreas] = useState<string[]>([])
++  const [whatsapp, setWhatsapp] = useState(false)
++  const [phone, setPhone] = useState('')
++
++  // Probe Google availability so the button tells the truth instead of bouncing
++  // the visitor to a 501.
++  useEffect(() => {
++    fetch('/api/sqftlab/auth/google', { redirect: 'manual' })
++      .then((r) => setGoogleConfigured(r.status !== 501))
++      .catch(() => setGoogleConfigured(false))
++  }, [])
++
++  // Returning from the magic link: the server redirects with ?signed_in=1
++  useEffect(() => {
++    const params = new URLSearchParams(window.location.search)
++    if (params.get('signed_in') === '1') {
++      setStep(params.get('welcome') === '1' ? 'onboard' : 'signin')
++    }
++  }, [])
++
++  const requestLink = async () => {
++    setBusy(true)
++    setError('')
++    setNotice('')
++    try {
++      const res = await fetch('/api/sqftlab/auth/magic-link', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ email }),
++      })
++      const body = await res.json().catch(() => ({}))
++      if (!res.ok) {
++        setError(body.error || `Request failed (${res.status})`)
++        return
++      }
++      setStep('sent')
++      setNotice(body.message ?? '')
++      // Present only while no mail transport is configured, so the flow stays
++      // testable on a deployment without SMTP.
++      setDevLink(typeof body.devLink === 'string' ? body.devLink : null)
++    } catch (e) {
++      setError(e instanceof Error ? e.message : 'Network error')
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  const finishOnboarding = async () => {
++    setBusy(true)
++    setError('')
++    try {
++      const res = await fetch('/api/sqftlab/auth/onboard', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ role: role || null, areas, whatsappEnabled: whatsapp, whatsappPhone: phone }),
++      })
++      const body = await res.json().catch(() => ({}))
++      if (!res.ok) {
++        setError(body.error || `Request failed (${res.status})`)
++        return
++      }
++      setPage('dashboard')
++    } catch (e) {
++      setError(e instanceof Error ? e.message : 'Network error')
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  const shell = (children: React.ReactNode) => (
++    <div className="max-w-[520px] mx-auto px-4 py-14">
++      <div className="p-6 sm:p-8 rounded-[22px]" style={CARD_STYLE}>
++        <div className="flex items-center gap-2 mb-1.5">
++          <span className="text-xl font-bold tracking-tight" style={{ color: 'var(--ink-1)' }}>
++            sqft<span style={{ color: 'var(--b600)' }}>Lab</span>
++          </span>
++        </div>
++        <p className="text-xs mb-6" style={{ color: 'var(--ink-5)' }}>
++          UAE property intelligence. Sign in to continue.
++        </p>
++        {reason && (
++          <div
++            className="mb-5 px-3 py-2 rounded-xl text-[11px]"
++            style={{ background: 'rgba(37,99,235,0.08)', color: 'var(--b700)' }}
++          >
++            {reason}
++          </div>
++        )}
++        {children}
++        {error && (
++          <div className="mt-4 px-3 py-2 rounded-xl text-[11px]" style={{ background: 'rgba(220,38,38,0.08)', color: 'var(--down)' }}>
++            {error}
++          </div>
++        )}
++        <p className="mt-6 text-[10px] leading-relaxed" style={{ color: 'var(--ink-5)' }}>
++          By signing in, you agree to our Terms. No spam. Cancel anytime.
++        </p>
++      </div>
++      <div className="text-center mt-5">
++        <button
++          onClick={() => setPage('landing')}
++          className="text-xs font-semibold transition-colors hover:text-[var(--b600)]"
++          style={{ color: 'var(--ink-4)' }}
++        >
++          Continue as guest →
++        </button>
++      </div>
++    </div>
++  )
++
++  if (step === 'sent') {
++    return shell(
++      <div>
++        <div className="flex items-center gap-2 mb-3">
++          <Mail size={16} style={{ color: 'var(--b600)' }} />
++          <span className="text-sm font-semibold" style={{ color: 'var(--ink-1)' }}>Check your inbox</span>
++        </div>
++        <p className="text-xs leading-relaxed mb-4" style={{ color: 'var(--ink-4)' }}>
++          We sent a sign-in link to <strong>{email}</strong>. It expires in 15 minutes and can only be used once.
++        </p>
++        {notice && (
++          <p className="text-[11px] mb-4" style={{ color: 'var(--ink-5)' }}>{notice}</p>
++        )}
++        {devLink && (
++          // Only rendered when the API reported `delivery: "unconfigured"`.
++          <a
++            href={devLink}
++            className="inline-flex items-center gap-1.5 text-xs font-semibold px-4 py-2 rounded-full"
++            style={{ background: 'var(--b600)', color: '#fff' }}
++          >
++            Open sign-in link <ArrowRight size={13} />
++          </a>
++        )}
++        <button
++          onClick={() => { setStep('signin'); setDevLink(null) }}
++          className="block mt-5 text-[11px] font-semibold"
++          style={{ color: 'var(--ink-4)' }}
++        >
++          Use a different email
++        </button>
++      </div>,
++    )
++  }
++
++  if (step === 'onboard') {
++    return shell(
++      <div>
++        <h2 className="text-base font-bold mb-1" style={{ color: 'var(--ink-1)' }}>Welcome to sqftLab 👋</h2>
++        <p className="text-[11px] mb-5" style={{ color: 'var(--ink-5)' }}>
++          Two quick questions so the dashboard opens on what you care about.
++        </p>
++
++        <p className="text-[11px] font-semibold mb-2" style={{ color: 'var(--ink-3)' }}>What describes you best?</p>
++        <div className="flex flex-wrap gap-2 mb-5">
++          {ROLES.map((r) => (
++            <button
++              key={r}
++              onClick={() => setRole(r)}
++              className="px-3 py-1.5 rounded-full text-[11px] font-semibold capitalize transition-all"
++              style={role === r
++                ? { background: 'var(--b600)', color: '#fff' }
++                : { background: 'rgba(255,255,255,0.7)', color: 'var(--ink-3)', border: '1px solid var(--line)' }}
++            >
++              {r}
++            </button>
++          ))}
++        </div>
++
++        <p className="text-[11px] font-semibold mb-2" style={{ color: 'var(--ink-3)' }}>Which areas are you tracking?</p>
++        <div className="flex flex-wrap gap-2 mb-5">
++          {TOP_AREAS.map((a) => {
++            const on = areas.includes(a)
++            return (
++              <button
++                key={a}
++                onClick={() => setAreas(on ? areas.filter((x) => x !== a) : [...areas, a])}
++                className="px-3 py-1.5 rounded-full text-[11px] transition-all capitalize"
++                style={on
++                  ? { background: 'rgba(37,99,235,0.12)', color: 'var(--b700)', border: '1px solid rgba(37,99,235,0.3)' }
++                  : { background: 'rgba(255,255,255,0.7)', color: 'var(--ink-3)', border: '1px solid var(--line)' }}
++              >
++                {on && <Check size={10} className="inline mr-1" />}
++                {a.replace(/-/g, ' ')}
++              </button>
++            )
++          })}
++        </div>
++
++        <label className="flex items-center gap-2 mb-3 text-[11px]" style={{ color: 'var(--ink-3)' }}>
++          <input type="checkbox" checked={whatsapp} onChange={(e) => setWhatsapp(e.target.checked)} />
++          Send me a WhatsApp digest
++        </label>
++        {whatsapp && (
++          <input
++            value={phone}
++            onChange={(e) => setPhone(e.target.value)}
++            placeholder="+971 50 123 4567"
++            className="w-full mb-4 px-3 py-2 rounded-xl text-xs outline-none"
++            style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid var(--line)', color: 'var(--ink-1)' }}
++          />
++        )}
++
++        <button
++          onClick={finishOnboarding}
++          disabled={busy}
++          className="w-full py-2.5 rounded-full text-xs font-semibold transition-all disabled:opacity-60"
++          style={{ background: 'var(--b600)', color: '#fff' }}
++        >
++          {busy ? 'Saving…' : 'Go to dashboard'}
++        </button>
++        <button
++          onClick={() => setPage('dashboard')}
++          className="block w-full mt-3 text-[11px] font-semibold"
++          style={{ color: 'var(--ink-4)' }}
++        >
++          Skip for now
++        </button>
++      </div>,
++    )
++  }
++
++  return shell(
++    <div>
++      <a
++        href="/api/sqftlab/auth/google"
++        className="w-full flex items-center justify-center gap-2.5 py-2.5 rounded-full text-xs font-semibold transition-all mb-4"
++        style={{ background: '#fff', color: 'var(--ink-1)', border: '1px solid var(--line)' }}
++      >
++        <svg width="15" height="15" viewBox="0 0 48 48" aria-hidden>
++          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z" />
++          <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-2.8-.4-4.1H24v8.4h12.5c-.3 2.1-1.6 5.2-4.6 7.3l7.6 5.9c4.5-4.2 6.6-10.3 6.6-17.5z" />
++          <path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C1 16.4 0 20.1 0 24s1 7.6 2.6 10.8l7.8-6.1z" />
++          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.6-5.9l-7.6-5.9c-2 1.4-4.7 2.4-8 2.4-6.4 0-11.7-3.7-13.6-9.1l-7.8 6.1C6.5 42.6 14.6 48 24 48z" />
++        </svg>
++        Continue with Google
++      </a>
++      {googleConfigured === false && (
++        <p className="text-[10px] mb-4 -mt-2" style={{ color: 'var(--ink-5)' }}>
++          Google sign-in is not configured on this deployment — use email below.
++        </p>
++      )}
++
++      <div className="flex items-center gap-3 mb-4">
++        <div className="flex-1 h-px" style={{ background: 'var(--line)' }} />
++        <span className="text-[10px]" style={{ color: 'var(--ink-5)' }}>or</span>
++        <div className="flex-1 h-px" style={{ background: 'var(--line)' }} />
++      </div>
++
++      <label className="block text-[11px] font-semibold mb-1.5" style={{ color: 'var(--ink-3)' }}>
++        Sign in with email
++      </label>
++      <input
++        type="email"
++        value={email}
++        onChange={(e) => setEmail(e.target.value)}
++        onKeyDown={(e) => { if (e.key === 'Enter' && email) void requestLink() }}
++        placeholder="you@company.com"
++        className="w-full mb-3 px-3 py-2.5 rounded-xl text-xs outline-none"
++        style={{ background: 'rgba(255,255,255,0.8)', border: '1px solid var(--line)', color: 'var(--ink-1)' }}
++      />
++      <button
++        onClick={requestLink}
++        disabled={busy || !email}
++        className="w-full py-2.5 rounded-full text-xs font-semibold transition-all disabled:opacity-60"
++        style={{ background: 'var(--b600)', color: '#fff' }}
++      >
++        {busy ? 'Sending…' : 'Email me a sign-in link'}
++      </button>
++    </div>,
++  )
++}
+diff --git a/src/lib/community-match.ts b/src/lib/community-match.ts
+index 0fc5a45..8c2cfb5 100644
+--- a/src/lib/community-match.ts
++++ b/src/lib/community-match.ts
+@@ -34,16 +34,23 @@ export function invalidateCommunityCache(): void {
+  * Resolve an area name as it appears in a portal's data to a community row.
+  * Exact (case-insensitive) match wins, then containment in either direction, so
+  * "Dubai Marina" still resolves against "Marina" and vice versa.
++ *
++ * Matching against `slug` as well as `nameEn` is load-bearing: portals label
++ * areas by their short form ("JVC", "DSO", "DIFC") while several communities
++ * carry the spelled-out name ("Jumeirah Village Circle"). Comparing only
++ * `nameEn` meant none of those resolved, so the scraper invented a duplicate
++ * community for an area it already had.
+  */
+ export async function findCommunityByName(name: string): Promise<CommunityRow | null> {
+   const needle = (name ?? '').trim().toLowerCase()
+   if (!needle) return null
+ 
+   const rows = await load()
++  const keys = (r: CommunityRow) => [r.nameEn, r.slug].map((k) => (k ?? '').toLowerCase())
++
+   return (
+-    rows.find((r) => r.nameEn.toLowerCase() === needle) ??
+-    rows.find((r) => r.nameEn.toLowerCase().includes(needle)) ??
+-    rows.find((r) => needle.includes(r.nameEn.toLowerCase())) ??
++    rows.find((r) => keys(r).some((k) => k === needle)) ??
++    rows.find((r) => keys(r).some((k) => k.includes(needle) || needle.includes(k))) ??
+     null
+   )
+ }
+diff --git a/src/lib/deals.ts b/src/lib/deals.ts
+index 07a91cd..02ed79d 100644
+--- a/src/lib/deals.ts
++++ b/src/lib/deals.ts
+@@ -1,13 +1,55 @@
+ import { prisma } from './db'
+ 
+-// A listing is a deal when its PSF is below 88% of its community's median PSF,
+-// i.e. more than 12% under the local market.
+-export const DEAL_DISCOUNT_THRESHOLD = 0.88
++// A listing is a deal when its PSF sits 8% or more below the area's 90-day DLD
++// median PSF — i.e. under 92% of the local market level.
++export const DEAL_DISCOUNT_THRESHOLD = 0.92
+ 
+ // Transaction types this schema stores for sales. The spec's `transactionType:
+ // 'Sales'` matches nothing here — filtering on it silently returns zero rows.
+ export const SALE_TXN_TYPES = ['sale', 'off_plan_sale'] as const
+ 
++export const DEAL_WINDOW_DAYS = 90
++
++function median(values: number[]): number {
++  const sorted = [...values].sort((a, b) => a - b)
++  const mid = Math.floor(sorted.length / 2)
++  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
++}
++
++/**
++ * The 90-day DLD median PSF for every community with qualifying sale
++ * transactions.
++ *
++ * One query covers the whole window and the median is computed in memory:
++ * Prisma has no median aggregate, and a query per listing would be N+1.
++ */
++export async function marketPsfByCommunity(
++  communityIds?: string[],
++  days = DEAL_WINDOW_DAYS,
++): Promise<Map<string, number>> {
++  const since = new Date()
++  since.setDate(since.getDate() - days)
++
++  const rows = await prisma.transaction.findMany({
++    where: {
++      transactionType: { in: [...SALE_TXN_TYPES] },
++      transactionDate: { gte: since },
++      pricePerSqft: { gt: 100 },
++      ...(communityIds?.length ? { communityId: { in: communityIds } } : {}),
++    },
++    select: { communityId: true, pricePerSqft: true },
++  })
++
++  const byCommunity = new Map<string, number[]>()
++  for (const row of rows) {
++    const bucket = byCommunity.get(row.communityId)
++    if (bucket) bucket.push(row.pricePerSqft)
++    else byCommunity.set(row.communityId, [row.pricePerSqft])
++  }
++
++  return new Map([...byCommunity].map(([id, psfs]) => [id, median(psfs)]))
++}
++
+ /**
+  * Reset-then-flag deal detection across every community.
+  *
+@@ -16,34 +58,40 @@ export const SALE_TXN_TYPES = ['sale', 'off_plan_sale'] as const
+  * re-flagged.
+  */
+ export async function detectDeals(): Promise<number> {
+-  const communities = await prisma.community.findMany({
+-    select: { id: true, medianAedSqft: true },
+-  })
++  const communities = await prisma.community.findMany({ select: { id: true } })
++  if (communities.length === 0) return 0
++
++  const medians = await marketPsfByCommunity()
++
++  // Reset every listing in the district, not just the sale ones: a stale flag on
++  // a rent listing would otherwise survive forever, since only sales are
++  // re-flagged below.
++  const resets = communities.map((cm) =>
++    prisma.listing.updateMany({
++      where: { communityId: cm.id },
++      data: { isDeal: false },
++    }),
++  )
+ 
+   // A median below AED 100/sqft is a placeholder, not a real market level —
+   // flagging against it would mark almost every listing in the district.
+-  const candidates = communities.filter((cm) => cm.medianAedSqft > 100)
+-  if (candidates.length === 0) return 0
+-
+-  const statements = candidates.flatMap((cm) => {
+-    const threshold = cm.medianAedSqft * DEAL_DISCOUNT_THRESHOLD
++  const flags = communities.flatMap((cm) => {
++    const medianPsf = medians.get(cm.id)
++    if (!medianPsf || medianPsf <= 100) return []
+     return [
+-      prisma.listing.updateMany({
+-        where: { communityId: cm.id, purpose: 'sale' },
+-        data: { isDeal: false },
+-      }),
+       prisma.listing.updateMany({
+         where: {
+           communityId: cm.id,
+           purpose: 'sale',
+-          pricePerSqft: { gt: 0, lt: threshold },
++          pricePerSqft: { gt: 0, lt: medianPsf * DEAL_DISCOUNT_THRESHOLD },
+         },
+         data: { isDeal: true },
+       }),
+     ]
+   })
+ 
+-  const results = await prisma.$transaction(statements)
+-  // Odd indices are the "set true" statements; even ones are the resets.
+-  return results.reduce((sum, r, i) => (i % 2 === 1 ? sum + r.count : sum), 0)
++  // One transaction, so a mid-flight failure cannot leave districts cleared but
++  // unflagged.
++  const results = await prisma.$transaction([...resets, ...flags])
++  return results.slice(resets.length).reduce((sum, r) => sum + r.count, 0)
+ }
+diff --git a/src/lib/intelligence.ts b/src/lib/intelligence.ts
+index 9a17b84..52ff2b6 100644
+--- a/src/lib/intelligence.ts
++++ b/src/lib/intelligence.ts
+@@ -544,7 +544,9 @@ export async function computeMigrationSignal() {
+   const rows = await loadSales()
+   const withNat = rows.filter((t) => t.buyerNationality)
+   if (!withNat.length) {
+-    await prisma.nationalityFlow.deleteMany({})
++    // Task A4 — append-only. This used to deleteMany({}) the whole table.
++    // Reporting insufficientData is enough; wiping the previous run's snapshot
++    // destroyed history the product is built on.
+     return { flows: 0, insufficientData: true, reason: 'No transactions carry buyerNationality yet.' }
+   }
+   const communities = await communityMap()
+@@ -563,7 +565,9 @@ export async function computeMigrationSignal() {
+     totalsByDistrictMonth.set(k, (totalsByDistrictMonth.get(k) ?? 0) + 1)
+   }
+ 
+-  await prisma.nationalityFlow.deleteMany({})
++  // Task A4 — append-only. No deleteMany: each run ADDS a snapshot. One fixed
++  // instant per run lets readers select exactly the newest batch.
++  const runAt = new Date()
+   let written = 0
+   for (const [k, group] of grouped) {
+     const [nationality, communityId, monthIso] = k.split('||')
+@@ -578,6 +582,7 @@ export async function computeMigrationSignal() {
+         totalValueAed: group.reduce((s, t) => s + t.priceAed, 0),
+         avgPsf: group.reduce((s, t) => s + t.pricePerSqft, 0) / group.length,
+         shareOfTotal: (group.length / total) * 100,
++        calculatedAt: runAt,
+       },
+     })
+     written++
+@@ -587,7 +592,15 @@ export async function computeMigrationSignal() {
+ 
+ /** MoM surge detection — spec 6.4 flags any nationality up >25% month on month. */
+ export async function migrationSurges(limit = 20) {
++  // Append-only table (Task A4): read only the newest snapshot. Without this
++  // filter the same nationality/district/month appears once per past run, and
++  // the month-on-month comparison below would run against stale duplicates.
++  const latest = await prisma.nationalityFlow.findFirst({
++    orderBy: { calculatedAt: 'desc' }, select: { calculatedAt: true },
++  })
++  if (!latest) return []
+   const rows = await prisma.nationalityFlow.findMany({
++    where: { calculatedAt: latest.calculatedAt },
+     orderBy: [{ nationality: 'asc' }, { district: 'asc' }, { month: 'asc' }],
+   })
+   const out: {
+@@ -620,7 +633,8 @@ export async function computeInstitutionalFlow() {
+   const rows = await loadSales()
+   const corporate = rows.filter((t) => t.buyerType === 'corporate')
+   if (!corporate.length) {
+-    await prisma.institutionalTransaction.deleteMany({})
++    // Task A4 principle — append-only. Do not wipe prior clusters just because
++    // this run found none.
+     return { clusters: 0, insufficientData: true, reason: 'No transactions carry buyerType=corporate yet.' }
+   }
+   const communities = await communityMap()
+@@ -634,7 +648,10 @@ export async function computeInstitutionalFlow() {
+     else byEntity.set(k, [t])
+   }
+ 
+-  await prisma.institutionalTransaction.deleteMany({})
++  // Task A4 principle — append-only, no deleteMany. `createdAt` is passed
++  // explicitly so every row in a run shares one instant, which is what lets a
++  // reader select exactly the newest batch.
++  const runAt = new Date()
+   let clusters = 0
+   for (const [k, group] of byEntity) {
+     const sorted = [...group].sort((a, b) => a.transactionDate.getTime() - b.transactionDate.getTime())
+@@ -656,6 +673,7 @@ export async function computeInstitutionalFlow() {
+           firstDate: bucket[0].transactionDate,
+           lastDate: bucket[bucket.length - 1].transactionDate,
+           transactionIds: bucket.map((t) => t.id).join(','),
++          createdAt: runAt,
+         },
+       })
+       clusters++
+@@ -921,18 +939,33 @@ export async function computeDistrictMetrics() {
+       calculatedAt: new Date(),
+     }
+ 
+-    await prisma.districtMetrics.upsert({
+-      where: { district_period: { district: c.slug, period: '30d' } },
+-      create: { district: c.slug, period: '30d', ...payload },
+-      update: payload,
++    // Task A4 — append-only. This was an upsert(), which overwrote the previous
++    // run's row and destroyed the metric history the product is built on. Each
++    // run now ADDS a row; readers use `latestDistrictMetrics()`.
++    await prisma.districtMetrics.create({
++      data: { district: c.slug, period: '30d', ...payload },
+     })
+     written++
+   }
+   return { districts: written }
+ }
+ 
++/**
++ * The newest DistrictMetrics row per district.
++ *
++ * `district_metrics` is append-only (Task A4), so a plain `findMany()` returns
++ * one row per past run and callers would multi-count. Every reader must go
++ * through this helper rather than querying the table directly.
++ */
++export async function latestDistrictMetrics() {
++  const rows = await prisma.districtMetrics.findMany({ orderBy: { calculatedAt: 'desc' } })
++  const newest = new Map<string, (typeof rows)[number]>()
++  for (const r of rows) if (!newest.has(r.district)) newest.set(r.district, r)
++  return [...newest.values()]
++}
++
+ export async function computeMarketSummary() {
+-  const metrics = await prisma.districtMetrics.findMany()
++  const metrics = await latestDistrictMetrics()
+   if (!metrics.length) return { computed: false }
+ 
+   const communities = await communityMap()
+@@ -959,9 +992,9 @@ export async function computeMarketSummary() {
+     computedAt: new Date(),
+   }
+ 
+-  const existing = await prisma.marketSummary.findFirst({ orderBy: { computedAt: 'desc' } })
+-  if (existing) await prisma.marketSummary.update({ where: { id: existing.id }, data: summary })
+-  else await prisma.marketSummary.create({ data: summary })
++  // Task A4 — append-only: `create` only, never update-in-place. Historical
++  // summaries are the product; readers take the newest `computedAt`.
++  await prisma.marketSummary.create({ data: summary })
+ 
+   return { computed: true, ...summary }
+ }
+diff --git a/tsconfig.json b/tsconfig.json
+index 58d986e..82e45b4 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -24,7 +24,9 @@
+   },
+   "include": [
+     "src/**/*",
+-    "*.config.ts"
++    "*.config.ts",
++    "custom-routes.ts",
++    "server.tsx"
+   ],
+   "watchOptions": {
+     "excludeDirectories": [
+-- 
+2.47.3
+
