@@ -634,3 +634,63 @@ Turnstile "Checking your browser…" on `/`, `/api/sqftlab/stats` and
 production data can be read from a datacenter IP. The apex `sqftlab.com` answers
 `301 → www`. The build stamp itself is proven to work (`dist/index.html` carries
 `build-sha=806372c`); only the reading of production's copy is blocked.
+
+---
+
+## Session — real data restored, honest labels, pushes blocked
+
+**The database had silently reverted to the synthetic dataset.** 585 transactions
+/ 607 listings / 39 communities — the exact pre-purge seed counts, with listing
+ids carrying the `seed-pg.ts` fingerprint (`propertyfinder-masdar-city-7-1789270942657`).
+The purge had run and been committed, but the *data* is not in git (`prisma/dev.db`
+is ignored), so a workspace rollback restored the file while the code stayed
+fixed. **Lesson: after any rollback, re-check counts before trusting the app —
+`scripts/purge-mock-data.ts` is idempotent and safe to re-run (dry-run by default).**
+
+**Re-ran the real scrape: 2457 listings across 28 areas, 0 transactions.**
+Transactions require a DLD key (`DUBAI_PULSE_API_KEY`) which is not set, so every
+transaction-derived surface is *correctly* empty — that is the honest state, not
+a bug.
+
+**Three real code defects found and fixed:**
+
+1. **`community-match.ts` compared only `nameEn`.** Portals label areas by short
+   form ("JVC", "DSO"); the seeded rows carry the spelled-out name
+   ("Jumeirah Village Circle") with the short form as `slug`. The lookup missed,
+   so the scraper created a *duplicate community per such area* (6 this run).
+   Now matches `slug` too. `scripts/merge-dupe-communities.ts` repairs existing
+   duplicates (dry-run default; merges listings/transactions/portfolios/alerts,
+   deletes watchlist rows on the source to avoid colliding with the
+   `(userId, communityId)` unique).
+2. **Trend `dataSource` never recognised the real source.** `Transaction.source`
+   defaults to `'dld_dubai'`; the label logic matched only `'dld'`, so every real
+   row fell through to the raw-value branch and the chart read "dld_dubai".
+   Verified by inserting a temporary `dld_dubai` row → label now reads
+   **"DLD (Dubai Pulse)"**.
+3. **`GET /deals` returned a bare `{"deals":[]}`** — indistinguishable from a
+   broken feature. Now returns `basis: 'dld_90d_median'`, `saleListings`,
+   `communitiesWithDldMedian`, and an `insufficientData` message naming the
+   missing key.
+
+**Tests were encoding the fabricated dataset.** `verify-fixes` asserted
+`deals > 0` and `dataSource === 'dld_transactions'` — both only held while the
+table carried generated rows. Replaced with invariants true in either state:
+the payload explains an empty result, declares its basis, and agrees with
+`/detect-deals`. The 8% rule is defined against the **90-day DLD median**, so
+zero deals is the spec-correct result with no DLD key — do not "fix" it by
+falling back to listing medians.
+
+**Suite state (all green):** `verify-day1 68 · verify-fixes 41 · verify-cron 31 ·
+verify-intel 27 · verify-server-routing 8 · verify-stream 12`, `tsc --noEmit`
+0 errors outside `src/generated/`, build green.
+
+**Push is blocked: no credential survives a runtime restart.** The PAT used
+earlier in the session lived in `~/.git-credentials`, which the restart wiped.
+`~/.git-credentials` absent, `gh auth status` = not logged in, no `GITHUB_TOKEN`
+in `.env` or the environment, and the `cloud` remote (studio.shogo.ai) also
+refuses. **Two commits are unpushed** — `e6501e0` (Day 1: schema, guest mode,
+sign-in, trend/auth/isDeal) and `134d126` (honest labels/empty states). Railway
+cannot pick them up until a credential is restored.
+
+**`day1_sqftlab.patch` in the repo root is a stray `git format-patch` export** of
+`e6501e0` (105 KB). Left untracked deliberately — not staged, not committed.
