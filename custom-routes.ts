@@ -752,15 +752,25 @@ function pfParse(property: any, source: string, purpose: string) {
   }
 }
 
+// Fallback coordinates when the portal gives us no usable location. Keyed by
+// emirate because a single hardcoded Dubai centroid silently dropped every new
+// Abu Dhabi area into the middle of Dubai — which is exactly what happened to
+// mbz and al-maryah-island (both plotted at 25.06, 55.15).
+const EMIRATE_CENTROID: Record<string, [number, number]> = {
+  dubai: [25.2048, 55.2708],
+  abu_dhabi: [24.4539, 54.3773],
+}
+
 async function ensureCommunity(name: string, slug: string, emirate: string) {
   let c = await prisma.community.findFirst({ where: { slug } })
   // Dialect-agnostic name lookup — Prisma's `mode: 'insensitive'` is
   // Postgres-only and throws on SQLite. See src/lib/community-match.ts.
   if (!c) c = await findCommunityByName(name)
   if (!c) {
+    const [lat, lng] = EMIRATE_CENTROID[emirate] ?? EMIRATE_CENTROID.dubai
     c = await prisma.community.create({
       data: {
-        slug, nameEn: name, emirate, latitude: 25.2, longitude: 55.27,
+        slug, nameEn: name, emirate, latitude: lat, longitude: lng,
         medianAedSqft: 0, medianAnnualRentAed: 0, grossYieldPct: 0,
         neighbourhoodScore: 50, priceChange30d: 0, priceChange1y: 0,
         transactionCount30d: 0, totalTransactions: 0,
@@ -1220,6 +1230,47 @@ app.get('/sqftlab/listings', async (c) => {
     pages: Math.ceil(total / limit),
     ...(tier === 'guest'
       ? { limited: true, message: 'Sign in to browse every listing', signInUrl: '/auth/signin' }
+      : {}),
+  })
+})
+
+// Single listing by id. The property page previously fetched a *page* of the
+// list and searched it client-side, but that list defaults to `purpose=sale`,
+// so opening any rental resolved to nothing and rendered "Property not found".
+// Look the row up directly instead of scanning a page that may not contain it.
+app.get('/sqftlab/listings/:id', async (c) => {
+  const id = c.req.param('id')
+  const listing = await prisma.listing.findUnique({
+    where: { id },
+    include: {
+      community: {
+        select: {
+          nameEn: true, slug: true, emirate: true,
+          medianAedSqft: true, grossYieldPct: true, totalTransactions: true,
+        },
+      },
+    },
+  })
+  if (!listing) return c.json({ error: 'Listing not found' }, 404)
+
+  // Comparable registered sales for this district. Empty until a registry
+  // source (Dubai Pulse) is connected — deliberately not back-filled from the
+  // listing itself, which is how the old page asserted DLD data it never had.
+  const comps = await prisma.transaction.findMany({
+    where: { communityId: listing.communityId, transactionType: 'sale' },
+    orderBy: { transactionDate: 'desc' },
+    take: 5,
+  })
+
+  const tier = await getCallerTier(c)
+  const { isDeal: _isDeal, ...rest } = listing
+
+  return c.json({
+    listing: tier === 'guest' ? rest : listing,
+    comps,
+    compsSource: comps.length > 0 ? 'dld' : null,
+    ...(tier === 'guest'
+      ? { limited: true, message: 'Sign in to see deal pricing', signInUrl: '/auth/signin' }
       : {}),
   })
 })

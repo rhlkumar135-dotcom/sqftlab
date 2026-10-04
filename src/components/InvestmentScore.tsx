@@ -21,11 +21,13 @@ function scoreColour(score: number): string {
   return 'var(--score-d)'
 }
 
+// Descriptive bands only. The spec (FIX-07) requires advice wording such as
+// "Strong buy" to be absent — a composite score is not a recommendation.
 function scoreLabel(score: number): string {
-  if (score >= 80) return 'Strong buy'
-  if (score >= 65) return 'Good value'
-  if (score >= 50) return 'Neutral'
-  return 'Caution'
+  if (score >= 80) return 'High'
+  if (score >= 65) return 'Above average'
+  if (score >= 50) return 'Average'
+  return 'Below average'
 }
 
 const SIZE_MAP = {

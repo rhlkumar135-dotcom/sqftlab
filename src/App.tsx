@@ -345,7 +345,7 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
                 { label: 'Yield', value: '6.2%', color: 'var(--up)' },
                 { label: 'Trend', value: '▲ 4.1%', color: 'var(--up)' },
                 { label: 'Inv. score', value: '74/100', color: 'var(--b600)' },
-                { label: 'Verdict', value: 'Good value ✓', color: 'var(--up)' },
+                { label: 'Band', value: 'Above average', color: 'var(--b600)' },
               ].map((item, i) => (
                 <div key={i} className="p-3 rounded-[10px]" style={{ background: 'var(--g3)' }}>
                   <div className="text-[9px] uppercase tracking-wider mb-1" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>{item.label}</div>
@@ -441,12 +441,23 @@ const LAYERS: {
   { id: 'volume', label: 'Volume', value: (c) => c.totalTransactions, format: (n) => `${n.toLocaleString()} txns` },
 ]
 
+// Basemap. CARTO's public basemaps now answer with an "API KEY REQUIRED"
+// placeholder image instead of map imagery, which is what smeared that watermark
+// across the heatmap. Default to OpenStreetMap's keyless tiles; a keyed provider
+// can be swapped in via VITE_TILE_URL + VITE_TILE_ATTRIBUTION without a code change.
+const TILE_URL =
+  (import.meta.env.VITE_TILE_URL as string | undefined) || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+const TILE_ATTRIBUTION =
+  (import.meta.env.VITE_TILE_ATTRIBUTION as string | undefined) || '© OpenStreetMap contributors'
+
 function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
   const [communities, setCommunities] = useState<Community[]>([])
   const [emirate, setEmirate] = useState('all')
   const [layer, setLayer] = useState<LayerId>('psf')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [layerHasSpread, setLayerHasSpread] = useState(true)
+  const [mapError, setMapError] = useState<string | null>(null)
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<unknown>(null)
 
@@ -460,19 +471,26 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
     if (!mapRef.current || communities.length === 0) return
     import('leaflet').then((L) => {
       if (mapInstanceRef.current) (mapInstanceRef.current as { remove: () => void }).remove()
-      const map = L.map(mapRef.current!, { zoomControl: false, attributionControl: true }).setView([25.2, 55.27], 10)
+      const map = L.map(mapRef.current!, { zoomControl: false, attributionControl: true })
       L.control.zoom({ position: 'topright' }).addTo(map)
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap © CARTO', maxZoom: 19 }).addTo(map)
+      L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map)
       const def = LAYERS.find((l) => l.id === layer) ?? LAYERS[0]
       const vals = communities.map(def.value).filter((v) => Number.isFinite(v))
       const minV = Math.min(...vals)
       const maxV = Math.max(...vals)
-      const maxTx = Math.max(...communities.map(c => c.transactionCount30d), 1)
+      const maxTx = Math.max(...communities.map(c => c.transactionCount30d), 0)
+      // A metric with no spread (Deals and Volume are all zero until a registry
+      // source is connected) cannot be colour-coded. Record that so the legend
+      // can say so, rather than painting every district one shade and implying
+      // the scale means something.
+      setLayerHasSpread(maxV > minV)
       communities.forEach(c => {
-        if (c.latitude === 0 && c.longitude === 0) return
+        if (!c.latitude || !c.longitude) return
         const v = def.value(c)
         const t = (v - minV) / (maxV - minV || 1)
-        const r = 8 + (c.transactionCount30d / maxTx) * 20
+        // Size by transaction volume when there is any; otherwise fall back to
+        // the active metric. All-zero volumes previously made every circle 8px.
+        const r = maxTx > 0 ? 8 + (c.transactionCount30d / maxTx) * 20 : 7 + t * 13
         // A signed metric (momentum) diverges around zero, so a falling district
         // must read as falling; everything else uses the low→high ramp.
         const color = def.signed
@@ -482,8 +500,18 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
         circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">AED ${c.medianAedSqft.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
         circle.on('click', () => { setSelectedCommunity(c.slug); setPage('community') })
       })
+      // Refit to what is actually on screen. The view used to be pinned to a
+      // Dubai-centred zoom 10, so selecting Abu Dhabi — ~80km south — left every
+      // marker outside the viewport and the map looked empty.
+      const pts = communities
+        .filter((c) => c.latitude && c.longitude)
+        .map((c) => [c.latitude, c.longitude] as [number, number])
+      if (pts.length === 1) map.setView(pts[0], 12)
+      else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts).pad(0.18), { maxZoom: 12 })
+      else map.setView([24.45, 54.38], 9)
+
       mapInstanceRef.current = map
-    }).catch(() => {})
+    }).catch(() => setMapError('Basemap library failed to load — the map is unavailable.'))
     return () => { if (mapInstanceRef.current) { (mapInstanceRef.current as { remove: () => void }).remove(); mapInstanceRef.current = null } }
   }, [communities, emirate, layer])
 
@@ -532,10 +560,20 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
             <div className="text-sm" style={{ color: 'var(--ink-4)' }}>Loading communities...</div>
           </div>
         )}
+        {mapError && (
+          <div className="absolute inset-0 flex items-center justify-center z-[999] px-6 text-center" style={{ background: 'var(--g2)' }}>
+            <div className="text-sm" style={{ color: 'var(--warn)' }}>{mapError}</div>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-4 mt-3 text-xs flex-wrap" style={{ color: 'var(--ink-5)' }}>
-        {activeLayer.signed ? (
+        {!layerHasSpread ? (
+          <span style={{ color: 'var(--warn)' }}>
+            No {activeLayer.label} data yet — every district reads 0, so there is nothing to colour by.
+            Connect a registry source (Dubai Pulse) to populate it.
+          </span>
+        ) : activeLayer.signed ? (
           <>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--down)' }} /> Falling</div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b500)' }} /> Flat</div>
@@ -548,7 +586,8 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ background: 'var(--b800)' }} /> High</div>
           </>
         )}
-        <span>·</span><span>Circle size = transaction volume</span>
+        <span>·</span>
+        <span>{communities.some(c => c.transactionCount30d > 0) ? 'Circle size = transaction volume' : `Circle size = ${activeLayer.label}`}</span>
       </div>
 
       <div className="mt-6 grid md:grid-cols-2 gap-4">
@@ -758,19 +797,22 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
 
 function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPage: (p: Page) => void }) {
   const [listing, setListing] = useState<Listing | null>(null)
+  const [comps, setComps] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const { format } = useCurrency()
 
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/sqftlab/listings?limit=50`)
-      .then(r => r.json())
-      .then(d => {
-        const found = (d.listings || []).find((l: Listing) => l.id === listingId)
-        setListing(found || null)
+    // Fetch the row directly by id. Scanning a page of /listings failed for
+    // every rental: that endpoint defaults to `purpose=sale`, so `.find()`
+    // never matched and the page rendered "Property not found".
+    safeFetch(`/api/sqftlab/listings/${listingId}`, { listing: null, comps: [] } as unknown)
+      .then((d: unknown) => {
+        const data = d as { listing?: Listing | null; comps?: Transaction[] }
+        setListing(data.listing ?? null)
+        setComps(data.comps ?? [])
         setLoading(false)
       })
-      .catch(() => setLoading(false))
   }, [listingId])
 
   if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading intelligence report...</div>
@@ -784,9 +826,6 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
   const vsFairValue = listing.priceAed > 0 ? ((listing.priceAed - fairValueMid) / fairValueMid * 100) : 0
   const grossYield = listing.community ? (listing.community.medianAedSqft * 1000 * 0.065 / listing.priceAed * 100) : 0
   const investmentScore = Math.min(100, Math.max(10, Math.round(70 - psfDelta * 0.5 + grossYield * 2)))
-
-  const scoreColor = investmentScore >= 80 ? 'var(--score-a)' : investmentScore >= 65 ? 'var(--score-b)' : investmentScore >= 50 ? 'var(--score-c)' : 'var(--score-d)'
-  const scoreLabel = investmentScore >= 80 ? 'Strong buy' : investmentScore >= 65 ? 'Good value' : investmentScore >= 50 ? 'Neutral' : 'Caution'
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
@@ -804,7 +843,7 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
             <span className="text-[10px] font-medium text-white px-2 py-0.5 rounded-lg" style={{ background: SOURCE_COLORS[listing.source] || '#64748B' }}>
               {SOURCE_LABELS[listing.source] || listing.source}
             </span>
-            <span className="text-xs" style={{ color: 'var(--ink-4)' }}>Price verified against DLD data</span>
+            <span className="text-xs" style={{ color: 'var(--ink-4)' }}>{listing.purpose === 'rent' ? 'Asking rent · portal listing' : 'Asking price · portal listing'}</span>
           </div>
         </div>
         <div className="text-right">
@@ -820,26 +859,33 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
           <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold" style={{ color: 'var(--ink)' }}>Transaction intelligence</h3>
-              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>47 DLD txns</span>
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: comps.length ? 'var(--b100)' : 'var(--warn-bg)', color: comps.length ? 'var(--b600)' : 'var(--warn)', fontFamily: 'var(--font-data)' }}>
+                {comps.length ? `${comps.length} DLD ${comps.length === 1 ? 'txn' : 'txns'}` : 'No registered txns'}
+              </span>
             </div>
-            <DataLabel source="DLD" count={47} period="24 months" lastUpdated={new Date().toISOString()} methodology="Based on DLD-registered transactions within 500m, same property type" glossary="comps" />
-            <div className="mt-3 grid grid-cols-5 gap-2 text-[10px]" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>
-              <span>Date</span><span>Type</span><span className="text-right">Sqft</span><span className="text-right">Price</span><span className="text-right">PSF</span>
-            </div>
-            {[
-              { date: 'Aug 2026', type: 'Sale', sqft: listing.areaSqft * 0.95, price: listing.priceAed * 0.93, psf: Math.round(listing.pricePerSqft * 0.97) },
-              { date: 'Jul 2026', type: 'Sale', sqft: listing.areaSqft * 1.02, price: listing.priceAed * 1.05, psf: Math.round(listing.pricePerSqft * 1.03) },
-              { date: 'Jun 2026', type: 'Sale', sqft: listing.areaSqft * 0.98, price: listing.priceAed * 0.96, psf: Math.round(listing.pricePerSqft * 0.98) },
-              { date: 'May 2026', type: 'Sale', sqft: listing.areaSqft, price: listing.priceAed * 0.91, psf: Math.round(listing.pricePerSqft * 0.93) },
-              { date: 'Mar 2026', type: 'Sale', sqft: listing.areaSqft * 1.05, price: listing.priceAed * 1.08, psf: Math.round(listing.pricePerSqft * 1.03) },
-            ].map((c, i) => (
-              <div key={i} className="grid grid-cols-5 gap-2 text-xs py-1.5 border-b" style={{ borderColor: 'var(--ink-6)', fontFamily: 'var(--font-data)', color: 'var(--ink-3)' }}>
-                <span>{c.date}</span><span>{c.type}</span>
-                <span className="text-right">{Math.round(c.sqft).toLocaleString()}</span>
-                <span className="text-right">{format(Math.round(c.price))}</span>
-                <span className="text-right font-medium">{format(c.psf)}</span>
-              </div>
-            ))}
+            {comps.length > 0 ? (
+              <>
+                <DataLabel source="DLD" count={comps.length} period="24 months" lastUpdated={new Date().toISOString()} methodology="Registered DLD sales for this district, most recent first" glossary="comps" />
+                <div className="mt-3 grid grid-cols-5 gap-2 text-[10px]" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>
+                  <span>Date</span><span>Type</span><span className="text-right">Sqft</span><span className="text-right">Price</span><span className="text-right">PSF</span>
+                </div>
+                {comps.map((c) => (
+                  <div key={c.id} className="grid grid-cols-5 gap-2 text-xs py-1.5 border-b" style={{ borderColor: 'var(--ink-6)', fontFamily: 'var(--font-data)', color: 'var(--ink-3)' }}>
+                    <span>{new Date(c.transactionDate).toLocaleDateString('en-AE', { month: 'short', year: 'numeric' })}</span>
+                    <span className="capitalize">{c.transactionType.replace('_', ' ')}</span>
+                    <span className="text-right">{Math.round(c.areaSqft).toLocaleString()}</span>
+                    <span className="text-right">{format(Math.round(c.priceAed))}</span>
+                    <span className="text-right font-medium">{format(c.pricePerSqft)}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--ink-4)' }}>
+                No registered DLD transactions for this district yet, so there are no comparables to show.
+                Connect a registry source (Dubai Pulse) to populate them — this panel deliberately does not
+                estimate comps from the asking price.
+              </p>
+            )}
           </div>
 
           {/* AED/sqft Analysis */}
@@ -881,7 +927,10 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
               <div><div className="text-xs" style={{ color: 'var(--ink-5)' }}>Gross yield</div><div className="text-2xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{grossYield.toFixed(1)}%</div></div>
               <div><div className="text-xs" style={{ color: 'var(--ink-5)' }}>Net yield (est.)</div><div className="text-2xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{(grossYield * 0.78).toFixed(1)}%</div></div>
             </div>
-            <DataLabel source="Ejari" count={12} period="12 months" lastUpdated={new Date().toISOString()} methodology="Based on Ejari-registered tenancies in the district" glossary="ejari" />
+            <p className="mt-2 text-[10px] leading-relaxed" style={{ color: 'var(--ink-5)' }}>
+              Yield is estimated from the district median price per sqft and an assumed 6.5% gross return.
+              No Ejari tenancy registry is connected, so registered rents are not shown.
+            </p>
           </div>
 
           {/* Verdict */}
@@ -890,7 +939,9 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
             <p className="text-sm leading-relaxed" style={{ color: 'var(--ink-2)' }}>
               This {listing.beds === 0 ? 'studio' : `${listing.beds}-bed`} {listing.propertyType.toLowerCase()} in {listing.community?.nameEn || 'Dubai'} is
               {vsFairValue <= -5 ? ` priced ${Math.abs(vsFairValue).toFixed(0)}% below fair value` : vsFairValue >= 5 ? ` priced ${vsFairValue.toFixed(0)}% above fair value` : ' within fair value range'}.
-              Based on 47 comparable DLD transactions, fair value is {format(fairValueLow)}–{format(fairValueHigh)}.
+              {comps.length > 0
+                ? ` Based on ${comps.length} comparable DLD transaction${comps.length === 1 ? '' : 's'}, fair value is ${format(fairValueLow)}–${format(fairValueHigh)}.`
+                : ' No registered DLD transactions are connected for this district, so the fair value range is derived from the district median price per sqft rather than from comparables.'}
               At {format(listing.priceAed)}, it offers a {grossYield.toFixed(1)}% gross yield.
               Investment score: {investmentScore}/100.
             </p>
@@ -905,7 +956,7 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
                 </div>
               ))}
             </div>
-            <p className="text-[10px] mt-3" style={{ color: 'var(--ink-5)' }}>Analysis based on DLD transaction records. Not financial advice.</p>
+            <p className="text-[10px] mt-3" style={{ color: 'var(--ink-5)' }}>Estimates only, derived from the district median price per sqft. Not financial advice.</p>
           </div>
         </div>
 
@@ -914,7 +965,7 @@ function PropertyIntelligence({ listingId, setPage }: { listingId: string; setPa
           {/* Investment Score */}
           <div className="p-5 rounded-[18px] flex flex-col items-center" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
             <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Investment Score</h3>
-            <InvestmentScore score={investmentScore} breakdown={{ psf: 20, yield: 19, momentum: 16, neighbourhood: 12, developer: 15 }} size="md" />
+            <InvestmentScore score={investmentScore} size="md" />
           </div>
 
           {/* Quick Stats */}
@@ -990,14 +1041,19 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {listings.map(l => (
-            <a key={l.id} href={l.sourceUrl || '#'} target="_blank" rel="noopener noreferrer"
-              onClick={(e) => {
-                if (l.sourceUrl) return // let it navigate
-                e.preventDefault()
-                setSelectedListing(l.id)
-                setPage('property')
+            // A card opens the in-app intelligence report, always. It used to be
+            // an <a href={sourceUrl} target="_blank"> that navigated away whenever
+            // a portal URL was present, so the report was unreachable for those
+            // rows — and it nested a <button> inside an <a>, which is invalid
+            // HTML. The external link is now a separate, explicit control below.
+            <div key={l.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => { setSelectedListing(l.id); setPage('property') }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedListing(l.id); setPage('property') }
               }}
-              className="rounded-[18px] overflow-hidden transition-all duration-300 group block"
+              className="rounded-[18px] overflow-hidden transition-all duration-300 group block cursor-pointer"
               style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
               <div className="h-40 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, var(--b100), #f1f5f9)' }}>
                 {l.imageUrl ? (
@@ -1016,11 +1072,14 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
                     {SOURCE_LABELS[l.source] || l.source}
                   </span>
                 </div>
-                <div className="absolute top-3 left-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <span className="text-[10px] font-medium text-white rounded-lg px-2 py-1 flex items-center gap-1" style={{ background: 'rgba(37,99,235,0.8)', backdropFilter: 'blur(4px)' }}>
+                {l.sourceUrl && (
+                  <a href={l.sourceUrl} target="_blank" rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-3 left-3 text-[10px] font-medium text-white rounded-lg px-2 py-1 flex items-center gap-1"
+                    style={{ background: 'rgba(37,99,235,0.8)', backdropFilter: 'blur(4px)' }}>
                     <ExternalLink size={10} /> View on {SOURCE_LABELS[l.source] || l.source}
-                  </span>
-                </div>
+                  </a>
+                )}
               </div>
               <div className="p-4">
                 <div className="flex items-start justify-between mb-2">
@@ -1038,7 +1097,7 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
                   <span>·</span><span>{l.baths} bath</span><span>·</span><span className="capitalize">{l.furnished}</span>
                 </div>
               </div>
-            </a>
+            </div>
           ))}
         </div>
       )}

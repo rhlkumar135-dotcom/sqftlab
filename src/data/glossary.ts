@@ -333,10 +333,10 @@ export const GLOSSARY: GlossaryTerm[] = [
     term: 'Investment Score',
     definition:
       `sqftLab's composite 0–100 score for any property, produced at the end of the 8-step Property Intelligence Pipeline. Weighted from 5 components: PSF vs fair value (25%), rental yield (25%), price momentum (20%), neighbourhood score (15%), and building intelligence (15%).`,
-    whyMatters: `Score bands: 80–100 Strong buy (green) · 65–79 Good value (teal) · 50–64 Neutral (amber) · 0–49 Caution (red).`,
+    whyMatters: `Score bands: 80–100 High (green) · 65–79 Above average (teal) · 50–64 Average (amber) · 0–49 Below average (red). Bands are descriptive, not a recommendation.`,
     source: 'All sqftLab data sources combined',
     tier: 'pro',
-    example: `A 2-bed in Business Bay scoring 71 lands in the "Good value" band.`,
+    example: `A 2-bed in Business Bay scoring 71 lands in the "Above average" band.`,
     seeAlso: ['verdict', 'fair-value', 'momentum-index', 'neighbourhood-score', 'building-intelligence-profile'],
   },
   {
