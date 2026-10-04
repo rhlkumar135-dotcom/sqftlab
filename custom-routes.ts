@@ -5,7 +5,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
 import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
-import { detectDeals } from './src/lib/deals'
+import { detectDeals, marketPsfByCommunity } from './src/lib/deals'
 import { findCommunityByName, invalidateCommunityCache } from './src/lib/community-match'
 import { runHourlyRefresh, recentCronRuns, HOURLY_JOB } from './src/lib/cron'
 import {
@@ -1148,7 +1148,32 @@ app.get('/sqftlab/deals', async (c) => {
         : 0,
   }))
 
-  return c.json({ deals: dealsWithDiscount })
+  // An empty list is otherwise indistinguishable from a broken feature. The
+  // deal rule is defined against the 90-day DLD median (see src/lib/deals.ts),
+  // so with no registered transactions this is the expected result until a
+  // DLD source is connected — say which, rather than returning a bare [].
+  if (dealsWithDiscount.length === 0) {
+    const [saleListings, medians] = await Promise.all([
+      prisma.listing.count({ where: { purpose: 'sale' } }),
+      marketPsfByCommunity(),
+    ])
+    const communitiesWithMedian = [...medians.values()].filter((m) => m > 100).length
+    return c.json({
+      deals: [],
+      basis: 'dld_90d_median',
+      saleListings,
+      communitiesWithDldMedian: communitiesWithMedian,
+      ...(communitiesWithMedian === 0
+        ? {
+            insufficientData: true,
+            message:
+              'No deals can be evaluated yet: the 8% rule compares each listing against its area\u2019s 90-day DLD median, and no registered transactions are loaded. Set DUBAI_PULSE_API_KEY to activate.',
+          }
+        : { message: `No listings are currently 8% or more below their area's DLD median (${saleListings} sale listings evaluated).` }),
+    })
+  }
+
+  return c.json({ deals: dealsWithDiscount, basis: 'dld_90d_median' })
 })
 
 // ─── Listings search ─────────────────────────────────────────────────────────

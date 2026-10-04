@@ -65,15 +65,29 @@ console.log(`\n# FIX-04 — deal detection`)
 {
   const d = await req('/api/sqftlab/deals')
   const deals: any[] = d.body?.deals ?? []
-  check('GET /deals with deals > 0', deals.length > 0, `${deals.length} deals`)
+  // The 8% rule is defined against the area's 90-day DLD median, so a zero-deal
+  // result is correct whenever no registered transactions are loaded. What must
+  // hold either way: the payload explains itself, and every flag is consistent
+  // with the rule. Requiring deals > 0 only held while the table carried
+  // generated rows.
+  check(
+    'GET /deals explains an empty result',
+    deals.length > 0 || (d.body?.insufficientData === true && typeof d.body?.message === 'string'),
+    `${deals.length} deals · ${d.body?.message ?? d.body?.insufficientData ?? 'no explanation'}`,
+  )
+  check('GET /deals declares its basis', d.body?.basis === 'dld_90d_median', d.body?.basis)
   const withDiscount = deals.filter((x) => typeof x.discountPct === 'number' && x.discountPct !== 0)
   check('every deal carries discountPct', withDiscount.length === deals.length, `${withDiscount.length}/${deals.length}`)
   const inRange = withDiscount.every((x) => x.discountPct > 0 && x.discountPct < 60)
-  check('discountPct is a sane positive %', inRange, withDiscount[0] ? `e.g. ${withDiscount[0].discountPct}%` : '')
+  check('discountPct is a sane positive %', inRange, withDiscount[0] ? `e.g. ${withDiscount[0].discountPct}%` : 'n/a (no deals)')
   const unauth = await req('/api/sqftlab/detect-deals')
   check('GET /detect-deals without secret → 401', unauth.status === 401, `got ${unauth.status}`)
   const dd = await req(`/api/sqftlab/detect-deals?secret=${SECRET}`)
-  check('GET /detect-deals → dealsDetected > 0', dd.body?.dealsDetected > 0, `dealsDetected=${dd.body?.dealsDetected}`)
+  check(
+    'GET /detect-deals returns a count consistent with /deals',
+    typeof dd.body?.dealsDetected === 'number' && dd.body.dealsDetected === deals.length,
+    `dealsDetected=${dd.body?.dealsDetected} vs /deals=${deals.length}`,
+  )
 }
 
 console.log(`\n# FIX-05 — price trend from real transactions`)
