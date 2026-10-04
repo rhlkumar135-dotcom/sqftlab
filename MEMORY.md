@@ -758,3 +758,54 @@ that — the name follows their own document convention (`sqftlab_dayNN_*.md`), 
 `git format-patch -1 e6501e0 --stdout` (18 files), so it is a faithful export of
 the Day 1 commit rather than a truncated artifact. Now tracked in git so it
 travels with the push and survives a workspace reset.
+
+---
+
+## Session — full test pass, and a real data-integrity bug
+
+**Everything infra-side is healthy.** Build green; 206 assertions across the six
+suites; cron `hourly-refresh` last ran 73 s prior, status success, 10 runs, 3600000 ms
+interval; assets serve as `application/javascript` + `text/css` from the public
+preview; auth walls return 401 and the six "broken-looking" routes return honest,
+named errors (`Google OAuth is not configured`, `district is required`, …). All 81
+`tsc` errors are in `src/generated/` (SDK output, not editable).
+
+**Data reality: 2 921 rows.** `listings` 2 457, `macro_indicators` 261,
+`communities` 43, `exchange_rates` 22, `cron_runs` 10. But `transactions` **0**,
+`district_metrics` 0, `building_profiles` 0, `real_price_index` 0, `supply_pipeline` 0,
+`nationality_flow` 0, `institutional_transactions` 0. `/sqftlab/sources` says so
+honestly: PropertyFinder `connected: true` delivering 2 457; DLD and ADREC
+`connected: false`. So districts / buildings / RPI / deals / trend are empty purely
+for want of `DUBAI_PULSE_API_KEY` — a credential gap, not a bug.
+
+**The bug — `DUBAI_AREAS`/`AD_AREAS` location IDs are wrong, so every listing is
+misfiled.** Probed live (`scripts/probe-pf-location.ts`):
+
+| queried `l=` | labelled | actually returned |
+|---|---|---|
+| 31 | Dubai Marina | **Al Twar 1 Villas** ×6, Al Twar 4 ×1 |
+| 58 | Discovery Gardens | **Emirates Hills** mansions, Al Hambra Villas, Sector E/P/W |
+| 44 | Al Nahda | **Hyatt Regency Creek Heights Residences** |
+
+`property.location.name` *is* the listing's true area, so the IDs are simply wrong.
+This is load-bearing because `scripts/scraper-pf.ts:219` deliberately attributes each
+listing to **the area we queried**, not the listing's own location — with a good
+reason documented at line 213 (PF's `location.name` is often a *building*: "AG Tower",
+"Listone Residence", which invented hundreds of bogus communities). Correct decision,
+wrong inputs: search Al Twar inventory under `l=31` and all of it is stamped
+`community_id = dubai-marina`.
+
+Verified consequence: all 36 `dubai-marina` listings are Al Twar; 0 mention Marina.
+**All 2 457 listings are suspect**, and `/sqftlab/markets` reports "Dubai Marina
+avgPsf 412" from Al Twar land plots. `grossYieldPct 85.24` is downstream of the same
+misfiling (annual rent ÷ a plot-price psf — real Dubai Marina yields are 4–8 %).
+
+Also worth knowing: rent and sale are mixed in one `price_per_sqft` column
+(rent avg 100 vs sale avg 1 614), and 835 listings sit below 100 psf because villas
+carry *plot* area, not built-up area. `/sqftlab/markets` does filter to sale
+correctly (`avgPsf 412` == the sale-only figure), so the display path is not at fault —
+the underlying attribution is.
+
+**Fix path:** re-derive the `lid` values from PropertyFinder's own search, then
+re-scrape; the assignment logic itself needs no change. `scripts/probe-pf-location.ts`
+is the diagnostic that proves a given `l=` maps to the area it claims.
