@@ -140,6 +140,8 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<CmaResult | null>(null)
   const [failure, setFailure] = useState<CmaFailure | null>(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -203,6 +205,65 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
       setFailure({ error: 'Could not reach the CMA service. Check your connection and try again.' })
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * Download the white-label report (Day 7 Task C).
+   *
+   * Only reachable once a valuation exists: the route refuses without enough recorded
+   * sales, so a report can only ever be produced for a subject the CMA tool itself
+   * priced. Failures surface the server's own words — including the honest 422 when the
+   * feed is empty — because a generic "failed" would hide the one fact that matters.
+   */
+  async function downloadReport() {
+    if (!result) return
+    setPdfBusy(true)
+    setPdfError(null)
+
+    const payload: Record<string, unknown> = {
+      propertyAddress: `${buildingName.trim()}, ${community.trim()}`,
+      building: buildingName.trim(),
+      community: community.trim(),
+      bedrooms: Number(bedrooms),
+      sizeSqft: sizeNum,
+    }
+    if (listingPrice.trim() !== '') payload.listingPriceAed = Number(listingPrice)
+
+    try {
+      const res = await fetch('/api/sqftlab/report/property', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+        setPdfError(
+          typeof body?.error === 'string'
+            ? String(body.message ?? body.error)
+            : `Report generation failed (HTTP ${res.status})`,
+        )
+        return
+      }
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const slug = community.trim().toLowerCase().replace(/\s+/g, '-')
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `sqftlab-report-${slug}.pdf`
+      // Firefox only honours a synthetic click on an anchor that is attached.
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoking in the same tick can cancel an in-flight download; the blob is small
+      // and the timer is cleared by the browser once the download has started.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : 'Could not reach the report service.')
+    } finally {
+      setPdfBusy(false)
     }
   }
 
@@ -550,16 +611,28 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="button"
-                    disabled
-                    className="inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold opacity-60 cursor-not-allowed"
-                    style={{ background: 'var(--g3)', color: 'var(--ink-3)', border: '1px solid var(--gb)' }}
+                    onClick={() => void downloadReport()}
+                    disabled={pdfBusy || !result}
+                    className={cn(
+                      'inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold transition',
+                      pdfBusy || !result ? 'opacity-60 cursor-not-allowed' : 'hover:opacity-90',
+                    )}
+                    style={{ background: 'var(--b600)', color: '#fff' }}
                   >
-                    <Download size={15} /> Download PDF report
+                    {pdfBusy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+                    {pdfBusy ? 'Generating report…' : 'Download PDF report'}
                   </button>
                   <span className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
-                    Coming soon
+                    Branded PDF with the comparables behind this valuation
                   </span>
                 </div>
+                {pdfError && (
+                  // The route's own explanation, not a generic failure. When there are too
+                  // few recorded sales it says so, which is the only useful thing to know.
+                  <p className="mt-2 max-w-2xl text-[11px] leading-relaxed" style={{ color: 'var(--down)' }}>
+                    {pdfError}
+                  </p>
+                )}
               </>
             )}
           </div>

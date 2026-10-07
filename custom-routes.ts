@@ -27,6 +27,7 @@ import {
   computeCma, MIN_COMPS, COMP_WINDOW_DAYS, SIZE_TOLERANCE, CMA_CONDITIONS,
   type CmaCondition, type CmaSubject,
 } from './src/lib/cma'
+import { generatePropertyReport, PdfUnavailableError } from './src/lib/pdf-generator'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -1211,6 +1212,211 @@ app.post('/sqftlab/cma', async (c) => {
     compBasis: result.compBasis,
   })
   return c.json(result)
+})
+
+// ─── White-label PDF report (Day 7) ──────────────────────────────────────────
+
+const REPORT_EXPECTED: Record<string, string> = {
+  propertyAddress: 'non-empty string — the address printed on the report',
+  building: 'optional string — used to prefer same-building comparables; defaults to propertyAddress',
+  community: 'non-empty string — the area name, e.g. "Dubai Marina"',
+  bedrooms: 'integer >= 0 (0 = studio)',
+  sizeSqft: 'a positive number — the unit size in sqft',
+  listingPriceAed: 'optional positive number (AED) — the asking price, for deal analysis',
+  brokerName: 'optional string — printed beside the logo',
+  brokerLogoBase64: 'optional base64 image data URI (png, jpeg, webp or gif)',
+  preparedFor: 'optional string — the client the report is prepared for',
+}
+
+app.post('/sqftlab/report/property', async (c) => {
+  // Identity before entitlement, matching the CMA route: an anonymous caller is told
+  // to sign in (401), not told to upgrade (403). Day 7's checklist asks for both.
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const blocked = requireTier(c, 'enterprise', 'PDF Report')
+  if (blocked) return blocked
+
+  const body = await readJsonBody(c)
+
+  const propertyAddress = strField(body, 'propertyAddress')
+  const communityName = strField(body, 'community')
+  const building = strField(body, 'building') ?? propertyAddress
+  const bedrooms = numField(body, 'bedrooms')
+  const sizeSqft = numField(body, 'sizeSqft')
+  const listingPrice = numField(body, 'listingPriceAed')
+  const brokerName = strField(body, 'brokerName')
+  const brokerLogo = strField(body, 'brokerLogoBase64')
+  const preparedFor = strField(body, 'preparedFor')
+
+  const bad: string[] = []
+  if (!propertyAddress) bad.push('propertyAddress')
+  if (!communityName) bad.push('community')
+  if (bedrooms === null || bedrooms < 0 || !Number.isInteger(bedrooms)) bad.push('bedrooms')
+  if (sizeSqft === null || sizeSqft <= 0) bad.push('sizeSqft')
+  if (listingPrice !== null && listingPrice <= 0) bad.push('listingPriceAed')
+
+  if (bad.length) return badInput(c, bad, REPORT_EXPECTED)
+  // Restated so TypeScript narrows each value; an empty `bad` does not tie the array's
+  // emptiness to the individual null checks.
+  if (!propertyAddress || !communityName || !building || bedrooms === null || sizeSqft === null) {
+    return badInput(c, ['propertyAddress', 'community', 'bedrooms', 'sizeSqft'], REPORT_EXPECTED)
+  }
+
+  const community = await findCommunityByName(communityName)
+  if (!community) {
+    return c.json({
+      error: 'Community not found',
+      message: `No area matching "${communityName}" is loaded on this deployment. ` +
+        'Check the spelling, or list the available areas at /api/sqftlab/communities.',
+      communityFound: false,
+    }, 422)
+  }
+
+  // The same comparable selection the CMA tool uses. `sale` and `off_plan_sale` are
+  // both market sales; mortgage and gift rows record a transaction but not an
+  // arm's-length price, so including them would drag the median.
+  const since = new Date(Date.now() - COMP_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  const comps = await prisma.transaction.findMany({
+    where: {
+      communityId: community.id,
+      beds: bedrooms,
+      areaSqft: {
+        gte: sizeSqft * (1 - SIZE_TOLERANCE),
+        lte: sizeSqft * (1 + SIZE_TOLERANCE),
+      },
+      transactionType: { in: ['sale', 'off_plan_sale'] },
+      pricePerSqft: { gt: 100 },
+      transactionDate: { gte: since },
+    },
+    select: {
+      transactionDate: true,
+      pricePerSqft: true,
+      priceAed: true,
+      areaSqft: true,
+      floorNumber: true,
+      buildingName: true,
+    },
+    orderBy: { transactionDate: 'desc' },
+    take: 200,
+  })
+
+  // Refusing is the point. A report is a document a broker forwards to a client, so an
+  // estimate assembled from too few sales would carry the platform's name into a
+  // decision the data cannot support. The CMA tool's own wording is reused so both
+  // surfaces explain the same situation identically.
+  if (comps.length < MIN_COMPS) {
+    const feedConfigured = dldConfigured()
+    const salesOnRecord =
+      comps.length > 0 ||
+      (await prisma.transaction.count({
+        where: { transactionType: { in: ['sale', 'off_plan_sale'] } },
+      })) > 0
+
+    const message = salesOnRecord
+      ? `Only ${comps.length} comparable sale${comps.length === 1 ? '' : 's'} in ${community.nameEn} in the last ` +
+        `${COMP_WINDOW_DAYS} days at this bedroom count and size (at least ${MIN_COMPS} are needed). ` +
+        'A report is not produced from fewer than that — widen the size range or check a busier area.'
+      : feedConfigured
+        ? `No comparable sales in ${community.nameEn} yet. The transaction feed is connected but has not ` +
+          'delivered records for this area, and this report is built from recorded sales only.'
+        : 'The DLD transaction feed is not connected on this deployment, so there are no recorded sales to ' +
+          'build a report from. Set DUBAI_PULSE_API_KEY to enable it.'
+
+    return c.json({
+      error: 'Insufficient comparable transactions',
+      message,
+      compsFound: comps.length,
+      dldConnected: feedConfigured,
+      salesOnRecord,
+    }, 422)
+  }
+
+  const subject: CmaSubject = {
+    buildingName: building,
+    community: community.nameEn,
+    bedrooms,
+    sizeSqft,
+    floor: null,
+    condition: null,
+    listingPrice,
+  }
+
+  const result = computeCma(subject, comps)
+  if (!result) {
+    return c.json({
+      error: 'Valuation not possible',
+      message: `Comparable sales exist in ${community.nameEn}, but none carried a usable price per sqft, ` +
+        'so no estimate could be computed.',
+      compsFound: comps.length,
+    }, 422)
+  }
+
+  // Queried by the resolved `communityId` rather than by re-slugifying the typed name:
+  // a local slug rule would be a second, drifting implementation of the slug column.
+  const latestScore = await prisma.investmentScore.findFirst({
+    where: { communityId: community.id },
+    orderBy: { calculatedAt: 'desc' },
+    select: { score: true, dataCoverage: true },
+  })
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, company: true },
+  })
+
+  // `result.verdict` is null when no asking price was supplied — say so rather than
+  // synthesising a deal position, which would read as a recommendation.
+  const verdict = result.verdict ??
+    `Estimated market value derived from ${result.compsUsed} comparable recorded ` +
+    `sale${result.compsUsed === 1 ? '' : 's'}. No asking price was supplied, so no deal position is given.`
+
+  let pdf: Buffer
+  try {
+    pdf = await generatePropertyReport({
+      propertyAddress,
+      community: community.nameEn,
+      bedrooms,
+      sizeSqft,
+      listingPriceAed: listingPrice,
+      estimatedValueAed: result.estimatedValueAed,
+      medianPsf: result.medianPsf,
+      investmentScore: latestScore ? latestScore.score : null,
+      investmentScoreCoverage: latestScore ? latestScore.dataCoverage : null,
+      verdict,
+      compBasis: result.compBasis,
+      compsUsed: result.compsUsed,
+      windowDays: result.windowDays,
+      recentComps: result.recentComps,
+      brokerLogo,
+      brokerName,
+      preparedFor,
+      preparedBy: user?.company ?? user?.name ?? 'sqftLab',
+    })
+  } catch (err) {
+    // A missing browser is a deployment gap, not a client mistake: answer 503 with the
+    // reason instead of letting a raw 500 make it look like bad input.
+    if (err instanceof PdfUnavailableError) {
+      return c.json({ error: 'PDF rendering unavailable', message: err.message }, 503)
+    }
+    const message = err instanceof Error ? err.message : 'unknown error'
+    return c.json({ error: 'PDF generation failed', message }, 500)
+  }
+
+  await trackEvent(c, 'pdf_report_export', {
+    community: community.nameEn,
+    bedrooms,
+    sizeSqft,
+    compsUsed: result.compsUsed,
+    compBasis: result.compBasis,
+  })
+
+  c.header('Content-Type', 'application/pdf')
+  c.header(
+    'Content-Disposition',
+    `attachment; filename="sqftlab-report-${community.slug}-${Date.now()}.pdf"`,
+  )
+  return c.body(new Uint8Array(pdf))
 })
 
 // ─── Exchange Rates ──────────────────────────────────────────────────────────

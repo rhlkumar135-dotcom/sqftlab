@@ -298,7 +298,16 @@ console.log('\n── PART C: the page is wired, and says what it does ──')
   check('CMA page renders the estimated value in AED', pageSrc.includes('AED {aed.format(result.estimatedValueAed)}'))
   check('CMA page renders the market range (P25/Median/P75/Avg)', ['P25', 'Median', 'P75', 'Average'].every((k) => pageSrc.includes(k)))
   check('CMA page renders the comparable transactions table', pageSrc.includes('Comparable transactions'))
-  check('CMA page shows the PDF report as coming soon', pageSrc.includes('Download PDF report') && pageSrc.includes('Coming soon'))
+  // Day 7 Task C replaced this placeholder with a working export. This suite asserted
+  // the placeholder, so left alone it would fail against the very change that was asked
+  // for. It now asserts the wiring; the route itself is exercised end to end by
+  // verify-day7-e2e.ts, which renders a real PDF.
+  check('CMA page offers the PDF report download', pageSrc.includes('Download PDF report'))
+  check('the PDF button no longer claims to be coming soon', !pageSrc.includes('Coming soon'))
+  check('the PDF button posts to the report route', pageSrc.includes("fetch('/api/sqftlab/report/property'"))
+  check('the PDF button is enabled only once a valuation exists', pageSrc.includes('disabled={pdfBusy || !result}'))
+  check('a PDF failure shows the server message, never a browser alert',
+    pageSrc.includes('body.message ?? body.error') && !pageSrc.includes('alert('))
   check('non-enterprise sees a blur gate', pageSrc.includes("filter: 'blur(6px)'"))
   check('gate CTA says Upgrade to Enterprise', pageSrc.includes('Upgrade to Enterprise'))
   check('gate is UX only — the server still enforces it', (await Bun.file('custom-routes.ts').text()).includes("requireTier(c, 'enterprise', 'CMA Tool')"))
