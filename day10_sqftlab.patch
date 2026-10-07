@@ -1,7 +1,7 @@
 From 618cbdba52404f7b4107a510377da7f689e32513 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:07:58 +0000
-Subject: [PATCH 01/11] fix(static publish): emirate filter, district detail,
+Subject: [PATCH 01/12] fix(static publish): emirate filter, district detail,
  honest predictions
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -256,7 +256,7 @@ index afc62a4..c7b3870 100644
 From 646b12888d2c18938f3a7a2551cff1c93efb9626 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:42:42 +0000
-Subject: [PATCH 02/11] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
+Subject: [PATCH 02/12] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
  Investment Score engine
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1383,7 +1383,7 @@ index 0000000..ec37030
 From 59bf076bb75e6f867b203a55b3e3ed6e7d3ea4d5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:03:18 +0000
-Subject: [PATCH 03/11] Day 4: tier middleware, requireTier, payment kill
+Subject: [PATCH 03/12] Day 4: tier middleware, requireTier, payment kill
  switch, per-tier rate limiter
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2162,7 +2162,7 @@ index 0000000..fd0bf24
 From 3f879cf5a9777ee8e4ed0f827f45c787f45b6070 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:55:21 +0000
-Subject: [PATCH 04/11] fix(scraper): the listing crawl persisted nothing, and
+Subject: [PATCH 04/12] fix(scraper): the listing crawl persisted nothing, and
  reported success
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2453,7 +2453,7 @@ index 0000000..2930c2e
 From 56e70bbe1d89887ea58e3dd39011f91a49f420cd Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 08:12:23 +0000
-Subject: [PATCH 05/11] fix(ui,api): a denial is not data, and a missing
+Subject: [PATCH 05/12] fix(ui,api): a denial is not data, and a missing
  measurement is not a zero
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3345,7 +3345,7 @@ index c7b3870..f4ee5b8 100644
 From d40a40006748e449907196f59a680b947fe1fdb2 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:01:03 +0000
-Subject: [PATCH 06/11] fix(api): the calculators answered 200 with a payload
+Subject: [PATCH 06/12] fix(api): the calculators answered 200 with a payload
  of nulls
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3661,7 +3661,7 @@ index b413ade..a07ce9f 100644
 From e316223d53fe7faf245b6c7bff3a3750b688f385 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:20:16 +0000
-Subject: [PATCH 07/11] Day 5: Stripe wired end to end, pricing page, checkout
+Subject: [PATCH 07/12] Day 5: Stripe wired end to end, pricing page, checkout
  + webhook handlers
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -5082,7 +5082,7 @@ index 0000000..90fe75f
 From 0649ef69b6955262c2b6c800677da3cae7e763a5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:41:53 +0000
-Subject: [PATCH 08/11] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
+Subject: [PATCH 08/12] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
  =?UTF-8?q?nd=20PSF=20analysis=20+=20frontend=20results=20page?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -7078,7 +7078,7 @@ index 0000000..c3cf8a1
 From 61e4473b221447bad1aca344a88141dc0fdd6012 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:10:39 +0000
-Subject: [PATCH 09/11] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
+Subject: [PATCH 09/12] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
  =?UTF-8?q?enerator=20=E2=80=94=20Puppeteer=20HTML=E2=86=92PDF=20with=20CM?=
  =?UTF-8?q?A=20data?=
 MIME-Version: 1.0
@@ -8557,7 +8557,7 @@ index 0000000..5bccad0
 From 744c4a485abd29b2c36431a36d28242c9d7c5245 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:43:38 +0000
-Subject: [PATCH 10/11] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
+Subject: [PATCH 10/12] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
  =?UTF-8?q?=E2=80=94=20holdings=20valued=20from=20real=20comparables,=20no?=
  =?UTF-8?q?=20invented=20figures?=
 MIME-Version: 1.0
@@ -10975,7 +10975,7 @@ index 5fe7be6..ba24d02 100644
 From 09e776f79a4dc40204d9224bfee975fee814ee08 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 11:48:33 +0000
-Subject: [PATCH 11/11] Day 9+10: capital flow by nationality, Ejari rental
+Subject: [PATCH 11/12] Day 9+10: capital flow by nationality, Ejari rental
  yield, developer positioning, building scorecards
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -14239,6 +14239,348 @@ index 0000000..8382d17
 +    warnings,
 +    methodology,
 +  }
++}
+-- 
+2.47.3
+
+
+From 716e97622c5461ee0dfc986e3e648d0216ad6b37 Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 12:08:14 +0000
+Subject: [PATCH 12/12] Day 1 (Task F): prove the deal engine's positive path
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+verify-day1.ts asserts every isDeal flag agrees with the 8% rule, but on this
+deployment that assertion is vacuous — transactions is empty, so
+marketPsfByCommunity() returns no medians, the flagging loop never runs, and
+'0 violations' is true by construction. A detectDeals() that threw internally
+or compared the wrong side of the threshold would still have passed it, and the
+brief's acceptance item ('a listing >8% below area PSF shows isDeal: true')
+could not be exercised at all.
+
+scripts/verify-deal-engine.ts manufactures the missing input on a throwaway DB
+copy and asserts the flag actually appears: median math (odd and even count),
+the strict 8% boundary, rent exclusion, the sub-100/sqft placeholder guard, and
+the stale-flag reset. A positive control fails the run if nothing gets flagged,
+so the negative cases cannot pass for the wrong reason. 15 checks; cleans up
+after itself.
+---
+ scripts/_runall.sh            |   5 +
+ scripts/verify-deal-engine.ts | 288 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 293 insertions(+)
+ create mode 100644 scripts/verify-deal-engine.ts
+
+diff --git a/scripts/_runall.sh b/scripts/_runall.sh
+index ca6bf5f..243ffdd 100644
+--- a/scripts/_runall.sh
++++ b/scripts/_runall.sh
+@@ -13,6 +13,11 @@ for f in scripts/verify-*.ts; do
+   case "$n" in
+     verify-day9)  cp prisma/dev.db /tmp/day9-e2e.db;  url="file:/tmp/day9-e2e.db" ;;
+     verify-day10) cp prisma/dev.db /tmp/day10-e2e.db; url="file:/tmp/day10-e2e.db" ;;
++    # Positive-path deal-engine test. Named after the feature, not the day: its
++    # guard requires the URL to contain "deal-e2e". Without a case here it would
++    # run against the project database — but detectDeals() rewrites every isDeal
++    # flag, so it would corrupt real state before its guard even mattered.
++    verify-deal-engine) cp prisma/dev.db /tmp/deal-e2e.db; url="file:/tmp/deal-e2e.db" ;;
+     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
+     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
+     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
+diff --git a/scripts/verify-deal-engine.ts b/scripts/verify-deal-engine.ts
+new file mode 100644
+index 0000000..d487f0f
+--- /dev/null
++++ b/scripts/verify-deal-engine.ts
+@@ -0,0 +1,288 @@
++// Deal-engine verification — Day 1 Task F (positive path).
++//
++// Run:
++//   cp prisma/dev.db /tmp/deal-e2e.db
++//   DATABASE_URL=file:/tmp/deal-e2e.db bun run scripts/verify-deal-engine.ts
++//
++// WHY THIS SUITE EXISTS
++//
++// verify-day1.ts asserts that every existing isDeal flag AGREES with the 8% rule
++// ("0 violations"). On this deployment that assertion is VACUOUS: `transactions`
++// is empty, `marketPsfByCommunity()` therefore returns no medians, the flagging
++// loop never runs, and 0 violations is true by construction. A detectDeals() that
++// threw internally, or that compared against the wrong side of the threshold,
++// would still pass it.
++//
++// The brief's acceptance item — "a listing priced >8% below area PSF shows
++// isDeal: true" — cannot be exercised against the real database either, because
++// the condition it needs (a community with a 90-day DLD median) does not exist in
++// the data. So this suite manufactures that condition on a throwaway COPY and
++// asserts the flag appears, the boundary is respected, and the guard rails hold.
++//
++// Everything created here is deleted in `finally`.
++import { prisma } from '../src/lib/db'
++
++const dbUrl = process.env.DATABASE_URL ?? ''
++if (!dbUrl.includes('deal-e2e')) {
++  throw new Error(
++    `Refusing to run: DATABASE_URL must point at the disposable copy (…deal-e2e.db), got "${dbUrl || '<unset>'}".\n` +
++      'This script WRITES rows (and calls detectDeals(), which rewrites every isDeal flag), so running it ' +
++      'against the project database would pollute it.',
++  )
++}
++
++const { detectDeals, marketPsfByCommunity, DEAL_DISCOUNT_THRESHOLD } = await import('../src/lib/deals')
++
++let passed = 0
++let failed = 0
++const failures: string[] = []
++
++function check(name: string, ok: boolean, detail?: unknown) {
++  if (ok) {
++    passed++
++    console.log(`  ✓ ${name}`)
++  } else {
++    failed++
++    failures.push(name)
++    console.log(`  ✗ ${name}${detail === undefined ? '' : ` — ${JSON.stringify(detail).slice(0, 240)}`}`)
++  }
++}
++
++const TX_PREFIX = 'DLDCHECK-'
++const LISTING_PREFIX = `dealcheck-${Date.now()}-`
++
++/** AED/sqft levels the synthetic market is built from. */
++const MEDIAN = 2000
++const EVEN_MEDIAN = 2050 // 2x2000 + 2x2100 → (2000+2100)/2
++const PLACEHOLDER = 50 // below the AED 100/sqft guard
++
++type Spec = {
++  tag: string
++  communityId: string
++  purpose: 'sale' | 'rent'
++  pricePerSqft: number
++  staleFlag?: boolean
++  expect: boolean
++  why: string
++}
++
++async function makeTx(communityId: string, pricePerSqft: number, n: number, offsetFrom = 0) {
++  const recent = new Date()
++  recent.setDate(recent.getDate() - 10)
++  for (let i = 0; i < n; i++) {
++    await prisma.transaction.create({
++      data: {
++        dldId: `${TX_PREFIX}${communityId}-${pricePerSqft}-${i + offsetFrom}`,
++        communityId,
++        transactionType: 'sale',
++        propertyType: 'apartment',
++        beds: 2,
++        areaSqft: 1000,
++        priceAed: pricePerSqft * 1000,
++        pricePerSqft,
++        transactionDate: recent,
++      },
++    })
++  }
++}
++
++async function makeListing(s: Spec) {
++  await prisma.listing.create({
++    data: {
++      externalId: `${LISTING_PREFIX}${s.tag}`,
++      source: 'bayut',
++      communityId: s.communityId,
++      purpose: s.purpose,
++      propertyType: 'apartment',
++      beds: 2,
++      baths: 2,
++      areaSqft: 1000,
++      priceAed: s.pricePerSqft * 1000,
++      pricePerSqft: s.pricePerSqft,
++      listedAt: new Date(),
++      isDeal: s.staleFlag === true,
++    },
++  })
++}
++
++let specs: Spec[] = []
++
++try {
++  // Four communities, each isolated: the engine groups by communityId, so this
++  // gives one median per scenario without them interfering.
++  const communities = await prisma.community.findMany({
++    select: { id: true, nameEn: true },
++    orderBy: { id: 'asc' },
++    take: 4,
++  })
++  if (communities.length < 4) throw new Error(`need 4 communities, found ${communities.length}`)
++  const [withMedian, evenMedian, noMedian, placeholder] = communities
++
++  console.log(`\n── seeded market (sale listings per community) ─────────────`)
++  console.log(`  · median community:      ${withMedian.nameEn} @ AED ${MEDIAN}/sqft`)
++  console.log(`  · even-count community:  ${evenMedian.nameEn} @ AED ${EVEN_MEDIAN}/sqft`)
++  console.log(`  · no-data community:     ${noMedian.nameEn}`)
++  console.log(`  · placeholder community: ${placeholder.nameEn} @ AED ${PLACEHOLDER}/sqft`)
++
++  // 3 identical sales → exact odd-count median; 2+2 → exercises the even-count
++  // averaging branch, which is where a median implementation usually goes wrong.
++  await makeTx(withMedian.id, MEDIAN, 3)
++  await makeTx(evenMedian.id, 2000, 2)
++  await makeTx(evenMedian.id, 2100, 2, 2)
++  await makeTx(placeholder.id, PLACEHOLDER, 3)
++
++  const below = (m: number) => Math.floor(m * DEAL_DISCOUNT_THRESHOLD) - 100 // comfortably under the line
++  const justAbove = (m: number) => Math.ceil(m * DEAL_DISCOUNT_THRESHOLD) + 60 // comfortably over
++
++  specs = [
++    {
++      tag: 'deal',
++      communityId: withMedian.id,
++      purpose: 'sale',
++      pricePerSqft: below(MEDIAN),
++      expect: true,
++      why: 'THE BRIEF ITEM — >8% below the area median',
++    },
++    {
++      tag: 'boundary',
++      communityId: withMedian.id,
++      purpose: 'sale',
++      pricePerSqft: MEDIAN * DEAL_DISCOUNT_THRESHOLD, // exactly 1840
++      expect: false,
++      why: 'exactly at the threshold — the rule is strictly below',
++    },
++    {
++      tag: 'above',
++      communityId: withMedian.id,
++      purpose: 'sale',
++      pricePerSqft: justAbove(MEDIAN),
++      expect: false,
++      why: 'above the threshold',
++    },
++    {
++      tag: 'rent',
++      communityId: withMedian.id,
++      purpose: 'rent',
++      pricePerSqft: below(MEDIAN),
++      expect: false,
++      why: 'rentals are never deals, however cheap per sqft',
++    },
++    {
++      tag: 'even-count-deal',
++      communityId: evenMedian.id,
++      purpose: 'sale',
++      pricePerSqft: below(EVEN_MEDIAN),
++      expect: true,
++      why: 'even-count median (2000+2100)/2 = 2050 must be averaged, not off-by-one',
++    },
++    {
++      tag: 'even-count-above',
++      communityId: evenMedian.id,
++      purpose: 'sale',
++      pricePerSqft: justAbove(EVEN_MEDIAN),
++      expect: false,
++      why: 'above the averaged median',
++    },
++    {
++      tag: 'no-data',
++      communityId: noMedian.id,
++      purpose: 'sale',
++      pricePerSqft: 100,
++      expect: false,
++      why: 'no DLD median → no flag (cannot claim a discount without a market level)',
++    },
++    {
++      tag: 'stale-flag',
++      communityId: noMedian.id,
++      purpose: 'sale',
++      pricePerSqft: 3000,
++      staleFlag: true,
++      expect: false,
++      why: 'a stale true must be RESET when the community has no median',
++    },
++    {
++      tag: 'placeholder',
++      communityId: placeholder.id,
++      purpose: 'sale',
++      pricePerSqft: 10,
++      expect: false,
++      why: 'a sub-100/sqft median is a placeholder, not a market level',
++    },
++  ]
++
++  for (const s of specs) await makeListing(s)
++
++  // ── the engine runs for real ────────────────────────────────────────────────
++  const flaggedCount = await detectDeals()
++
++  console.log(`\n── medians the engine derived ─────────────────────────────`)
++  const medians = await marketPsfByCommunity()
++  check(
++    `odd-count median is exact (${withMedian.nameEn} = ${MEDIAN})`,
++    medians.get(withMedian.id) === MEDIAN,
++    medians.get(withMedian.id),
++  )
++  check(
++    `even-count median averages the middle pair (${evenMedian.nameEn} = ${EVEN_MEDIAN})`,
++    medians.get(evenMedian.id) === EVEN_MEDIAN,
++    medians.get(evenMedian.id),
++  )
++  check(
++    `sub-100/sqft rows are excluded from the median (${placeholder.nameEn} has none)`,
++    medians.get(placeholder.id) === undefined,
++    medians.get(placeholder.id),
++  )
++  check(
++    `a community with no sales has no median (${noMedian.nameEn})`,
++    medians.get(noMedian.id) === undefined,
++    medians.get(noMedian.id),
++  )
++
++  console.log(`\n── flags after detectDeals() ──────────────────────────────`)
++  const rows = await prisma.listing.findMany({
++    where: { externalId: { startsWith: LISTING_PREFIX } },
++    select: { externalId: true, purpose: true, pricePerSqft: true, isDeal: true, communityId: true },
++  })
++  const byTag = new Map(rows.map((r) => [r.externalId.replace(LISTING_PREFIX, ''), r]))
++
++  for (const s of specs) {
++    const row = byTag.get(s.tag)
++    if (!row) {
++      check(`${s.tag} — listing was written`, false, 'missing after insert')
++      continue
++    }
++    check(
++      `${s.tag}: isDeal=${s.expect} (${s.why})`,
++      row.isDeal === s.expect,
++      { got: row.isDeal, pricePerSqft: row.pricePerSqft },
++    )
++  }
++
++  // Positive control for the whole suite: if this is 0, every `expect: false`
++  // above passed for the wrong reason and the run proves nothing.
++  check(
++    'the engine flagged at least one deal (the positive control)',
++    flaggedCount >= 2,
++    { flaggedCount },
++  )
++  check(
++    'every negative case really was evaluated against a median',
++    medians.size >= 2,
++    { communitiesWithMedian: medians.size },
++  )
++} catch (e) {
++  failed++
++  failures.push('threw')
++  console.log(`  ✗ suite threw — ${(e as Error).message}`)
++} finally {
++  const [delListings, delTx] = await Promise.all([
++    prisma.listing.deleteMany({ where: { externalId: { startsWith: LISTING_PREFIX } } }),
++    prisma.transaction.deleteMany({ where: { dldId: { startsWith: TX_PREFIX } } }),
++  ])
++  console.log(`\n  cleaned up: ${delListings.count} listings, ${delTx.count} transactions`)
++  await prisma.$disconnect()
++
++  console.log(`\n  ${passed} passed, ${failed} failed`)
++  if (failed > 0) console.log(`  failing: ${failures.join(' | ')}`)
++  process.exit(failed > 0 ? 1 : 0)
 +}
 -- 
 2.47.3
