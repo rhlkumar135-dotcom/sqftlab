@@ -33,11 +33,18 @@ import { computeRentalYield, type RentalYieldResult } from './src/lib/rental-yie
 import { computeDeveloperPositioning, getBuildingScorecard, searchBuildings, type BuildingScorecard } from './src/lib/buildings'
 import { propertyLimitFor, deriveHolding, summariseHoldings, valuateHolding } from './src/lib/portfolio'
 import { fetchHoldingsComparables } from './src/lib/portfolio-jobs'
+import {
+  buildTransactionWhere, fetchExportRows, toCsv, toExcelBuffer,
+  rowLimitFor, EXCEL_MIN_RANK, SAFETY_CEILING,
+  type ExportFilters, type ExportFormat,
+} from './src/lib/export-data'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
-// request by the tier middleware (Day 4 Task A).
-type AppVariables = { guestId: string; tier: CallerTier }
+// request by the tier middleware (Day 4 Task A). `apiKeyUserId`/`apiKeyTier` are
+// set by the /v1 API-key middleware (Day 11 Task A) and identify a caller that
+// authenticated with a key instead of a session.
+type AppVariables = { guestId: string; tier: CallerTier; apiKeyUserId?: string; apiKeyTier?: string }
 
 const app = new Hono<{ Variables: AppVariables }>()
 
@@ -4886,17 +4893,45 @@ app.post('/sqftlab/api-keys', async (c) => {
   }
   const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled key'
 
+  // The key inherits the CALLER's tier. The spec hardcoded 'pro' here, which
+  // meant an institutional customer's key carried a pro tier and their allowance
+  // was enforced at 500/day instead of 100,000 — paying for 200x and receiving 1x.
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'pro'
+  const maxKeys = tier === 'institutional' ? 20 : tier === 'enterprise' ? 10 : tier === 'elite' ? 5 : 3
+  const existingCount = await prisma.apiKey.count({ where: { userId, revokedAt: null } })
+  if (existingCount >= maxKeys) {
+    return c.json(
+      {
+        error: `Maximum ${maxKeys} active API keys on your plan`,
+        maxKeys,
+        current: existingCount,
+        upgradeUrl: '/pricing',
+      },
+      403,
+    )
+  }
+
   const raw = `sqft_${randomBytes(24).toString('hex')}`
   const keyHash = createHash('sha256').update(raw).digest('hex')
 
   const created = await prisma.apiKey.create({
-    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier: 'pro' },
+    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier },
     select: { id: true, prefix: true, name: true, tier: true, createdAt: true },
   })
   await trackEvent(c, 'api_call', { action: 'create_key' })
 
   // The only time the plaintext key exists outside the caller's own storage.
-  return c.json({ ok: true, key: raw, meta: created })
+  return c.json(
+    {
+      ok: true,
+      key: raw,
+      prefix: created.prefix,
+      name: created.name,
+      warning: 'Save this key — it will not be shown again.',
+      meta: created,
+    },
+    201,
+  )
 })
 
 app.delete('/sqftlab/api-keys/:id', async (c) => {
@@ -4909,6 +4944,342 @@ app.delete('/sqftlab/api-keys/:id', async (c) => {
   if (!existing) return c.json({ error: 'API key not found' }, 404)
   await prisma.apiKey.update({ where: { id }, data: { revokedAt: new Date() } })
   return c.json({ ok: true, revoked: id })
+})
+
+// ─── Public Data API v1 (Day 11 Tasks A + B) ─────────────────────────────────
+//
+// PATH: server.tsx mounts this app with `app.route('/api', customRoutes)`, so
+// routes declared here are relative to that mount point. Declaring '/v1/...'
+// serves /api/v1/... . The spec declares '/api/v1/...', which would have served
+// /api/api/v1/... and 404'd every URL in its own documentation — the same
+// mount-point trap the catch-all at the bottom of this file documents.
+
+const API_DAILY_LIMITS: Record<string, number> = {
+  pro: 500,
+  elite: 2_000,
+  enterprise: 10_000,
+  institutional: 100_000,
+}
+
+app.use('/v1/*', async (c, next) => {
+  const authHeader = c.req.header('Authorization')
+  const rawKey = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null
+
+  // Header only. A `?api_key=` fallback is convenient but writes a live secret
+  // into every access log and Referer header it passes through.
+  if (!rawKey) {
+    c.header('WWW-Authenticate', 'Bearer realm="sqftLab API"')
+    return c.json({ error: 'API key required. Include: Authorization: Bearer sqft_...' }, 401)
+  }
+
+  const keyHash = createHash('sha256').update(rawKey).digest('hex')
+  const key = await prisma.apiKey.findUnique({
+    where: { keyHash },
+    select: {
+      id: true, userId: true, tier: true, name: true,
+      revokedAt: true, callsToday: true, callsResetAt: true, monthResetAt: true,
+      user: { select: { subscriptionStatus: true } },
+    },
+  })
+
+  if (!key || key.revokedAt) return c.json({ error: 'Invalid or revoked API key' }, 401)
+
+  // The spec reads the owner's subscription status and then never uses it, so a
+  // cancelled customer's keys kept working forever. The key's TIER sets the
+  // allowance; the owner's STATUS decides whether that tier is still paid for.
+  const status = key.user?.subscriptionStatus
+  if (status !== 'active' && status !== 'trialing') {
+    return c.json(
+      { error: 'Subscription inactive for this API key', status: status ?? 'inactive', upgradeUrl: '/pricing' },
+      403,
+    )
+  }
+
+  // Lazy day/month rollover — see the callsResetAt note in schema.prisma.
+  const now = new Date()
+  const day = now.toISOString().slice(0, 10)
+  const month = day.slice(0, 7)
+  const rollDay = !key.callsResetAt || key.callsResetAt.toISOString().slice(0, 10) !== day
+  const rollMonth = !key.monthResetAt || key.monthResetAt.toISOString().slice(0, 7) !== month
+  const usedToday = rollDay ? 0 : key.callsToday
+
+  const limit = API_DAILY_LIMITS[key.tier] ?? API_DAILY_LIMITS.pro
+  c.header('X-API-Limit', String(limit))
+  c.header('X-API-Remaining', String(Math.max(0, limit - usedToday - 1)))
+
+  if (usedToday >= limit) {
+    return c.json(
+      { error: 'Daily API limit exceeded', limit, used: usedToday, retryAfterHours: 24, upgradeUrl: '/pricing' },
+      429,
+    )
+  }
+
+  prisma.apiKey
+    .update({
+      where: { id: key.id },
+      data: {
+        callsToday: rollDay ? 1 : { increment: 1 },
+        callsMonth: rollMonth ? 1 : { increment: 1 },
+        ...(rollDay ? { callsResetAt: now } : {}),
+        ...(rollMonth ? { monthResetAt: now } : {}),
+        lastUsedAt: now,
+      },
+    })
+    .catch(() => {})
+
+  c.set('apiKeyUserId', key.userId)
+  c.set('apiKeyTier', key.tier)
+  await next()
+})
+
+/**
+ * GET /api/v1/transactions
+ *
+ * Field names differ from the spec throughout: this schema stores
+ * communityId / beds / areaSqft / pricePerSqft / priceAed, and has no `area`,
+ * `bedrooms`, `size`, `pricePsf` or `amount` column at all.
+ */
+app.get('/v1/transactions', async (c) => {
+  const q = c.req.query()
+  const limit = Math.min(Math.max(parseInt(q.limit ?? '100') || 100, 1), 1000)
+  const offset = Math.max(parseInt(q.offset ?? '0') || 0, 0)
+  const beds = q.bedrooms ? parseInt(q.bedrooms) : undefined
+
+  for (const k of ['date_from', 'date_to'] as const) {
+    const v = q[k]
+    if (v && Number.isNaN(new Date(v).getTime())) {
+      return badInput(c, [k], { [k]: 'ISO date, e.g. 2026-01-31' })
+    }
+  }
+
+  const built = await buildTransactionWhere({
+    area: q.area ?? q.community,
+    beds: beds !== undefined && Number.isFinite(beds) && beds > 0 ? beds : undefined,
+    dateFrom: q.date_from,
+    dateTo: q.date_to,
+    psfMin: q.psf_min ? parseInt(q.psf_min) : undefined,
+    psfMax: q.psf_max ? parseInt(q.psf_max) : undefined,
+  })
+
+  if (!built.ok) {
+    return c.json(
+      {
+        error: `No community matches "${built.area}"`,
+        code: 'area_not_found',
+        hint: 'GET /api/v1/communities to list valid names',
+        data: [],
+        meta: { total: 0, limit, offset, returned: 0, source: 'DLD official records' },
+      },
+      404,
+    )
+  }
+
+  const [rows, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where: built.where,
+      select: {
+        transactionDate: true, buildingName: true, beds: true, areaSqft: true,
+        pricePerSqft: true, priceAed: true, propertyType: true, transactionType: true,
+        community: { select: { nameEn: true, slug: true, emirate: true } },
+      },
+      orderBy: { transactionDate: 'desc' },
+      take: limit,
+      skip: offset,
+    }),
+    prisma.transaction.count({ where: built.where }),
+  ])
+
+  return c.json({
+    data: rows.map((r) => ({
+      date: r.transactionDate.toISOString().slice(0, 10),
+      community: r.community?.nameEn ?? null,
+      communitySlug: r.community?.slug ?? null,
+      emirate: r.community?.emirate ?? null,
+      building: r.buildingName,
+      bedrooms: r.beds,
+      sizeSqft: Number(r.areaSqft.toFixed(0)),
+      psfAed: Number(r.pricePerSqft.toFixed(0)),
+      priceAed: Number(r.priceAed.toFixed(0)),
+      propertyType: r.propertyType,
+      transactionType: r.transactionType,
+    })),
+    meta: {
+      total, limit, offset, returned: rows.length,
+      source: 'DLD official records',
+      // With no registry source connected this is the honest shape of the
+      // answer, not an error: the query is valid, the dataset is empty.
+      empty: total === 0,
+    },
+  })
+})
+
+app.get('/v1/communities', async (c) => {
+  const communities = await prisma.community.findMany({
+    select: { slug: true, nameEn: true, emirate: true, medianAedSqft: true },
+    orderBy: { nameEn: 'asc' },
+    take: 200,
+  })
+  return c.json({ data: communities, meta: { total: communities.length, source: 'sqftLab community registry' } })
+})
+
+app.get('/v1/communities/:slug/stats', async (c) => {
+  const community = await prisma.community.findUnique({
+    where: { slug: c.req.param('slug') },
+    select: { id: true, nameEn: true, slug: true, emirate: true, medianAedSqft: true, psfSource: true },
+  })
+  if (!community) return c.json({ error: 'Community not found' }, 404)
+
+  const since90 = new Date()
+  since90.setDate(since90.getDate() - 90)
+  const stats = await prisma.transaction.aggregate({
+    where: {
+      communityId: community.id,
+      transactionType: { in: [...SALE_TXN_TYPES] },
+      pricePerSqft: { gt: 100 },
+      transactionDate: { gte: since90 },
+    },
+    _avg: { pricePerSqft: true },
+    _min: { pricePerSqft: true },
+    _max: { pricePerSqft: true },
+    _count: { _all: true },
+  })
+
+  const n = stats._count._all
+  return c.json({
+    community: community.nameEn,
+    slug: community.slug,
+    emirate: community.emirate,
+    period: '90 days',
+    transactions: n,
+    avgPsfAed: n ? Number((stats._avg.pricePerSqft ?? 0).toFixed(0)) : null,
+    minPsfAed: n ? Number((stats._min.pricePerSqft ?? 0).toFixed(0)) : null,
+    maxPsfAed: n ? Number((stats._max.pricePerSqft ?? 0).toFixed(0)) : null,
+    // The registry median is a separate figure with its own provenance; it is
+    // reported alongside rather than substituted when the 90-day window is empty.
+    registryMedianPsfAed: community.medianAedSqft,
+    registryMedianSource: community.psfSource,
+    source: 'DLD official records',
+    empty: n === 0,
+  })
+})
+
+// ─── Export Centre (Day 11 Task C) ───────────────────────────────────────────
+
+function exportFiltersFrom(body: Record<string, unknown>): ExportFilters {
+  const areaRaw = typeof body.area === 'string' ? body.area : typeof body.community === 'string' ? body.community : ''
+  const beds = numField(body, 'bedrooms') ?? numField(body, 'beds')
+  return {
+    area: areaRaw.trim() || undefined,
+    beds: beds !== null && beds > 0 ? Math.floor(beds) : undefined,
+    dateFrom: typeof body.dateFrom === 'string' ? body.dateFrom : undefined,
+    dateTo: typeof body.dateTo === 'string' ? body.dateTo : undefined,
+    psfMin: numField(body, 'psfMin') ?? undefined,
+    psfMax: numField(body, 'psfMax') ?? undefined,
+  }
+}
+
+async function handleExport(c: Context, mode: 'preview' | 'download') {
+  const blocked = requireTier(c, 'pro', 'Data export')
+  if (blocked) return blocked
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const body = await readJsonBody(c)
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
+  const format: ExportFormat = body.format === 'excel' ? 'excel' : 'csv'
+
+  for (const k of ['dateFrom', 'dateTo'] as const) {
+    const v = body[k]
+    if (typeof v === 'string' && v.trim() && Number.isNaN(new Date(v).getTime())) {
+      return badInput(c, [k], { [k]: 'ISO date, e.g. 2026-01-31' })
+    }
+  }
+
+  const rank = TIER_RANK[tier] ?? 0
+  if (format === 'excel' && rank < EXCEL_MIN_RANK) {
+    return c.json(
+      { error: 'Excel export requires the Enterprise plan', format, requiredTier: 'enterprise', upgradeUrl: '/pricing' },
+      403,
+    )
+  }
+
+  const filters = exportFiltersFrom(body)
+  const built = await buildTransactionWhere(filters)
+  if (!built.ok) {
+    return c.json(
+      {
+        error: `No community matches "${built.area}"`,
+        code: 'area_not_found',
+        hint: 'Check the spelling, or use /sqftlab/communities for the list.',
+      },
+      404,
+    )
+  }
+
+  const rowLimit = rowLimitFor(tier)
+  const { rows, total } = await fetchExportRows(built.where, rowLimit)
+  const truncated = total > rows.length
+
+  if (mode === 'preview') {
+    return c.json({
+      total,
+      willExport: rows.length,
+      rowLimit,
+      unlimited: rowLimit >= SAFETY_CEILING,
+      truncated,
+      excelAllowed: rank >= EXCEL_MIN_RANK,
+      tier,
+      format,
+      empty: total === 0,
+      ...(truncated
+        ? {
+            message: `Your plan exports the ${rowLimit.toLocaleString()} most recent matches; ${(
+              total - rows.length
+            ).toLocaleString()} older rows are not included.`,
+          }
+        : {}),
+    })
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10)
+  await trackEvent(c, 'export', {
+    format, rows: rows.length, total, truncated, area: filters.area ?? null, tier,
+  })
+
+  c.header('X-Export-Rows', String(rows.length))
+  c.header('X-Export-Total', String(total))
+  c.header('X-Export-Truncated', String(truncated))
+
+  if (format === 'csv') {
+    // The BOM is what makes Excel read the file as UTF-8; without it any Arabic
+    // community name in the data arrives as mojibake.
+    c.header('Content-Type', 'text/csv; charset=utf-8')
+    c.header('Content-Disposition', `attachment; filename="sqftlab-transactions-${stamp}.csv"`)
+    return c.body(`\uFEFF${toCsv(rows)}`)
+  }
+
+  const bytes = await toExcelBuffer(rows)
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  c.header('Content-Disposition', `attachment; filename="sqftlab-transactions-${stamp}.xlsx"`)
+  return c.body(buffer)
+}
+
+app.post('/sqftlab/export', (c) => handleExport(c, 'download'))
+app.post('/sqftlab/export/preview', (c) => handleExport(c, 'preview'))
+
+app.get('/sqftlab/export/history', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Data export')
+  if (blocked) return blocked
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+  const events = await prisma.userEvent.findMany({
+    where: { userId, eventType: 'export' },
+    orderBy: { createdAt: 'desc' },
+    take: 3,
+    select: { id: true, eventData: true, createdAt: true },
+  })
+  return c.json({ exports: events })
 })
 
 // Catch-all — must be registered LAST so every real route wins.

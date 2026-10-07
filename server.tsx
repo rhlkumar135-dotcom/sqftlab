@@ -88,9 +88,7 @@ app.use('*', async (c, next) => {
 })
 // SHOGO:CUSTOM-END
 
-// Serve static files in production.
-// These MUST remain below the CUSTOM block above: Hono dispatches in registration
-// order, so the SPA catch-all here would otherwise shadow that block entirely.
+// Serve static files in production
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 
@@ -98,3 +96,4 @@ const port = Number(process.env.PORT) || 3001
 console.log(`🚀 Server running on http://localhost:${port}`)
 
 Bun.serve({ port, fetch: app.fetch })
+

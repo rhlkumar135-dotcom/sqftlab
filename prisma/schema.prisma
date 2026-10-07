@@ -680,9 +680,19 @@ model ApiKey {
   prefix     String // first 12 chars, for display
   name       String
   tier       String    @default("pro")
-  callsToday Int       @default(0) @map("calls_today")
-  callsMonth Int       @default(0) @map("calls_month")
-  lastUsedAt DateTime? @map("last_used_at")
+  callsToday   Int       @default(0) @map("calls_today")
+  callsMonth   Int       @default(0) @map("calls_month")
+  // Both counters are reset LAZILY, on first use after their boundary.
+  //
+  // Nothing else resets them, and the Day 11 spec only ever increments. Without
+  // these columns a key that reached its daily limit on day one stayed exhausted
+  // forever — the limiter compares against a counter that never comes down, so
+  // every key became permanently dead at exactly the limit it was sold.
+  // Resetting lazily (rather than from a cron tick) also means it still works if
+  // the scheduler is down or the process restarts mid-window.
+  callsResetAt DateTime? @map("calls_reset_at")
+  monthResetAt DateTime? @map("month_reset_at")
+  lastUsedAt   DateTime? @map("last_used_at")
   revokedAt  DateTime? @map("revoked_at")
   createdAt  DateTime  @default(now()) @map("created_at")
 

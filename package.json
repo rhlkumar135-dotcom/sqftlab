@@ -13,6 +13,8 @@
     "build": "vite build",
     "start": "bash scripts/railway-setup.sh",
     "generate": "bun ./node_modules/@shogo-ai/sdk/bin/cli.mjs generate",
+    "postgenerate": "bun run scripts/fix-server-order.ts || true",
+    "_comment_postgenerate": "Only fires for a MANUAL `bun run generate`. The in-editor regeneration calls the SDK CLI directly and skips it — verified, see scripts/fix-server-order.ts.",
     "db:generate": "bun x --bun prisma generate",
     "db:migrate:deploy": "bun x --bun prisma migrate deploy",
     "db:push": "bun x --bun prisma db push",
@@ -45,7 +47,8 @@
     "recharts": "^2.15.3",
     "stripe": "^23.0.0",
     "tailwind-merge": "^3.4.0",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@prisma/internals": "^7.3.0",

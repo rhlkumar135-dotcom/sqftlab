@@ -15,6 +15,7 @@ import CmaPage from '@/components/CmaPage'
 import CapitalFlowPage from '@/components/CapitalFlowPage'
 import BuildingSearchPage from '@/components/BuildingSearchPage'
 import BuildingPage from '@/components/BuildingPage'
+import ExportPage from '@/components/ExportPage'
 import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
@@ -292,7 +293,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -303,6 +304,7 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   portfolio: '/portfolio',
   'capital-flow': '/capital-flow',
   buildings: '/buildings',
+  export: '/export',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -325,6 +327,7 @@ const NAV = [
   { id: 'cma' as Page, label: 'CMA', icon: Scale },
   { id: 'buildings' as Page, label: 'Buildings', icon: Building2 },
   { id: 'capital-flow' as Page, label: 'Capital Flow', icon: Globe },
+  { id: 'export' as Page, label: 'Export', icon: Download },
 ]
 
 function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
@@ -3268,6 +3271,7 @@ function AppInner() {
       {page === 'cma' && <CmaPage onNavigate={navigate} />}
       {page === 'capital-flow' && <CapitalFlowPage onNavigate={navigate} />}
       {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
+      {page === 'export' && <ExportPage onNavigate={navigate} />}
       {page === 'building' && (
         <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
       )}
