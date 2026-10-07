@@ -138,7 +138,10 @@ console.log(`\n# FIX-07 — no financial recommendations`)
   check('`projectedChange6m` renamed', preds.every((x) => 'projectedChange6m' in x && !('forecastChange6m' in x)))
   check('disclaimer present', typeof p.body?.disclaimer === 'string')
   const labels = new Set(preds.map((x) => x.momentumLabel))
-  const allowed = ['Strong upward trend', 'Moderate upward trend', 'Stable', 'Moderate downward trend', 'Declining trend']
+  // Trend descriptors only — never advice. 'Not enough data' is the honest
+  // state for a district with no price, so it belongs in this vocabulary rather
+  // than being filed under 'Stable'.
+  const allowed = ['Strong upward trend', 'Moderate upward trend', 'Stable', 'Moderate downward trend', 'Declining trend', 'Not enough data']
   check('labels are trend descriptors only', [...labels].every((l) => allowed.includes(l)), [...labels].join(' / '))
   check('no strongBuys key', !('strongBuys' in (p.body ?? {})))
   check('topMomentum present', Array.isArray(p.body?.topMomentum))

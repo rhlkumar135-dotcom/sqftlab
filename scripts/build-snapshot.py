@@ -38,9 +38,12 @@ ENDPOINTS = [
 # URL (including the query) and let safeFetch prefer the exact-URL key.
 FORECAST_MONTHS = 6
 
-# Endpoints that resolve the caller from the request and answer 401 without a
-# session, so they need the bootstrap header.
+# Endpoints that resolve the caller from the request, so they need the bootstrap
+# header: the account-scoped ones answer 401 without a session, and /communities
+# is tier-gated — unauthenticated it returns the 6-district guest teaser, which
+# would bake a near-empty register into the static site.
 AUTH_ENDPOINTS = {
+    "/api/sqftlab/communities",
     "/api/sqftlab/portfolio",
     "/api/sqftlab/watchlist",
     "/api/sqftlab/alerts",

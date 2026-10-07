@@ -1534,20 +1534,28 @@ app.get('/sqftlab/predictions', async (c) => {
     const rawScore = momentum * 0.3 + historicalGrowth * 0.4 + yieldSignal * 5 + volumeSignal * 3 + scoreSignal * 2
     const confidence = Math.min(95, Math.max(45, 60 + c.transactionCount30d * 0.1 + (c.totalTransactions > 100 ? 10 : 0)))
 
-    const forecast6m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 0.5) * 100) / 100
-    const forecast12m = Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 1.0) * 100) / 100
+    // A district with no listings has no price to project from. Dividing by it
+    // produced NaN, which JSON serialises as null (rendered "+null%") and which
+    // failed every branch of the momentum ladder below — labelling all 14
+    // unmeasured districts "Declining trend", a fabricated downward signal.
+    // Forecast only where a price actually exists.
+    const measurable = c.medianAedSqft > 0
+    const forecast6m = measurable ? Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 0.5) * 100) / 100 : null
+    const forecast12m = measurable ? Math.round(c.medianAedSqft * (1 + (rawScore / 100) * 1.0) * 100) / 100 : null
     // Named `projectedChange*` so the identifier itself says these are
     // extrapolations, not promises. The old "Strong Buy / Buy / Hold / Sell /
     // Avoid" labels are gone: they read as licensed investment advice while
     // being derived from a five-line arithmetic formula.
-    const projectedChange6m = Math.round((forecast6m / c.medianAedSqft - 1) * 10000) / 100
-    const projectedChange12m = Math.round((forecast12m / c.medianAedSqft - 1) * 10000) / 100
+    const projectedChange6m = forecast6m === null ? null : Math.round((forecast6m / c.medianAedSqft - 1) * 10000) / 100
+    const projectedChange12m = forecast12m === null ? null : Math.round((forecast12m / c.medianAedSqft - 1) * 10000) / 100
 
+    const change6m = projectedChange6m
     const momentumLabel =
-      projectedChange6m > 5 ? 'Strong upward trend'
-      : projectedChange6m > 2 ? 'Moderate upward trend'
-      : projectedChange6m > -2 ? 'Stable'
-      : projectedChange6m > -5 ? 'Moderate downward trend'
+      change6m === null ? 'Not enough data'
+      : change6m > 5 ? 'Strong upward trend'
+      : change6m > 2 ? 'Moderate upward trend'
+      : change6m > -2 ? 'Stable'
+      : change6m > -5 ? 'Moderate downward trend'
       : 'Declining trend'
 
     const riskLevel = confidence > 75 ? 'Low' : confidence > 60 ? 'Medium' : 'High'
@@ -1573,9 +1581,12 @@ app.get('/sqftlab/predictions', async (c) => {
 
   // Momentum buckets replace the buy/sell buckets: they describe the trend
   // rather than advising an action, and the response carries a disclaimer.
-  const rising = predictions.filter(p => p.projectedChange6m > 2).length
-  const stable = predictions.filter(p => p.projectedChange6m <= 2 && p.projectedChange6m >= -2).length
-  const falling = predictions.filter(p => p.projectedChange6m < -2).length
+  // Only measured districts are bucketed — an unmeasured one has no projection,
+  // so filing it under "Stable" would invent a reading.
+  const measuredChanges = predictions.map(p => p.projectedChange6m).filter((n): n is number => n !== null)
+  const rising = measuredChanges.filter(n => n > 2).length
+  const stable = measuredChanges.filter(n => n <= 2 && n >= -2).length
+  const falling = measuredChanges.filter(n => n < -2).length
 
   return c.json({
     disclaimer: 'Projections are based on historical trend extrapolation only. ' +
@@ -1586,10 +1597,12 @@ app.get('/sqftlab/predictions', async (c) => {
       rising,
       stable,
       falling,
-      totalAnalyzed: predictions.length,
+      // Districts with no price produced no projection, so they are not counted
+      // as analysed — the three buckets above partition exactly this set.
+      totalAnalyzed: measuredChanges.length,
     },
-    topMomentum: [...predictions].sort((a, b) => b.projectedChange6m - a.projectedChange6m).slice(0, 5),
-    topGrowth: [...predictions].sort((a, b) => b.projectedChange12m - a.projectedChange12m).slice(0, 5),
+    topMomentum: [...predictions].sort((a, b) => (b.projectedChange6m ?? -Infinity) - (a.projectedChange6m ?? -Infinity)).slice(0, 5),
+    topGrowth: [...predictions].sort((a, b) => (b.projectedChange12m ?? -Infinity) - (a.projectedChange12m ?? -Infinity)).slice(0, 5),
     topYield: [...predictions].sort((a, b) => b.yield - a.yield).slice(0, 5),
   })
 })

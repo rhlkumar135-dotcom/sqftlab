@@ -120,8 +120,42 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
   // Prefer an exact-URL key (per-district forecasts, filtered market queries) and
   // fall back to the path-level entry.
   const snap = SNAPSHOT as Record<string, unknown>
-  const baked = snap[url] ?? snap[url.split('?')[0]]
-  return baked !== undefined ? (baked as T) : fallback
+  const baked = applyBakedFilter(url, snap[url] ?? snap[url.split('?')[0]])
+  if (baked !== undefined) return baked as T
+  // The snapshot carries the district register but no per-district keys, so a
+  // district detail request would fall through and the page would render
+  // "Community not found" — unreachable on a static deployment. Derive the
+  // single-district payload from the register, which is the same row the list
+  // endpoint returns.
+  const detail = /^\/api\/sqftlab\/communities\/([^/?]+)$/.exec(url.split('?')[0])
+  if (detail) {
+    const rows = (snap['/api/sqftlab/communities'] as { communities?: Community[] } | undefined)?.communities
+    const row = rows?.find((r) => r.slug === detail[1])
+    if (row) return { community: row } as T
+  }
+  return fallback
+}
+
+// The snapshot ships a single UNFILTERED copy of the district register, so a
+// static deployment would answer every emirate/search query with that same full
+// list and the map filter would look dead. Re-apply the server's `where` clause
+// over the baked rows so Dubai shows Dubai and Abu Dhabi shows Abu Dhabi.
+function applyBakedFilter(url: string, baked: unknown): unknown {
+  const [path, qs] = url.split('?')
+  if (path !== '/api/sqftlab/communities' || !qs) return baked
+  const rows = (baked as { communities?: unknown[] } | undefined)?.communities
+  if (!Array.isArray(rows)) return baked
+  const p = new URLSearchParams(qs)
+  const emirate = p.get('emirate')
+  const search = (p.get('search') ?? '').toLowerCase()
+  const communities = rows
+    .filter((row) => {
+      const c = row as { emirate?: string; nameEn?: string }
+      if (emirate && emirate !== 'all' && c.emirate !== emirate) return false
+      return search === '' || (c.nameEn ?? '').toLowerCase().includes(search)
+    })
+    .sort((a, b) => ((b as { medianAedSqft?: number }).medianAedSqft ?? 0) - ((a as { medianAedSqft?: number }).medianAedSqft ?? 0))
+  return { ...(baked as Record<string, unknown>), communities }
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
@@ -594,7 +628,7 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
         <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
           <h3 className="font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--ink)' }}><TrendingUp size={16} style={{ color: 'var(--up)' }} /> Top Gainers (30d)</h3>
           <div className="space-y-2">
-            {[...communities].sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 5).map(c => (
+            {[...communities].filter(c => c.medianAedSqft > 0).sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 5).map(c => (
               <button key={c.id} onClick={() => { setSelectedCommunity(c.slug); setPage('community') }}
                 className="flex items-center justify-between w-full py-1.5 rounded-lg px-2 transition-colors hover:bg-blue-50/60">
                 <span className="text-sm" style={{ color: 'var(--ink)' }}>{c.nameEn}</span>
@@ -633,12 +667,16 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
   useEffect(() => {
     setLoading(true)
     Promise.all([
-      fetch(`/api/sqftlab/communities/${slug}`).then(r => r.json()),
-      fetch(`/api/sqftlab/communities/${slug}/trend?period=12m`).then(r => r.json()),
-      fetch(`/api/sqftlab/communities/${slug}/transactions?limit=20`).then(r => r.json()),
-      fetch(`/api/sqftlab/communities/${slug}/listings?purpose=sale`).then(r => r.json()),
+      // safeFetch never throws and resolves from the baked snapshot, so the
+      // district page still works on a static deployment where /api/* is
+      // answered by the SPA shell instead of JSON. Plain fetch().json() threw
+      // there and the page fell through to "Community not found".
+      safeFetch<{ community?: Community } | null>(`/api/sqftlab/communities/${slug}`, null),
+      safeFetch<{ trend: { date: string; medianPrice: number; volume: number }[] }>(`/api/sqftlab/communities/${slug}/trend?period=12m`, { trend: [] }),
+      safeFetch<{ transactions: Transaction[] }>(`/api/sqftlab/communities/${slug}/transactions?limit=20`, { transactions: [] }),
+      safeFetch<{ listings: Listing[] }>(`/api/sqftlab/communities/${slug}/listings?purpose=sale`, { listings: [] }),
     ]).then(([cData, tData, txData, lData]) => {
-      setCommunity(cData.community || cData)
+      setCommunity(cData?.community ?? null)
       setTrend(tData.trend || [])
       setTransactions(txData.transactions || [])
       setListings(lData.listings || [])
@@ -2279,7 +2317,9 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
 
   // A projection can be negative, and the old `+{n}%` markup rendered "-3.2%" as
   // "+-3.2%". Sign it explicitly.
-  const signed = (n: number) => `${n >= 0 ? '+' : ''}${n}%`
+  // A district with no price has no projection: show that honestly rather than
+  // rendering the string "+null%".
+  const signed = (n: number | null) => (n === null ? '—' : `${n >= 0 ? '+' : ''}${n}%`)
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
