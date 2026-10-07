@@ -304,9 +304,17 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   // need one, and because it is the only page here that works without a session.
   'market-pulse': '/market-pulse',
   // Day 17: both publish real URLs. `/docs` is public (a link to it is the CTA from the
-  // API-key page); `/api-keys` is Pro-gated server-side, so the URL is safe to share.
+  // API-key page); the key manager is Pro-gated server-side, so its URL is safe to share.
   docs: '/docs',
-  'api-keys': '/api-keys',
+  // NOT `/api-keys`, which is what the brief asked for and what this shipped as first.
+  // The host proxies the edge by STRING PREFIX `/api`, so `/api-keys`, `/apix` and
+  // `/apiXYZ` are all answered by the API gateway before the SPA is ever consulted —
+  // `/api-keys` resolved to a bare 404 "Not Found" (text/plain, 9 bytes) on the public
+  // origin, neither the app's JSON 404 shape nor the shell. The page worked when reached
+  // by clicking (that is in-app state, no request) which is exactly why it went unnoticed:
+  // only the cold load — a bookmark, a shared link, a reload — was dead. Single-segment
+  // and not starting with `/api`, so it survives the proxy and the relative asset base.
+  'api-keys': '/keys',
   // Day 16: the Deal Origination Network publishes `/deals`, which is the route the
   // brief asks for and — checked before claiming it — an unpublished URL in this app.
   // Note the page id is `deal-network`, NOT `deals`: `deals` is the older Day 8
@@ -371,7 +379,7 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
       {/* Brand gradient strip */}
       <div className="h-[1.5px] w-full" style={{ background: 'linear-gradient(90deg, #2563EB, #6366F1, #0EA5E9)' }} />
 
-      <div className="max-w-[1400px] mx-auto px-4 h-[60px] flex items-center justify-between gap-3 min-w-0">
+      <div className="max-w-[1400px] mx-auto px-4 min-h-[60px] py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 min-w-0">
         {/* Logo */}
         <button onClick={() => setPage('landing')} className="flex items-center gap-2 group shrink-0">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
@@ -392,8 +400,18 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
             style={{ color: 'var(--b600)', borderColor: 'rgba(37,99,235,0.3)' }}>BETA</span>
         </button>
 
-        {/* Desktop nav */}
-        <div className="hidden md:flex items-center gap-1 min-w-0 overflow-x-auto [scrollbar-width:none]">
+        {/* Desktop nav — its own full-width row, WRAPPING.
+            This was a single row with `overflow-x-auto` and the scrollbar
+            suppressed (`[scrollbar-width:none]`). With 19 items the rail held
+            1801px of content in a 726px box at 1440px, so only SIX items were
+            visible — Watchlist through Deal Network sat off-screen with no
+            scrollbar to hint they existed. Measured at 1180/1280/1440/1680px,
+            the last item's right edge was 1985-2125px in every case. Programmatic
+            clicks still worked, which is why it survived so long: `el.click()`
+            does not care about geometry, but a person's cursor does.
+            Wrapping costs a taller header and guarantees every item is reachable
+            at any width, without a hidden scroll affordance to discover. */}
+        <div className="hidden md:flex flex-wrap items-center gap-1 w-full order-last">
           {NAV.map(n => (
             <button key={n.id} onClick={() => setPage(n.id)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-[13px] transition-all duration-200"
@@ -538,9 +556,15 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
           </h1>
 
           <style>{`
-            .hero-h { font-size: clamp(26px, 4vw, 66px); line-height: 1.06; letter-spacing: -0.026em; width: 100%; margin: 0 }
-            .hero-h1 { display: block; color: var(--ink); font-weight: 800; font-family: var(--font-ui); white-space: nowrap }
-            .hero-h2 { display: block; color: var(--b600); font-family: var(--font-serif); font-style: italic; font-weight: 400; font-size: 1.04em; white-space: nowrap }
+            /* Both lines used to be white-space: nowrap, which clipped them: at 1440px
+               the second line needed 1698px inside a 1232px box, so everything after
+               "…is worth — befor" was cut off by the section's overflow-hidden — and at
+               1680px even the first line (1489px needed) was clipped. Measured across
+               1024/1280/1440/1680. The max size is reduced so the first line still sets
+               on one line, and both are allowed to WRAP rather than be truncated. */
+            .hero-h { font-size: clamp(26px, 3.8vw, 54px); line-height: 1.08; letter-spacing: -0.026em; width: 100%; margin: 0; text-wrap: balance }
+            .hero-h1 { display: block; color: var(--ink); font-weight: 800; font-family: var(--font-ui) }
+            .hero-h2 { display: block; color: var(--b600); font-family: var(--font-serif); font-style: italic; font-weight: 400; font-size: 1.02em }
             @media(max-width:820px) { .hero-h1,.hero-h2 { white-space: normal; font-size: clamp(22px, 6.5vw, 40px) } }
           `}</style>
 

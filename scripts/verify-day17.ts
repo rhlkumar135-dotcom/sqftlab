@@ -156,7 +156,7 @@ async function main() {
     // lives — so the API middleware never sees it. It is the response that most needs
     // X-Frame-Options, and setting the headers only on /api left every rendered page
     // without them.
-    for (const path of ['/', '/docs', '/api-keys']) {
+    for (const path of ['/', '/docs', '/keys']) {
       const r = await req(path)
       check(`SPA shell ${path}: X-Frame-Options`, r.headers.get('x-frame-options') === 'DENY', String(r.headers.get('x-frame-options')))
       check(`SPA shell ${path}: X-Content-Type-Options`, r.headers.get('x-content-type-options') === 'nosniff')

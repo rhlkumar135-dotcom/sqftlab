@@ -294,7 +294,7 @@ async function main() {
     check('header links to signin', /setPage\(['"]signin['"]\)|navigate\(['"]signin['"]\)/.test(app))
 
     const published: Array<[string, string]> = [
-      ['docs', '/docs'], ['api-keys', '/api-keys'], ['mortgage', '/mortgage'],
+      ['docs', '/docs'], ['api-keys', '/keys'], ['mortgage', '/mortgage'],
       ['cma', '/cma'], ['portfolio', '/portfolio'], ['export', '/export'],
       ['capital-flow', '/capital-flow'], ['buildings', '/buildings'],
       ['market-pulse', '/market-pulse'], ['pricing', '/pricing'],

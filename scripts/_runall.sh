@@ -36,6 +36,10 @@ for f in scripts/verify-*.ts; do
     # precedence are properties of the mounted app, not of a route handler, and it must
     # write its fixtures where the server reads them. Same guard, same scoped teardown.
     verify-day16) url="file:$(pwd)/prisma/dev.db" ;;
+    # verify-ui-flows drives the RUNNING SERVER in a real browser and asserts against
+    # rows the run itself creates (api keys, alerts), so it must write where the server
+    # reads — same guard, same scoped teardown.
+    verify-ui-flows) url="file:$(pwd)/prisma/dev.db" ;;
     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;

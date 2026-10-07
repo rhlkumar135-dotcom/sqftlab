@@ -83,7 +83,7 @@ export default function ApiKeysPage({ onNavigate }: { onNavigate?: (page: 'docs'
   usePageMeta({
     title: 'API Keys',
     description: 'Create and revoke sqftLab API keys, and track per-key usage against your plan limits.',
-    canonicalPath: '/api-keys',
+    canonicalPath: '/keys',
   })
 
   const [keys, setKeys] = useState<KeyRow[]>([])
