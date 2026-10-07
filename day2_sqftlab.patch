@@ -1,0 +1,699 @@
+From f4936eb2926275b17068c6a614044897eff6f27b Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 05:04:00 +0000
+Subject: [PATCH] Day 2: Brand rename sqftLab, CORS lockdown, exchange rate
+ INR/PKR fix
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+FIX-04 Brand — audited; the shipped app was already correct (nav renders
+"sqftLab BETA", bundle has 0 sqrtLab/khashn). Residual hits are non-product:
+the user's uploaded specs under files/, MEMORY.md's filename reference, and
+sqftlab-next/ (a stale Next.js checkout recorded as a gitlink with no
+.gitmodules — left alone rather than dirtied with an uncommittable change).
+
+FIX-05 CORS — added https://app.sqftlab.com. The origin is now always
+reflected, never `*`, including in development, and a disallowed origin gets
+ACAO/ACAM/ACAH deleted rather than merely unset. Additions: Vary: Origin on
+every response, Access-Control-Expose-Headers, and a dev-only regex for
+localhost/*.shogo.ai hosts so the canvas preview still works.
+
+FIX-06 Exchange rates — new GET /api/sqftlab/exchange-rates returning
+{ base, rates, direction, updatedAt, source, cached } for nine currencies
+(USD GBP EUR INR PKR SAR QAR BHD KWD), cached 1 hour. `rates[X]` is AED per
+1 X as the brief specifies, while the DB and the legacy /rates/exchange keep
+the upstream's native X-per-1-AED quote, so no existing consumer changes
+meaning. ExchangeRate gained nullable sar/qar/bhd/kwd. EXCHANGE_RATE_API_KEY
+is optional: keyed endpoint first, then keyless open.er-api.com.
+
+A cached row that predates the GCC columns (37 such rows) used to satisfy the
+TTL and serve a five-currency payload for an hour; completeRow() now rejects
+it and refreshes.
+
+Adds scripts/verify-day2.ts — 30 assertions that boot the real app and assert
+brand (source + live bundle), CORS (allowed, disallowed, preflight, Vary) and
+the exchange-rate contract in both directions. Suite: day2 30 - day1 83 -
+fixes 41 - cron 31 - intel 27 - stream 15 - routing 8; tsc clean outside
+src/generated/.
+---
+ MEMORY.md              |  85 ++++++++++++++
+ custom-routes.ts       | 249 ++++++++++++++++++++++++++++++++---------
+ prisma/schema.prisma   |   7 ++
+ scripts/verify-day2.ts | 199 ++++++++++++++++++++++++++++++++
+ server.tsx             |  15 ---
+ 5 files changed, 485 insertions(+), 70 deletions(-)
+ create mode 100644 scripts/verify-day2.ts
+
+diff --git a/MEMORY.md b/MEMORY.md
+index 287021d..8be74f6 100644
+--- a/MEMORY.md
++++ b/MEMORY.md
+@@ -875,3 +875,88 @@ contained this turn's heatmap fix but not its property-page fix, plus the remove
+ `rhlkumar135-dotcom/sqftlab` — `private: false` as of this session. The user asked how to make
+ it private but has not done it. `sqftlab-cron-2026` remains in git history and must be
+ rotated regardless.
++
++---
++
++## Session — Day 2 (`sqftlab_day02.md`): brand, CORS, exchange rates
++
++The brief was written against a Next.js 14 tree (`src/app/layout.tsx`,
++`public/manifest.json`). This app is Vite + React + Hono, so the three FIXes were
++implemented behaviourally. Harness: `scripts/verify-day2.ts` — **30/30**.
++
++### FIX-04 was already done in the product — the residual hits are NOT product
++
++The nav renders `<span>sqft</span><span>Lab</span>` + a `BETA` badge, and the
++built bundle contains **0** `sqrtLab` / `khashn`. Over *tracked* files the wrong
++brand survives in exactly four places, none of which ships:
++
++- `files/Pasted_markdown.md`, `files/Pasted_text.txt`, `files/Pasted_text__2_.txt`
++  — the user's own uploaded specs, i.e. the *input* record
++- `MEMORY.md:16` — a real filename (`Khashn_UAE_PropTech_Documentation_v1.docx`)
++
++`sqftlab-next/` holds 30 more, but it is a **gitlink** (mode 160000, its own
++`.git`, origin = this same repo, HEAD `7a43bfc`) with **no `.gitmodules`** — a
++stale Next.js checkout that is empty on a fresh clone and not built by the
++Dockerfile. Editing it would dirty the parent tree with an un-committable change,
++so it was deliberately left alone. **Decide: delete it, or make it a real
++submodule.** Do not rewrite `files/` or `memory/` to satisfy a grep.
++
++### FIX-05 — CORS: origins reflected, never `*`
++
++`ALLOWED_ORIGINS` = `sqftlab.com`, `www.sqftlab.com`, **`app.sqftlab.com`** (the
++brief's third origin). The old code sent `*` in dev; now the origin is always
++*reflected*, and a disallowed one gets ACAO/ACAM/ACAH **deleted** rather than
++unset (a regenerated `server.tsx` can re-add the wildcard). `Origin` absent ⇒ no
++CORS headers at all, which is correct for same-origin/server-to-server.
++Dev-only extras are a regex (localhost/127.0.0.1 any port, `*.shogo.ai`) so the
++canvas preview keeps working; `NODE_ENV=production` in the pod means they cannot
++reach production.
++
++⚠️ `server.tsx` **lost its hand-added OPTIONS/CORS block** to this session's
++regeneration (15 deletions). That is fine — `cors: false` in `shogo.config.json`
++means the generator emits none, and `custom-routes.ts` answers OPTIONS itself
++(preflight re-verified). `scripts/fix-server-order.ts` was needed **again** (the
++custom region came back below the SPA catch-all); routing re-verified 8/8.
++
++### FIX-06 — `/sqftlab/exchange-rates` (new), legacy shape preserved
++
++`GET /api/sqftlab/exchange-rates` → `{ base, rates, direction, updatedAt, source, cached }`,
++1-hour cache, nine currencies (USD GBP EUR INR PKR SAR QAR BHD KWD).
++**`rates[X]` is AED per 1 X** (the brief's `1 / conversion_rates[X]`) while the
++DB and the legacy `/rates/exchange` keep the API's native `X per 1 AED`. Two
++directions in one file — documented in code, and asserted (`rates.INR < 1`).
++`ExchangeRate` gained nullable `sar/qar/bhd/kwd`. `EXCHANGE_RATE_API_KEY` is
++optional: the keyed endpoint is tried first, then keyless `open.er-api.com`
++(verified to carry all nine).
++
++**Cache-completeness guard:** 37 pre-migration rows (GCC columns null) satisfied
++the TTL and served a five-currency payload for an hour. `completeRow()` now
++rejects a row missing any quoted currency, so the first request after deploy
++refreshes to nine. Same class of bug as `psfSource` — an old row asserting a
++shape it predates.
++
++### Two DBs exist — always export `DATABASE_URL` before running a script
++
++`src/lib/db.ts` falls back to `file:./dev.db` (project **root**), while `.env`
++sets `prisma/dev.db`. A `bun -e` without the export reads a **different, stale**
++database — it reported `deleted 0 of 0` on a table the server had just written
++to, and `no such column: main.exchange_rates.sar` for a column the real DB had.
++Export `DATABASE_URL="file:$PWD/prisma/dev.db"` or you are testing nothing.
++
++### `dist/assets` accumulates ~100 bundles (the watcher runs `--emptyOutDir false`)
++
++Reading "any `index-*.js`" can pick a build from **weeks earlier** — the brand
++check first "failed" against `index-X9Nqp4Nd.js` dated 2026-09-24. Read the
++bundle `dist/index.html` actually references; that is what the browser gets.
++
++### The managed server really was up — `/health`, not `/api/health`
++
++`server.tsx` mounts the health check at `/health`. Probing `/api/health` returns
++a JSON 404, which read as "server down" for several turns during a legitimate
++restart window. Check `/health`, or a real route.
++
++### Suite state at end of Day 2
++
++    verify-day2 30 · verify-day1 83 · verify-fixes 41 · verify-cron 31
++    verify-intel 27 · verify-stream 15 · verify-server-routing 8
++    tsc --noEmit  0 errors outside src/generated/
+diff --git a/custom-routes.ts b/custom-routes.ts
+index d876c66..0e36c33 100644
+--- a/custom-routes.ts
++++ b/custom-routes.ts
+@@ -29,24 +29,43 @@ const app = new Hono<{ Variables: AppVariables }>()
+ // during this work. custom-routes.ts is never regenerated, so this is the durable
+ // place for cross-cutting API middleware.
+ //
+-// No wildcard in production. `Access-Control-Allow-Origin: *` lets any site read
+-// this API using the visitor's cookies, and it cannot be combined with
+-// credentials. In development the permissive behaviour is kept so local tooling
+-// is unchanged.
+-const ALLOWED_ORIGINS = ['https://sqftlab.com', 'https://www.sqftlab.com']
++// The origin is always REFLECTED, never `*` — a wildcard lets any site read this
++// API using the visitor's cookies and cannot be combined with `credentials`.
++// An origin that is not on the list gets the CORS headers *deleted* rather than
++// merely unset, because `server.tsx` is regenerated by the SDK and a generated
++// copy can re-add `Access-Control-Allow-Origin: *` to every /api response.
++const ALLOWED_ORIGINS = [
++  'https://sqftlab.com',
++  'https://www.sqftlab.com',
++  'https://app.sqftlab.com',
++]
++
++// Development-only extra origins. The Vite client (5173) and the API (3001) are
++// different origins, and the canvas preview serves the SPA from a *.shogo.ai
++// host, so neither can be in the production list. Widening here cannot re-open
++// the deployed API — the deployed process runs with NODE_ENV=production.
++const DEV_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$|^https:\/\/[a-z0-9-]+\.shogo\.ai$/i
++
++function originAllowed(origin: string): boolean {
++  if (ALLOWED_ORIGINS.includes(origin)) return true
++  if (process.env.NODE_ENV !== 'production' && DEV_ORIGIN.test(origin)) return true
++  return false
++}
+ 
+ app.use('*', async (c, next) => {
+   const origin = c.req.header('Origin') ?? ''
+-  const isProd = process.env.NODE_ENV === 'production'
+-  const allowed = !isProd || ALLOWED_ORIGINS.includes(origin)
++  // No Origin header means same-origin or server-to-server: CORS does not apply,
++  // so there is nothing to allow and nothing to block.
++  const reflect = origin !== '' && originAllowed(origin)
+ 
+   if (c.req.method === 'OPTIONS') {
+-    if (allowed) {
+-      c.res.headers.set('Access-Control-Allow-Origin', isProd ? origin : '*')
++    if (reflect) {
++      c.res.headers.set('Access-Control-Allow-Origin', origin)
+       c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+       c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
++      c.res.headers.set('Access-Control-Expose-Headers', 'Content-Length')
+       c.res.headers.set('Access-Control-Max-Age', '86400')
+-      if (isProd) c.res.headers.set('Vary', 'Origin')
++      c.res.headers.set('Vary', 'Origin')
+     }
+     // `c.text('', 204)` fails Hono's typings: 204 is not a ContentfulStatusCode
+     // because it must carry no body. `c.body(null, 204)` is the correct form.
+@@ -58,23 +77,20 @@ app.use('*', async (c, next) => {
+   // Applied AFTER next() so the headers land on the handler's final response.
+   // Setting them before next() writes to a response object the handler then
+   // replaces, which is why the wildcard could survive the earlier fix.
+-  if (allowed) {
+-    c.res.headers.set('Access-Control-Allow-Origin', isProd ? origin : '*')
++  if (reflect) {
++    c.res.headers.set('Access-Control-Allow-Origin', origin)
+     c.res.headers.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+     c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+-    // Reflecting the Origin makes the response vary by it; without Vary a shared
+-    // cache could hand one origin's response (and its CORS headers) to another.
+-    if (isProd) c.res.headers.set('Vary', 'Origin')
++    c.res.headers.set('Access-Control-Expose-Headers', 'Content-Length')
+   } else {
+-    // server.tsx is regenerated by the SDK and its generated copy re-adds
+-    // `Access-Control-Allow-Origin: *` on every route — including /api. Deleting
+-    // it here is what actually makes the policy hold: without this, a disallowed
+-    // origin still received the wildcard alongside the API response.
+     c.res.headers.delete('Access-Control-Allow-Origin')
+     c.res.headers.delete('Access-Control-Allow-Methods')
+     c.res.headers.delete('Access-Control-Allow-Headers')
+-    c.res.headers.set('Vary', 'Origin')
++    c.res.headers.delete('Access-Control-Expose-Headers')
+   }
++  // Reflecting the Origin makes the response vary by it; without Vary a shared
++  // cache could hand one origin's response (and its CORS headers) to another.
++  c.res.headers.set('Vary', 'Origin')
+ })
+ 
+ // ─── Guest sessions (Task B) ─────────────────────────────────────────────────
+@@ -605,55 +621,177 @@ app.post('/sqftlab/mortgage/simulate', async (c) => {
+ 
+ // frankfurter (the previous source) does not publish INR or PKR at all, so both
+ // silently fell through to the hardcoded constants on every request — the UI
+-// showed a "live" rate that never changed. open.er-api.com covers all five
+-// currencies and needs no key.
+-const RATE_TTL_MS = 5 * 60 * 1000
++// showed a "live" rate that never changed. ExchangeRate-API's free endpoints
++// cover all nine quoted currencies, and the open one needs no key at all.
++//
++// TWO DIRECTIONS LIVE IN THIS FILE — do not confuse them:
++//   stored + legacy `/rates/exchange` → X per 1 AED   (the API's native quote)
++//   `/exchange-rates`                 → AED per 1 X   (1 / native, the Day 2 contract)
++// Storing the native quote keeps every pre-existing row, and the legacy payload,
++// meaning exactly what they meant before.
++const RATE_TTL_MS = 60 * 60 * 1000 // 1 hour
++
++const FX_KEYS = ['usd', 'gbp', 'eur', 'inr', 'pkr', 'sar', 'qar', 'bhd', 'kwd'] as const
++type FxKey = (typeof FX_KEYS)[number]
++type FxTable = Partial<Record<FxKey, number>>
++
++// X per 1 AED, used only when upstream is unreachable and always labelled
++// `source: 'fallback'` so it is never replayed as a live rate.
++const FX_FALLBACK: Record<FxKey, number> = {
++  usd: 0.2723, gbp: 0.2145, eur: 0.25, inr: 22.68, pkr: 75.5,
++  sar: 1.0216, qar: 0.9912, bhd: 0.1024, kwd: 0.0835,
++}
+ 
+-app.get('/sqftlab/rates/exchange', async (c) => {
+-  // 1. Serve a cached row if it is younger than the TTL.
++type FxPayload = {
++  base: 'AED'
++  rates: Record<string, number>
++  direction: string
++  updatedAt: string
++  source: string
++  cached: boolean
++}
++
++const DIRECTIONS = 'AED per 1 unit of currency'
++
++// A partially populated cache must not emit a 0 that reads as a real rate, so
++// only entries actually carried by the row are reported.
++function invertToAedPerUnit(table: FxTable): Record<string, number> {
++  const rates: Record<string, number> = {}
++  for (const key of FX_KEYS) {
++    const value = table[key]
++    if (typeof value === 'number' && value > 0) {
++      rates[key.toUpperCase()] = parseFloat((1 / value).toFixed(4))
++    }
++  }
++  return rates
++}
++
++// Tries the keyed endpoint first when a key is configured, then the keyless one.
++// Returns null only when every upstream failed, so the caller can label the
++// result a fallback instead of persisting a guess as if it were live.
++async function fetchUpstreamRates(): Promise<FxTable | null> {
++  const key = process.env.EXCHANGE_RATE_API_KEY
++  const urls = [
++    ...(key ? [`https://v6.exchangerate-api.com/v6/${key}/latest/AED`] : []),
++    'https://open.er-api.com/v6/latest/AED',
++  ]
++  for (const url of urls) {
++    try {
++      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
++      if (!res.ok) continue
++      const data = await res.json() as {
++        result?: string
++        rates?: Record<string, number>
++        conversion_rates?: Record<string, number>
++      }
++      // Both hosts signal failure with `result: 'error'` (a bad key reports one
++      // with HTTP 200), so this is checked before the table is trusted.
++      if (data?.result === 'error') continue
++      const table = data?.rates ?? data?.conversion_rates
++      if (table) {
++        const picked: FxTable = {}
++        for (const k of FX_KEYS) if (typeof table[k.toUpperCase()] === 'number') picked[k] = table[k.toUpperCase()]
++        if (Object.keys(picked).length) return picked
++      }
++    } catch {}
++  }
++  return null
++}
++
++// A row that predates a column we now quote is stale by schema, not by age — the
++// rows written before the GCC columns existed would otherwise satisfy the TTL for
++// an hour and quietly serve a five-currency payload. Returning null sends the
++// caller to a live fetch instead.
++function completeRow(row: Record<string, number | null>): FxTable | null {
++  const table: FxTable = {}
++  for (const key of FX_KEYS) {
++    const value = row[key]
++    if (typeof value !== 'number' || value <= 0) return null
++    table[key] = value
++  }
++  return table
++}
++
++async function getExchangeRates(): Promise<{ payload: FxPayload; stored: FxTable }> {
++  // 1. Serve a cached row if it is younger than the TTL *and* still complete.
+   const cached = await prisma.exchangeRate.findFirst({
+     where: { base: 'AED', fetchedAt: { gte: new Date(Date.now() - RATE_TTL_MS) } },
+     orderBy: { fetchedAt: 'desc' },
+   })
+   if (cached) {
+-    return c.json({
+-      AED_USD: cached.usd, AED_GBP: cached.gbp, AED_EUR: cached.eur,
+-      AED_INR: cached.inr, AED_PKR: cached.pkr,
+-      updatedAt: cached.fetchedAt, source: 'cache',
+-    })
++    const stored = completeRow(cached as unknown as Record<string, number | null>)
++    if (stored) {
++      return {
++        payload: {
++          base: 'AED',
++          rates: invertToAedPerUnit(stored),
++          direction: DIRECTIONS,
++          updatedAt: cached.fetchedAt.toISOString(),
++          source: 'open.er-api.com',
++          cached: true,
++        },
++        stored,
++      }
++    }
+   }
+ 
+   // 2. Fetch live. Only a successful response is persisted, so a fallback value
+-  //    never gets stamped into the cache and replayed as "live" for 5 minutes.
+-  try {
+-    const res = await fetch('https://open.er-api.com/v6/latest/AED', {
+-      signal: AbortSignal.timeout(5000),
++  //    never gets stamped into the cache and replayed as "live" for an hour.
++  const fetched = await fetchUpstreamRates()
++  if (fetched) {
++    // Exactly what upstream returned is persisted — nothing is back-filled from
++    // FX_FALLBACK, so a currency upstream dropped shows as absent rather than as
++    // a constant wearing a live `source` label.
++    const stored: FxTable = { ...fetched }
++    const row = await prisma.exchangeRate.create({
++      data: {
++        base: 'AED',
++        usd: stored.usd, gbp: stored.gbp, eur: stored.eur, inr: stored.inr,
++        pkr: stored.pkr, sar: stored.sar, qar: stored.qar, bhd: stored.bhd, kwd: stored.kwd,
++      },
+     })
+-    if (res.ok) {
+-      const data = await res.json()
+-      if (data?.result !== 'error') {
+-        const rates = {
+-          usd: data.rates?.USD ?? 0.2723,
+-          gbp: data.rates?.GBP ?? 0.2145,
+-          eur: data.rates?.EUR ?? 0.25,
+-          inr: data.rates?.INR ?? 22.68,
+-          pkr: data.rates?.PKR ?? 75.5,
+-        }
+-        await prisma.exchangeRate.create({ data: { base: 'AED', ...rates } })
+-        return c.json({
+-          AED_USD: rates.usd, AED_GBP: rates.gbp, AED_EUR: rates.eur,
+-          AED_INR: rates.inr, AED_PKR: rates.pkr,
+-          updatedAt: new Date().toISOString(), source: 'live',
+-        })
+-      }
++    return {
++      payload: {
++        base: 'AED',
++        rates: invertToAedPerUnit(stored),
++        direction: DIRECTIONS,
++        updatedAt: row.fetchedAt.toISOString(),
++        source: 'open.er-api.com',
++        cached: false,
++      },
++      stored,
+     }
+-  } catch {}
++  }
+ 
+   // 3. Clearly-labelled fallback.
++  return {
++    payload: {
++      base: 'AED',
++      rates: invertToAedPerUnit(FX_FALLBACK),
++      direction: DIRECTIONS,
++      updatedAt: new Date().toISOString(),
++      source: 'fallback',
++      cached: false,
++    },
++    stored: FX_FALLBACK,
++  }
++}
++
++// Day 2 contract: `rates[X]` is how many AED one X buys.
++app.get('/sqftlab/exchange-rates', async (c) => {
++  const { payload } = await getExchangeRates()
++  return c.json(payload)
++})
++
++// Legacy shape kept verbatim for the existing client: X per 1 AED as flat keys,
++// so its numbers are the stored ones rather than a re-inversion of them.
++app.get('/sqftlab/rates/exchange', async (c) => {
++  const { payload, stored } = await getExchangeRates()
+   return c.json({
+-    AED_USD: 0.2723, AED_GBP: 0.2145, AED_EUR: 0.25,
+-    AED_INR: 22.68, AED_PKR: 75.5,
+-    updatedAt: new Date().toISOString(), source: 'fallback',
++    AED_USD: stored.usd, AED_GBP: stored.gbp, AED_EUR: stored.eur,
++    AED_INR: stored.inr, AED_PKR: stored.pkr,
++    updatedAt: payload.updatedAt,
++    source: payload.source === 'fallback' ? 'fallback' : payload.cached ? 'cache' : 'live',
+   })
+ })
+ 
+@@ -3122,3 +3260,4 @@ app.all('*', (c) =>
+ )
+ 
+ export default app
++
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 1f1e14f..87a09f3 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -522,6 +522,13 @@ model ExchangeRate {
+   inr       Float?
+   pkr       Float?
+   cny       Float?
++  // AED → GCC crosses, added for the `/sqftlab/exchange-rates` contract. They sit
++  // alongside the five majors rather than in a separate table so one row still
++  // carries a single, consistent fetchedAt for every currency in the payload.
++  sar       Float?
++  qar       Float?
++  bhd       Float?
++  kwd       Float?
+   fetchedAt DateTime @default(now()) @map("fetched_at")
+ 
+   @@index([fetchedAt])
+diff --git a/scripts/verify-day2.ts b/scripts/verify-day2.ts
+new file mode 100644
+index 0000000..30cfde6
+--- /dev/null
++++ b/scripts/verify-day2.ts
+@@ -0,0 +1,199 @@
++// Day 2 verification — brand, CORS lockdown, exchange-rate contract.
++//
++// Boots the REAL app on a scratch port and issues real requests. For CORS that
++// matters: "the middleware is in the file" and "the middleware runs before the
++// SPA catch-all" are different questions, and only a request tells them apart.
++//
++// FIX-04's actual complaint ("the live site shows the wrong brand") is about what
++// the browser RECEIVES, so the brand check reads the built bundle, not just source.
++//
++// NODE_ENV is forced to production so the CORS assertions describe the deployed
++// behaviour rather than the developer's shell.
++//
++// Run: DATABASE_URL="file:$PWD/prisma/dev.db" bun run scripts/verify-day2.ts
++import { readdirSync, readFileSync, statSync } from 'fs'
++import { join } from 'path'
++
++process.env.PORT = '4601'
++process.env.NODE_ENV = 'production'
++await import('../server.tsx')
++
++const { prisma } = await import('../src/lib/db')
++
++const BASE = 'http://localhost:4601'
++
++let pass = 0
++let fail = 0
++function check(ok: boolean, name: string, detail = '') {
++  if (ok) {
++    pass++
++    console.log(`  PASS  ${name}`)
++  } else {
++    fail++
++    console.log(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`)
++  }
++}
++
++const WRONG_BRAND = /sqrtlab|khashn/i
++// This file has to name the strings it forbids, so it would flag itself.
++const SELF = join('scripts', 'verify-day2.ts')
++
++// ─── FIX-04: brand ───────────────────────────────────────────────────────────
++console.log('\nFIX-04  Brand rename')
++
++// Only files that ship or describe the product. Deliberately excluded:
++//   src/generated  — SDK output, regenerated
++//   files/, memory/, MEMORY.md — the user's own uploaded specs and the agent's
++//     historical log. They are the *input* record, not the product; rewriting
++//     them would destroy provenance and change nothing a visitor sees.
++//   sqftlab-next/  — a stale nested Next.js checkout recorded as a gitlink with
++//     no .gitmodules (empty on a fresh clone), not built by the Dockerfile.
++const ROOT_FILES = [
++  'index.html', 'package.json', 'README.md', 'server.tsx', 'custom-routes.ts',
++  'vite.config.ts', '.env.example', 'Dockerfile', 'nixpacks.toml', 'railway.toml',
++  'shogo.config.json', 'config.json', 'tsconfig.json',
++]
++const SOURCE_EXT = /\.(ts|tsx|css|html|json|mjs|py|sh)$/
++
++function walk(dir: string, out: string[] = []): string[] {
++  for (const entry of readdirSync(dir)) {
++    if (entry === 'generated') continue
++    const full = join(dir, entry)
++    if (statSync(full).isDirectory()) walk(full, out)
++    else if (SOURCE_EXT.test(entry)) out.push(full)
++  }
++  return out
++}
++
++const brandFiles = [
++  ...walk('src'),
++  ...walk('scripts'),
++  ...ROOT_FILES.filter((f) => { try { return statSync(f).isFile() } catch { return false } }),
++].filter((f) => f !== SELF)
++
++const brandHits: string[] = []
++for (const file of brandFiles) {
++  const text = readFileSync(file, 'utf8')
++  text.split('\n').forEach((line, i) => {
++    if (WRONG_BRAND.test(line)) brandHits.push(`${file}:${i + 1}`)
++  })
++}
++check(brandHits.length === 0, `product sources contain no wrong brand (${brandFiles.length} files scanned)`,
++  brandHits.slice(0, 5).join(', '))
++
++// The bundle the page ACTUALLY loads. dist/assets accumulates ~100 bundles from
++// earlier builds (the watcher runs with --emptyOutDir false), so picking any file
++// with a matching name can read a build from before the rename and report a false
++// regression — which is exactly what it did on the first run.
++let bundle: string | undefined
++try {
++  const html = readFileSync('dist/index.html', 'utf8')
++  bundle = html.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/)?.[1]
++} catch { /* no build yet */ }
++if (bundle) {
++  const js = readFileSync(join('dist/assets', bundle), 'utf8')
++  check(!WRONG_BRAND.test(js), `live bundle ${bundle} has no wrong brand`)
++  check(js.includes('sqftLab'), 'live bundle carries the sqftLab wordmark')
++} else {
++  check(false, 'dist/index.html references an index bundle', 'run a build first')
++}
++
++// ─── FIX-05: CORS ────────────────────────────────────────────────────────────
++console.log('\nFIX-05  CORS lockdown')
++
++const PROBE = `${BASE}/api/sqftlab/market-summary`
++
++async function probe(origin?: string, method = 'GET') {
++  const headers: Record<string, string> = {}
++  if (origin) headers.Origin = origin
++  if (method === 'OPTIONS') {
++    headers['Access-Control-Request-Method'] = 'GET'
++    headers['Access-Control-Request-Headers'] = 'content-type'
++  }
++  const res = await fetch(PROBE, { method, headers })
++  return { status: res.status, acao: res.headers.get('access-control-allow-origin'), vary: res.headers.get('vary') }
++}
++
++for (const origin of ['https://sqftlab.com', 'https://www.sqftlab.com', 'https://app.sqftlab.com']) {
++  const r = await probe(origin)
++  check(r.acao === origin, `allowed origin is reflected: ${origin}`, `ACAO=${r.acao}`)
++}
++
++for (const origin of ['https://evil.com', 'https://sqftlab.com.evil.com', 'http://sqftlab.com']) {
++  const r = await probe(origin)
++  check(r.acao === null, `disallowed origin gets NO Access-Control-Allow-Origin: ${origin}`, `ACAO=${r.acao}`)
++}
++
++const noOrigin = await probe()
++check(noOrigin.acao === null, 'no Origin header ⇒ no CORS header (same-origin/server-to-server)')
++
++const preflightEvil = await probe('https://evil.com', 'OPTIONS')
++check(preflightEvil.acao === null, 'OPTIONS preflight from a disallowed origin gets NO ACAO',
++  `ACAO=${preflightEvil.acao}`)
++
++const preflightOk = await probe('https://www.sqftlab.com', 'OPTIONS')
++check(preflightOk.acao === 'https://www.sqftlab.com', 'OPTIONS preflight from an allowed origin is reflected')
++
++const varied = await probe('https://www.sqftlab.com')
++check(/origin/i.test(varied.vary ?? ''), 'responses carry Vary: Origin', `Vary=${varied.vary}`)
++
++// Set to production above rather than inherited, so these assertions describe the
++// deployed behaviour even when run from a developer shell.
++console.log(`  (NODE_ENV forced to ${process.env.NODE_ENV})`)
++
++// ─── FIX-06: exchange rates ──────────────────────────────────────────────────
++console.log('\nFIX-06  Exchange rates')
++
++const fxRes = await fetch(`${BASE}/api/sqftlab/exchange-rates`)
++const fx = await fxRes.json().catch(() => ({}))
++check(fxRes.status === 200, 'GET /api/sqftlab/exchange-rates returns 200', `status=${fxRes.status}`)
++check(fx.base === 'AED', 'payload declares base AED', `base=${fx.base}`)
++
++const rates: Record<string, number> = fx.rates ?? {}
++check(typeof rates.INR === 'number' && rates.INR > 0, 'payload includes an INR rate', `INR=${rates.INR}`)
++check(typeof rates.PKR === 'number' && rates.PKR > 0, 'payload includes a PKR rate', `PKR=${rates.PKR}`)
++check(typeof rates.USD === 'number' && typeof rates.GBP === 'number' && typeof rates.EUR === 'number',
++  'payload includes USD, GBP and EUR')
++check(!Number.isNaN(Date.parse(fx.updatedAt ?? '')), 'updatedAt is a parseable timestamp', `updatedAt=${fx.updatedAt}`)
++check(['open.er-api.com', 'fallback'].includes(fx.source), 'source names the upstream, or admits a fallback',
++  `source=${fx.source}`)
++check(fx.direction === 'AED per 1 unit of currency', 'direction is stated rather than implied', `direction=${fx.direction}`)
++check(typeof fx.cached === 'boolean', 'payload says whether it was served from cache', `cached=${fx.cached}`)
++
++// Only assert the currencies the row actually carried: a partially populated
++// cache legitimately omits one instead of inventing a 0.
++const expected = ['USD', 'GBP', 'EUR', 'INR', 'PKR', 'SAR', 'QAR', 'BHD', 'KWD']
++const missing = expected.filter((c) => !(c in rates))
++check(missing.length === 0, `all nine quoted currencies present (${Object.keys(rates).length} returned)`,
++  `missing: ${missing.join(', ')}`)
++
++// Direction guard: 1 INR really is ~0.038 AED, not 26. A silently un-inverted
++// payload would still "include an INR rate" and pass everything above.
++if (typeof rates.INR === 'number') {
++  check(rates.INR < 1, 'INR is quoted as AED per rupee (inverted, not native)', `INR=${rates.INR}`)
++}
++
++const legacyRes = await fetch(`${BASE}/api/sqftlab/rates/exchange`)
++const legacy = await legacyRes.json().catch(() => ({}))
++check(legacyRes.status === 200, 'legacy /api/sqftlab/rates/exchange still returns 200')
++check(typeof legacy.AED_INR === 'number' && typeof legacy.AED_PKR === 'number',
++  'legacy payload still carries AED_INR and AED_PKR', JSON.stringify(legacy))
++check(['cache', 'live', 'fallback'].includes(legacy.source), 'legacy source stays cache|live|fallback',
++  `source=${legacy.source}`)
++
++if (typeof legacy.AED_INR === 'number' && typeof rates.INR === 'number') {
++  const roundTrip = Math.abs(1 / rates.INR - legacy.AED_INR) / legacy.AED_INR
++  check(roundTrip < 0.01, 'the two directions describe the same rate', `drift=${(roundTrip * 100).toFixed(3)}%`)
++}
++
++// Proves the schema change, not just the endpoint: the four GCC columns must
++// actually persist, or every request re-fetches and re-labels itself "live".
++const row = await prisma.exchangeRate.findFirst({ orderBy: { fetchedAt: 'desc' } })
++check(!!row, 'an ExchangeRate row was persisted')
++check(!!row && [row.sar, row.qar, row.bhd, row.kwd].every((v) => typeof v === 'number' && v > 0),
++  'persisted row carries sar/qar/bhd/kwd (schema migration effective)',
++  row ? JSON.stringify({ sar: row.sar, qar: row.qar, bhd: row.bhd, kwd: row.kwd }) : 'no row')
++
++console.log(`\nRESULT: ${pass} passed, ${fail} failed`)
++await prisma.$disconnect()
++process.exit(fail === 0 ? 0 : 1)
+diff --git a/server.tsx b/server.tsx
+index 4b0e84e..56288c9 100644
+--- a/server.tsx
++++ b/server.tsx
+@@ -14,21 +14,6 @@ import { createToolsHandlers } from '@shogo-ai/sdk/tools/server'
+ 
+ const app = new Hono()
+ 
+-// CORS — `shogo generate` emits this block on every run. The authoritative
+-// policy lives in custom-routes.ts (it deletes the header for disallowed
+-// origins, which this block cannot do). Kept minimal and non-wildcard here so a
+-// regeneration cannot silently re-open the API to every origin.
+-// `c.body(null, 204)` rather than `c.text('', 204)` — 204 must carry no body, and
+-// `text()` rejects 204 in Hono's types.
+-app.use('*', async (c, next) => {
+-  if (c.req.method === 'OPTIONS') {
+-    c.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+-    c.header('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+-    return c.body(null, 204)
+-  }
+-  await next()
+-})
+-
+ // Health check endpoint
+ app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
+ 
+-- 
+2.47.3
+
