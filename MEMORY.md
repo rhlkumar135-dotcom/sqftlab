@@ -960,3 +960,37 @@ restart window. Check `/health`, or a real route.
     verify-day2 30 · verify-day1 83 · verify-fixes 41 · verify-cron 31
     verify-intel 27 · verify-stream 15 · verify-server-routing 8
     tsc --noEmit  0 errors outside src/generated/
+
+### The public preview host drops identity — every authed route reads as guest
+
+`https://<project>.preview.shogo.ai` strips BOTH the `Authorization` header and the
+`Cookie` header before the request reaches `custom-routes.ts`. The same request with the
+same bearer token succeeds against `http://localhost:8080` (and `:3101`):
+
+    /api/sqftlab/portfolio    public 403   local 200
+    /api/sqftlab/alerts       public 401   local 200
+    /api/sqftlab/onboarding   public 401   local 200
+
+`/api/sqftlab/me` still answers 200 there — because it falls back to `seededUserId()`
+server-side — so the identity bootstrap LOOKS fine while every route that actually needs
+the caller refuses. Symptom on the preview URL: Portfolio shows a "needs a Pro plan"
+paywall and Alerts a sign-in prompt, even for the elite demo account. Quickest check:
+`bun run scripts/_probe-preview-auth.ts`.
+
+It is a proxy/environment issue, not a code defect, and it predates Day 15. Verify
+account-scoped features at `localhost:8080`, and treat the published host as guest-only
+until this is resolved.
+
+### `server.tsx` is reordered on EVERY schema edit
+
+Editing `prisma/schema.prisma` triggers a regeneration that moves the `SHOGO:CUSTOM`
+region BELOW the SPA catch-all, so the asset-path rewrite becomes unreachable and the
+preview renders blank while the markers still look correct. `scripts/fix-server-order.ts`
+repairs it (idempotent) and `scripts/verify-server-routing.ts` detects it (8/8 → 1/8).
+Both are needed on Day 15; there is no automatic hook.
+
+### Suite state at end of Day 15
+
+    verify-day15 39 · verify-day15-mobile (16 pages @390px) · verify-day15-onboarding 11
+    all 27 suites · 1144 checks · 0 failed
+    tsc --noEmit  0 errors outside src/generated/   ·   routing 8/8
