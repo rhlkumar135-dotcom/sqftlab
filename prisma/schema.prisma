@@ -287,6 +287,15 @@ model DealAlert {
   maxPrice     Float?   @map("max_price")
   minBeds      Int?     @map("min_beds")
   active       Boolean  @default(true)
+  // User-given label, e.g. "2BR Downtown under 2M" (Day 12 Task A). Nullable:
+  // existing rows and stricter API clients may omit it, and the UI derives a
+  // summary from the filters when it is absent, so this is additive.
+  name         String?
+  // When the scan last EVALUATED this alert — which is not the same as when it
+  // was created. An alert can sit for weeks without a listing matching, and
+  // "last checked 3 minutes ago" is the honest answer to a user asking whether
+  // the engine is running, where "created 3 weeks ago" is not.
+  lastCheckedAt DateTime? @map("last_checked_at")
   createdAt    DateTime @default(now()) @map("created_at")
 
   user    User         @relation(fields: [userId], references: [id])

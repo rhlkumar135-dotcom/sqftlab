@@ -838,6 +838,82 @@ app.get('/sqftlab/scores', async (c) => {
   })
 })
 
+// GET /sqftlab/scores/:slug — one community's ENGINE score, with the factors
+// behind it.
+//
+// The composite is public; the five weighted inputs that explain it are the paid
+// tier's view. Withheld server-side rather than hidden in the client, so a free
+// caller does not merely fail to see them — they are never sent.
+//
+// `dataCoverage` and `notes` stay public on purpose: they say how much of the
+// number is real data versus a neutral stand-in, which is a caveat the reader
+// needs MOST when they can see the least.
+app.get('/sqftlab/scores/:slug', async (c) => {
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const community = await prisma.community.findUnique({
+    where: { slug: c.req.param('slug') },
+    select: { id: true, slug: true, nameEn: true, emirate: true, medianAedSqft: true, psfSource: true },
+  })
+  if (!community) return c.json({ error: 'Community not found' }, 404)
+
+  const latest = await latestInvestmentScores([community.id])
+  const row = latest.get(community.id)
+
+  if (!row) {
+    return c.json({
+      community: community.nameEn,
+      slug: community.slug,
+      emirate: community.emirate,
+      score: null,
+      scored: false,
+      reason: 'No score has been computed for this community yet.',
+      breakdown: null,
+      breakdownLocked: true,
+      dataCoverage: 0,
+      notes: null,
+      medianAedSqft: community.medianAedSqft,
+      psfSource: community.psfSource,
+      tier,
+    })
+  }
+
+  const entitled = (TIER_RANK[tier] ?? 0) >= (TIER_RANK.pro ?? 0)
+
+  return c.json({
+    community: community.nameEn,
+    slug: community.slug,
+    emirate: community.emirate,
+    score: row.score,
+    scored: true,
+    calculatedAt: row.calculatedAt,
+    // How much of the composite is measurement rather than stand-in.
+    dataCoverage: row.dataCoverage,
+    notes: row.notes,
+    breakdown: entitled
+      ? {
+          psfMomentum: row.psfMomentum,
+          rentalYield: row.rentalYield,
+          supplyAbsorption: row.supplyAbsorption,
+          volumeTrend: row.volumeTrend,
+          capitalFlow: row.capitalFlow,
+        }
+      : null,
+    breakdownLocked: !entitled,
+    lockedReason: entitled ? null : 'The factor breakdown is part of the Pro plan.',
+    upgradeUrl: entitled ? null : '/pricing',
+    // capitalFlow is a hard-coded neutral in the engine (it needs Ejari ownership
+    // data) and is deliberately excluded from dataCoverage. Naming it here stops
+    // the UI from drawing a placeholder bar that reads as a measurement.
+    // Only meaningful alongside the breakdown. A locked caller has no factor bars
+    // to annotate, so sending the names would disclose part of what is withheld
+    // while being useless to them.
+    placeholderFactors: entitled ? ['capitalFlow'] : [],
+    medianAedSqft: community.medianAedSqft,
+    psfSource: community.psfSource,
+    tier,
+  })
+})
+
 // Recompute every score. The nightly cron calls the engine directly; this exists
 // so the job can also be triggered and verified on demand.
 app.post('/sqftlab/scores/recompute', async (c) => {
@@ -3323,17 +3399,64 @@ app.get('/sqftlab/me', async (c) => {
   return c.json({ user: { ...rest, tier: subscriptionTier, subscriptionTier } })
 })
 
-// GET /sqftlab/alerts — active alerts plus the recent matches they produced.
+// ─── Alert allowance (Day 12 Task B) ─────────────────────────────────────────
+//
+// The spec's ladder is pro = 5 and enterprise = "unlimited" (999999). Two changes:
+//
+//  · `elite` is a real tier here and ranks between pro and enterprise, but the
+//    spec omits it entirely. An omitted tier must not silently LOSE a paid
+//    feature — the same omission that demoted the seeded elite account to guest
+//    in Day 1. Elite sits between the two.
+//  · "unlimited" is implemented as a generous, REPORTED ceiling rather than a
+//    number large enough to look infinite. The scan walks every active alert on
+//    every run, so the count is a real cost rather than a formality.
+const ALERT_CEILINGS: Record<string, number> = {
+  pro: 5,
+  elite: 25,
+  enterprise: 250,
+  institutional: 250,
+}
+
+function alertLimitFor(tier: CallerTier | undefined): number {
+  return ALERT_CEILINGS[tier ?? 'free'] ?? 0
+}
+
+// GET /sqftlab/alerts — the caller's ACTIVE watches, each with its recent matches.
 app.get('/sqftlab/alerts', async (c) => {
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
   const alerts = await prisma.dealAlert.findMany({
-    where: { userId },
+    // `active: true` because DELETE deactivates instead of erasing: a
+    // deactivated alert must stop appearing here, and the scan already skips it.
+    where: { userId, active: true },
     orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { matches: true } } },
+    include: {
+      _count: { select: { matches: true } },
+      // The three newest matches ride along so the list renders in one request.
+      // Prisma batches the include, so this is not a query per alert.
+      matches: {
+        orderBy: { detectedAt: 'desc' },
+        take: 3,
+        include: {
+          listing: {
+            select: {
+              id: true, title: true, priceAed: true, pricePerSqft: true, beds: true,
+              community: { select: { nameEn: true, slug: true, medianAedSqft: true } },
+            },
+          },
+        },
+      },
+    },
   })
-  return c.json({ alerts })
+  return c.json({
+    alerts,
+    activeCount: alerts.length,
+    limit: alertLimitFor(tier),
+    tier,
+    atLimit: alerts.length >= alertLimitFor(tier),
+  })
 })
 
 app.get('/sqftlab/alerts/matches', async (c) => {
@@ -3381,6 +3504,25 @@ app.post('/sqftlab/alerts', async (c) => {
     return c.json({ error: 'minBeds must be a non-negative integer' }, 400)
   }
 
+  // Per-plan allowance. Counted on ACTIVE alerts so deactivating one frees a slot.
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
+  const limit = alertLimitFor(tier)
+  const activeCount = await prisma.dealAlert.count({ where: { userId, active: true } })
+  if (activeCount >= limit) {
+    return c.json(
+      {
+        error: `Alert limit reached (${limit} active on the ${tier} plan)`,
+        limit,
+        current: activeCount,
+        tier,
+        upgradeUrl: '/pricing',
+      },
+      403,
+    )
+  }
+
+  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) || null : null
+
   const alert = await prisma.dealAlert.create({
     data: {
       userId,
@@ -3388,6 +3530,7 @@ app.post('/sqftlab/alerts', async (c) => {
       propertyType,
       maxPrice,
       minBeds,
+      name,
       active: true,
     },
   })
@@ -3397,7 +3540,13 @@ app.post('/sqftlab/alerts', async (c) => {
   return c.json({ alert, scan }, 201)
 })
 
-// DELETE /sqftlab/alerts/:id — matches cascade via the relation.
+// DELETE /sqftlab/alerts/:id — DEACTIVATES instead of erasing (Day 12 Task B).
+//
+// The original hard-deleted, which cascaded the match history away with the rule.
+// That history is the record of what the alert actually found; deleting the rule
+// should not rewrite what it already reported, and a mis-click is unrecoverable
+// with a hard delete. Inactive alerts are excluded from the list and skipped by
+// the scan, so they stop costing anything.
 app.delete('/sqftlab/alerts/:id', async (c) => {
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
@@ -3406,8 +3555,8 @@ app.delete('/sqftlab/alerts/:id', async (c) => {
   const existing = await prisma.dealAlert.findFirst({ where: { id, userId } })
   if (!existing) return c.json({ error: 'Alert not found' }, 404)
 
-  await prisma.dealAlert.delete({ where: { id } })
-  return c.json({ ok: true, deleted: id })
+  await prisma.dealAlert.update({ where: { id }, data: { active: false } })
+  return c.json({ ok: true, deactivated: id, active: false })
 })
 
 // POST /sqftlab/alerts/scan — run the engine on demand (the scraper cron also

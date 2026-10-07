@@ -56,7 +56,13 @@ export async function scanDealAlerts(): Promise<ScanResult> {
 
   for (const alert of alerts) {
     const community = await prisma.community.findUnique({ where: { slug: alert.district } })
-    if (!community || !community.medianAedSqft) continue
+    if (!community || !community.medianAedSqft) {
+      // Evaluated, but there is no market level to compare against. Stamp the
+      // check anyway: the user's question is "is the engine running?", and this
+      // alert was genuinely looked at.
+      await prisma.dealAlert.update({ where: { id: alert.id }, data: { lastCheckedAt: new Date() } })
+      continue
+    }
 
     const where: Record<string, unknown> = {
       purpose: 'sale',
@@ -92,6 +98,8 @@ export async function scanDealAlerts(): Promise<ScanResult> {
         title: listing.title,
       })
     }
+
+    await prisma.dealAlert.update({ where: { id: alert.id }, data: { lastCheckedAt: new Date() } })
   }
 
   return { alertsScanned: alerts.length, listingsEvaluated, matchesCreated, alreadyMatched, created }

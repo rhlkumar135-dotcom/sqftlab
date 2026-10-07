@@ -4,7 +4,7 @@ import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, C
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
-import { InvestmentScore, ScoreBadge } from '@/components/InvestmentScore'
+import { InvestmentScore, ScoreBadge, CommunityScoreCard } from '@/components/InvestmentScore'
 import { DataLabel } from '@/components/DataLabel'
 import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
@@ -1012,6 +1012,12 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
               ))}
             </div>
           </div>
+
+          {/* Day 12 Task D — the engine's score and its factor breakdown. Pro+
+              sees the five weighted inputs; below that the card shows the
+              composite plus an upgrade prompt, because the server withholds the
+              breakdown rather than the client deciding to hide it. */}
+          <CommunityScoreCard slug={slug} onUpgrade={() => setPage('pricing')} />
         </div>
       </div>
 
@@ -1474,6 +1480,18 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; 
 
 // ─── Deal Alert Engine page (TASK 12 — Elite tier) ───────────────────────────
 
+/** "3m ago" / "2h ago" / "5d ago" — coarse resolution suits an hourly scan. */
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return 'just now'
+  const mins = Math.floor(ms / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
 interface DealAlertRow {
   id: string
   district: string
@@ -1482,6 +1500,10 @@ interface DealAlertRow {
   minBeds: number | null
   active: boolean
   createdAt: string
+  /** User-given label (Day 12 Task A). Falls back to the district when absent. */
+  name: string | null
+  /** When the scan last evaluated this alert — not when it was created. */
+  lastCheckedAt: string | null
   _count?: { matches: number }
 }
 
@@ -1502,18 +1524,21 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [form, setForm] = useState({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+  const [form, setForm] = useState({ name: '', district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
   const [tier, setTier] = useState<string | null>(null)
+  const [caps, setCaps] = useState<{ limit: number; atLimit: boolean } | null>(null)
   const [accessStatus, setAccessStatus] = useState<number | null>(null)
   const { format } = useCurrency()
 
   const load = useCallback(() => {
     setLoading(true)
     Promise.all([
-      loadResource<{ alerts: DealAlertRow[] }>('/api/sqftlab/alerts', { alerts: [] }),
+      loadResource<{ alerts: DealAlertRow[]; limit: number; atLimit: boolean }>('/api/sqftlab/alerts', { alerts: [], limit: 0, atLimit: false }),
       loadResource<{ matches: AlertMatchRow[] }>('/api/sqftlab/alerts/matches', { matches: [] }),
     ]).then(([a, m]) => {
       setAlerts(a.data.alerts || [])
+      // The server owns the allowance; the page reports it rather than guessing.
+      setCaps({ limit: a.data.limit ?? 0, atLimit: a.data.atLimit === true })
       setMatches(m.data.matches || [])
       // Both endpoints are account-scoped. When the server refuses them, an empty
       // list renders as a working "No alerts yet" state, which is a lie — record the
@@ -1551,6 +1576,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
           ...(uid ? { Authorization: `Bearer ${uid}` } : {}),
         },
         body: JSON.stringify({
+          name: form.name || null,
           district: form.district,
           propertyType: form.propertyType,
           maxPrice: form.maxPrice || null,
@@ -1567,7 +1593,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
             ? `Alert saved — ${created} matching deal${created === 1 ? '' : 's'} found straight away.`
             : 'Alert saved — no current listings match, we will watch for new ones.',
         )
-        setForm({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+        setForm({ name: '', district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
         load()
       }
     } catch {
@@ -1630,12 +1656,29 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
         <AccessNotice status={accessStatus} feature="Alerts" setPage={setPage} onRetry={load} />
       ) : (
       <Gate>
+        {/* Plan allowance, reported from the server's own count so the page never
+            disagrees with what the API will actually accept. */}
+        {caps && caps.limit > 0 && (
+          <div className="mb-4 px-4 py-3 rounded-xl text-sm flex flex-wrap items-center gap-2" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', color: 'var(--ink-4)' }}>
+            <span style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{alerts.length}/{caps.limit}</span>
+            <span>{caps.atLimit ? 'active alerts — at your plan limit' : 'active alerts on your plan'}</span>
+            {caps.atLimit && (
+              <button onClick={() => setPage('pricing')} className="underline font-semibold" style={{ color: 'var(--b600)' }}>
+                Upgrade for more →
+              </button>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Create + list */}
           <div className="space-y-5">
             <form onSubmit={createAlert} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
               <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>New alert</h3>
               <div className="space-y-3">
+                <div>
+                  <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Alert name</label>
+                  <input type="text" maxLength={80} placeholder="e.g. 2BR Downtown under 2M" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} style={inputStyle} />
+                </div>
                 <div>
                   <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>District</label>
                   <select value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} className={inputClass} style={inputStyle}>
@@ -1687,11 +1730,21 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
                   {alerts.map((a) => (
                     <div key={a.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--g1)', border: '1px solid var(--gb)' }}>
                       <div className="flex-1 min-w-[160px]">
-                        <div className="text-sm font-medium capitalize" style={{ color: 'var(--ink)' }}>{a.district.replace(/-/g, ' ')}</div>
+                        <div className="text-sm font-medium capitalize" style={{ color: 'var(--ink)' }}>{a.name || a.district.replace(/-/g, ' ')}</div>
                         <div className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
-                          {[a.propertyType || 'any type', a.minBeds != null ? `${a.minBeds}+ BR` : null, a.maxPrice ? `≤ ${format(a.maxPrice)}` : null]
+                          {[
+                            ...(a.name ? [a.district.replace(/-/g, ' ')] : []),
+                            a.propertyType || 'any type',
+                            a.minBeds != null ? `${a.minBeds}+ BR` : null,
+                            a.maxPrice ? `≤ ${format(a.maxPrice)}` : null,
+                          ]
                             .filter(Boolean)
                             .join(' · ')}
+                        </div>
+                        {/* "Last checked", not "created": an alert can sit for weeks
+                            without a match, and this is what answers "is it running?". */}
+                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--ink-6)' }}>
+                          {a.lastCheckedAt ? `Checked ${timeAgo(a.lastCheckedAt)}` : 'Not checked yet'}
                         </div>
                       </div>
                       <span className="text-[11px] px-2 py-1 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)' }}>
