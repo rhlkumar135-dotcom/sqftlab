@@ -3,6 +3,7 @@
 //
 // Creates its own subscription user and deletes it in a finally block: this
 // touches the live database, so nothing may be left behind.
+import './_env-guard'
 import { prisma } from '../src/lib/db'
 
 const BASE = process.env.API_BASE ?? 'http://localhost:3101'

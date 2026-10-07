@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -11,6 +11,7 @@ import { FeatureGate } from '@/components/FeatureGate'
 import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
 import PricingPage from '@/components/PricingPage'
+import CmaPage from '@/components/CmaPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
@@ -290,7 +291,15 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma'
+
+// The pages that publish a real URL. Anything absent here is in-app only: navigating
+// to it deliberately leaves the address bar alone, which is how the app has always
+// behaved. Kept in one place so `navigate` and the initial path check cannot drift.
+const PAGE_PATHS: Partial<Record<Page, string>> = {
+  pricing: '/pricing',
+  cma: '/cma',
+}
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -303,6 +312,7 @@ const NAV = [
   { id: 'deals' as Page, label: 'Deals', icon: Zap },
   { id: 'alerts' as Page, label: 'Alerts', icon: Bell },
   { id: 'yield' as Page, label: 'Yield Calc', icon: Calculator },
+  { id: 'cma' as Page, label: 'CMA', icon: Scale },
 ]
 
 function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
@@ -3208,44 +3218,82 @@ function AppInner() {
     // Day 5: the pricing page is public and lives at /pricing, so the URL has to
     // select it — the nav button alone left a shared /pricing link on the landing page.
     if (path === '/pricing') setPage('pricing')
+    // Day 6: same reasoning — a shared /cma link must open the CMA tool, not the landing page.
+    if (path === '/cma') setPage('cma')
     if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
+  // In-app navigation that keeps the address bar in step for the pages we publish a
+  // URL for. Plain `setPage` left the URL on the previous route: clicking "Upgrade to
+  // Enterprise" from /cma showed the pricing page while the bar still read /cma, so a
+  // reload or a bookmarked link dropped the user back into the tool instead of the
+  // plans. Pages with no path in PAGE_PATHS behave exactly as before.
+  const navigate = useCallback((p: Page) => {
+    setPage(p)
+    const path = PAGE_PATHS[p]
+    if (path && window.location.pathname !== path) {
+      window.history.pushState({ page: p }, '', path)
+    }
+  }, [])
+
+  // Back/forward should move between pages, not out of the app.
+  //
+  // An entry created before our first pushState — the initial page load — carries
+  // `state === null`, so keying off the event state alone left the PREVIOUS page
+  // rendered after a back: the URL changed but the screen did not. Fall back to the
+  // pathname for those entries, and to the landing page for a path we do not own.
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const fromState = (e.state as { page?: Page } | null)?.page
+      if (fromState) {
+        setPage(fromState)
+        return
+      }
+      const path = window.location.pathname.replace(/\/+$/, '')
+      const fromPath = (Object.keys(PAGE_PATHS) as Page[]).find((k) => PAGE_PATHS[k] === path)
+      setPage(fromPath ?? 'landing')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
   return (
     <div className="min-h-screen" style={{ background: 'var(--page)', fontFamily: 'var(--font-ui)' }}>
-      <Nav page={page} setPage={setPage} live={live} />
-      {page === 'landing' && <Landing setPage={setPage} setSelectedListing={setSelectedListing} />}
-      {page === 'dashboard' && <HeatmapDashboard setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'community' && <CommunityDetail slug={selectedCommunity} setPage={setPage} />}
-      {page === 'listings' && <ListingsFeed setPage={setPage} setSelectedListing={setSelectedListing} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'markets' && <MarketsPage setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'property' && <PropertyIntelligence listingId={selectedListing} setPage={setPage} />}
-      {page === 'portfolio' && <Portfolio setPage={setPage} />}
-      {page === 'watchlist' && <Watchlist setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'deals' && <Deals setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'alerts' && <AlertsPage setPage={setPage} setSelectedListing={setSelectedListing} />}
-      {page === 'pricing' && <PricingPage onNavigate={setPage} />}
+      <Nav page={page} setPage={navigate} live={live} />
+      {page === 'landing' && <Landing setPage={navigate} setSelectedListing={setSelectedListing} />}
+      {page === 'dashboard' && <HeatmapDashboard setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'community' && <CommunityDetail slug={selectedCommunity} setPage={navigate} />}
+      {page === 'listings' && <ListingsFeed setPage={navigate} setSelectedListing={setSelectedListing} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'markets' && <MarketsPage setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'property' && <PropertyIntelligence listingId={selectedListing} setPage={navigate} />}
+      {page === 'portfolio' && <Portfolio setPage={navigate} />}
+      {page === 'watchlist' && <Watchlist setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'deals' && <Deals setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'alerts' && <AlertsPage setPage={navigate} setSelectedListing={setSelectedListing} />}
+      {page === 'pricing' && <PricingPage onNavigate={navigate} />}
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
+      {page === 'cma' && <CmaPage onNavigate={navigate} />}
       {page === 'about' && <AboutPage />}
-      {page === 'analytics' && <MarketAnalytics setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'predictions' && <PricePredictions setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
-      {page === 'intelligence' && <IntelligencePage setPage={setPage} />}
-      {page === 'waitlist' && <WaitlistPage setPage={setPage} />}
+      {page === 'analytics' && <MarketAnalytics setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'predictions' && <PricePredictions setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
+      {page === 'intelligence' && <IntelligencePage setPage={navigate} />}
+      {page === 'waitlist' && <WaitlistPage setPage={navigate} />}
       {page === 'glossary' && <Glossary />}
-      {page === 'signin' && <SignInPage setPage={setPage} />}
+      {page === 'signin' && <SignInPage setPage={navigate} />}
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
-          <button onClick={() => setPage('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
-          <button onClick={() => setPage('intelligence')} className="transition-colors hover:text-white">Pro Intelligence</button>
-          <button onClick={() => setPage('pricing')} className="transition-colors hover:text-white">Pricing</button>
-          <button onClick={() => setPage('yield')} className="transition-colors hover:text-white">Yield Calculator</button>
-          <button onClick={() => setPage('about')} className="transition-colors hover:text-white">Methodology</button>
-          <button onClick={() => setPage('glossary')} className="transition-colors hover:text-white">Glossary</button>
-          <button onClick={() => setPage('waitlist')} className="transition-colors hover:text-white">Early Access</button>
+          <button onClick={() => navigate('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
+          <button onClick={() => navigate('intelligence')} className="transition-colors hover:text-white">Pro Intelligence</button>
+          <button onClick={() => navigate('pricing')} className="transition-colors hover:text-white">Pricing</button>
+          <button onClick={() => navigate('yield')} className="transition-colors hover:text-white">Yield Calculator</button>
+          <button onClick={() => navigate('cma')} className="transition-colors hover:text-white">CMA Tool</button>
+          <button onClick={() => navigate('about')} className="transition-colors hover:text-white">Methodology</button>
+          <button onClick={() => navigate('glossary')} className="transition-colors hover:text-white">Glossary</button>
+          <button onClick={() => navigate('waitlist')} className="transition-colors hover:text-white">Early Access</button>
         </div>
         © 2026 sqftLab · UAE Property Data Intelligence Platform · Listings via PropertyFinder · Transaction sources listed on the Methodology page
       </footer>

@@ -7,6 +7,7 @@
  * Cleans up after itself: the test user, its sessions, and the guest rows and
  * events it creates are all deleted at the end.
  */
+import './_env-guard'
 import { marketPsfByCommunity, DEAL_DISCOUNT_THRESHOLD } from '../src/lib/deals'
 
 const API = process.env.API ?? 'http://localhost:3101'

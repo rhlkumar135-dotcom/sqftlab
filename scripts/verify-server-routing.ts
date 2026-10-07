@@ -4,6 +4,7 @@
 // middleware runs" — only an actual request can tell them apart.
 //
 // Run: bun run scripts/verify-server-routing.ts
+import './_env-guard'
 import { readdirSync } from 'fs'
 
 process.env.PORT = '4599'

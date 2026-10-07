@@ -10,7 +10,8 @@
 // NODE_ENV is forced to production so the CORS assertions describe the deployed
 // behaviour rather than the developer's shell.
 //
-// Run: DATABASE_URL="file:$PWD/prisma/dev.db" bun run scripts/verify-day2.ts
+// Run: bun run scripts/verify-day2.ts   (DATABASE_URL is pinned by _env-guard)
+import './_env-guard'
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 

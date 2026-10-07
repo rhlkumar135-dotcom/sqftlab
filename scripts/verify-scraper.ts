@@ -9,6 +9,7 @@
 // `catch {}`, the crawl still reported success while persisting nothing. The
 // offline copy in scripts/scraper-pf.ts had handled both shapes for a while; the
 // in-server copy had not. These checks fail if the two ever drift apart again.
+import './_env-guard'
 import { prisma } from '../src/lib/db'
 import { pfParse } from '../custom-routes'
 

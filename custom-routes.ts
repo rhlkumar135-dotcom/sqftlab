@@ -23,6 +23,10 @@ import {
 } from './src/lib/stripe'
 import { dldConfigured } from './src/lib/dld'
 import { adrecConfigured } from './src/lib/adrec'
+import {
+  computeCma, MIN_COMPS, COMP_WINDOW_DAYS, SIZE_TOLERANCE, CMA_CONDITIONS,
+  type CmaCondition, type CmaSubject,
+} from './src/lib/cma'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -1019,6 +1023,194 @@ app.post('/sqftlab/mortgage/simulate', async (c) => {
       'sqftLab does not provide mortgage advice. Rates shown are indicative. ' +
       'Contact a CBUAE-regulated bank or mortgage broker for actual rates.',
   })
+})
+
+// ─── CMA — Comparable Market Analysis (Day 6 Task A) ─────────────────────────
+//
+// Enterprise-gated valuation from recorded sales. Deliberately NOT a model: the
+// estimate is the median of real comparables plus two explicit, disclosed
+// adjustments, and the comparables are returned so the user can check the working.
+// When there are too few comparables the route REFUSES (422) rather than
+// substituting a community median or an interpolated guess — a valuation built on
+// nothing is worse than no valuation, and "the numbers are real sales" is the
+// product's entire claim.
+//
+// Two deviations from the brief's query, both forced by this schema:
+//   * Field names. The brief queries `bedrooms`/`size`/`amount`/`floor`/
+//     `pricePsf`/`transactionType: 'Sales'`. This schema has `beds`/`areaSqft`/
+//     `priceAed`/`floorNumber`/`pricePerSqft`, and types the column lowercase
+//     (`sale`, `off_plan_sale`, `mortgage`, `gift`). The brief's version does not
+//     compile against it, and `'Sales'` would match zero rows.
+//   * `mode: 'insensitive'`. The datasource is SQLite, where Prisma rejects
+//     `mode` outright. Rather than depend on a provider-specific escape hatch,
+//     the community is resolved through the project's existing fuzzy matcher and
+//     the building-name comparison is done in JS — which behaves the same on
+//     SQLite and on the PostgreSQL the brief targets.
+
+const CMA_EXPECTED: Record<string, string> = {
+  buildingName: 'non-empty string — the building the unit is in',
+  community: 'non-empty string — the area name, e.g. "Dubai Marina"',
+  bedrooms: 'integer >= 0 (0 = studio)',
+  sizeSqft: 'a positive number — the unit size in sqft',
+  floor: 'optional integer >= 0; omit or 0 for ground floor',
+  condition: "optional: 'excellent' | 'good' | 'average' | 'poor'",
+  listingPrice: 'optional positive number (AED) — the asking price, for deal analysis',
+}
+
+/** A trimmed non-empty string field, or null. */
+function strField(body: Record<string, unknown>, key: string): string | null {
+  const raw = body[key]
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  return trimmed.length ? trimmed : null
+}
+
+app.post('/sqftlab/cma', async (c) => {
+  // Identity first, then entitlement. The order decides the answer the caller gets:
+  // an anonymous request is told it must sign in (401), not that it needs a bigger
+  // plan (403). A 403 to a guest would imply a login alone unlocks an Enterprise
+  // tool, which is false, and Day 6's checklist asks for both statuses.
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const blocked = requireTier(c, 'enterprise', 'CMA Tool')
+  if (blocked) return blocked
+
+  const body = await readJsonBody(c)
+
+  const buildingName = strField(body, 'buildingName')
+  const communityName = strField(body, 'community')
+  const bedrooms = numField(body, 'bedrooms')
+  const sizeSqft = numField(body, 'sizeSqft')
+  const floorNum = numField(body, 'floor')
+  const conditionRaw = strField(body, 'condition')
+  const listingPrice = numField(body, 'listingPrice')
+
+  const floorProvided = body.floor !== undefined && body.floor !== null && body.floor !== ''
+  const condition = conditionRaw as CmaCondition | null
+
+  const bad: string[] = []
+  if (!buildingName) bad.push('buildingName')
+  if (!communityName) bad.push('community')
+  if (bedrooms === null || bedrooms < 0 || !Number.isInteger(bedrooms)) bad.push('bedrooms')
+  if (sizeSqft === null || sizeSqft <= 0) bad.push('sizeSqft')
+  if (floorProvided && (floorNum === null || floorNum < 0 || !Number.isInteger(floorNum))) bad.push('floor')
+  if (condition !== null && !CMA_CONDITIONS.includes(condition)) bad.push('condition')
+  if (listingPrice !== null && listingPrice <= 0) bad.push('listingPrice')
+
+  if (bad.length) return badInput(c, bad, CMA_EXPECTED)
+  // Restated so TypeScript narrows them; `bad.length === 0` alone does not tie the
+  // array's emptiness to each individual null check.
+  if (!buildingName || !communityName || bedrooms === null || sizeSqft === null) {
+    return badInput(c, ['buildingName', 'community', 'bedrooms', 'sizeSqft'], CMA_EXPECTED)
+  }
+
+  const community = await findCommunityByName(communityName)
+  if (!community) {
+    return c.json({
+      error: 'Community not found',
+      message: `No area matching "${communityName}" is loaded on this deployment. ` +
+        'Check the spelling, or list the available areas at /api/sqftlab/communities.',
+      communityFound: false,
+    }, 422)
+  }
+
+  const since = new Date(Date.now() - COMP_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  const comps = await prisma.transaction.findMany({
+    where: {
+      communityId: community.id,
+      beds: bedrooms,
+      areaSqft: {
+        gte: sizeSqft * (1 - SIZE_TOLERANCE),
+        lte: sizeSqft * (1 + SIZE_TOLERANCE),
+      },
+      // `sale` and `off_plan_sale` are both market sales. Mortgage and gift rows
+      // record a transaction but not an arm's-length price, so they would drag the
+      // median; the brief's literal 'Sales' matches neither of this schema's values.
+      transactionType: { in: ['sale', 'off_plan_sale'] },
+      pricePerSqft: { gt: 100 },
+      transactionDate: { gte: since },
+    },
+    select: {
+      transactionDate: true,
+      pricePerSqft: true,
+      priceAed: true,
+      areaSqft: true,
+      floorNumber: true,
+      buildingName: true,
+    },
+    orderBy: { transactionDate: 'desc' },
+    // The brief caps at 50. 200 keeps the median stable on a busy community while
+    // staying bounded; the same-building subset used for the estimate is drawn from
+    // whichever set this returns.
+    take: 200,
+  })
+
+  // Why there are too few comparables decides what the user should do next, and
+  // there are three genuinely different answers:
+  //
+  //   * sales exist in the deployment, just not for this query → widen the search;
+  //   * the feed is connected but has delivered nothing yet → say that, so nobody
+  //     goes looking for a wider area that would also be empty;
+  //   * no feed at all → name the missing credential.
+  //
+  // Keying this on the env flag alone was wrong: with sales on record, a thin query
+  // still claimed the feed was missing. The extra count runs only on the refusal
+  // path, so a successful valuation never pays for it.
+  const insufficient = async (found: number) => {
+    const feedConfigured = dldConfigured()
+    let salesOnRecord = found > 0
+    if (!salesOnRecord) {
+      salesOnRecord =
+        (await prisma.transaction.count({
+          where: { transactionType: { in: ['sale', 'off_plan_sale'] } },
+        })) > 0
+    }
+
+    const message = salesOnRecord
+      ? `Only ${found} comparable sale${found === 1 ? '' : 's'} in ${community.nameEn} in the last ` +
+        `${COMP_WINDOW_DAYS} days at this bedroom count and size (at least ${MIN_COMPS} are needed). ` +
+        'Widen the size range, or check a busier neighbouring area.'
+      : feedConfigured
+        ? `No comparable sales in ${community.nameEn} yet. The transaction feed is connected but ` +
+          'has not delivered records for this area — this tool values property from real recorded ' +
+          'sales only, so there is nothing to compare against.'
+        : 'The DLD transaction feed is not connected on this deployment, so there are no recorded ' +
+          'sales to compare against. This tool values property from real recorded sales only — it ' +
+          'does not estimate from anything else. Set DUBAI_PULSE_API_KEY to enable it.'
+
+    return c.json({
+      error: 'Insufficient comparable transactions',
+      message,
+      compsFound: found,
+      dldConnected: feedConfigured,
+      salesOnRecord,
+    }, 422)
+  }
+
+  if (comps.length < MIN_COMPS) return await insufficient(comps.length)
+
+  const subject: CmaSubject = {
+    buildingName,
+    community: community.nameEn,
+    bedrooms,
+    sizeSqft,
+    floor: floorNum,
+    condition,
+    listingPrice,
+  }
+
+  const result = computeCma(subject, comps)
+  if (!result) return await insufficient(0)
+
+  await trackEvent(c, 'cma_run', {
+    community: community.nameEn,
+    bedrooms,
+    sizeSqft,
+    compsUsed: result.compsUsed,
+    compBasis: result.compBasis,
+  })
+  return c.json(result)
 })
 
 // ─── Exchange Rates ──────────────────────────────────────────────────────────
