@@ -318,7 +318,14 @@ console.log('\n── PART C: the page is wired, and says what it does ──')
   check('no invented valuation when the API refuses', pageSrc.includes('failure.message'))
 
   check('App registers the CMA page', appSrc.includes("page === 'cma' && <CmaPage"))
-  check('App routes /cma to the CMA page', appSrc.includes("if (path === '/cma') setPage('cma')"))
+  // Day 13: resolution moved from a hardcoded `if (path === '/cma')` to a PAGE_PATHS
+  // lookup, because the chain had silently dropped /export and /market-pulse. Assert the
+  // path is published AND that resolution is data-driven.
+  check(
+    'App routes /cma to the CMA page',
+    /cma:\s*'\/cma'/.test(appSrc) &&
+      /const fromPath = \(Object\.keys\(PAGE_PATHS\) as Page\[\]\)\.find/.test(appSrc),
+  )
   check('App exposes CMA in navigation', appSrc.includes("{ id: 'cma' as Page, label: 'CMA'"))
 }
 

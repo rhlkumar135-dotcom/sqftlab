@@ -230,7 +230,16 @@ console.log('\n── TASK C: the pricing page and its guardrails ──')
   const envFile = await Bun.file('.env').text()
   check('PAYMENTS_ENABLED is still explicitly false (not flipped by Day 5)', /^PAYMENTS_ENABLED=false$/m.test(envFile))
   const app = await Bun.file('src/App.tsx').text()
-  check('/pricing URL selects the pricing page', app.includes("if (path === '/pricing') setPage('pricing')"))
+  // Day 13: the initial-path resolver became a PAGE_PATHS lookup instead of a
+  // hand-maintained `if (path === '/x')` chain — that chain had silently omitted
+  // /export and /market-pulse, so a cold deep link rendered the home page. This now
+  // asserts BOTH that /pricing publishes a path and that resolution is data-driven,
+  // which is the property that keeps it from being forgotten again.
+  check(
+    '/pricing URL selects the pricing page',
+    /pricing:\s*'\/pricing'/.test(app) &&
+      /const fromPath = \(Object\.keys\(PAGE_PATHS\) as Page\[\]\)\.find/.test(app),
+  )
 }
 
 console.log(`\n═══ DAY 5: ${passed} passed, ${failed} failed ═══`)

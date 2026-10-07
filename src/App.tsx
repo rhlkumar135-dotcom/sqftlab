@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -16,6 +16,8 @@ import CapitalFlowPage from '@/components/CapitalFlowPage'
 import BuildingSearchPage from '@/components/BuildingSearchPage'
 import BuildingPage from '@/components/BuildingPage'
 import ExportPage from '@/components/ExportPage'
+import AiChatWidget from '@/components/AiChatWidget'
+import MarketPulsePage from '@/components/MarketPulsePage'
 import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
@@ -293,7 +295,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -305,6 +307,9 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   'capital-flow': '/capital-flow',
   buildings: '/buildings',
   export: '/export',
+  // Public SEO surface — it publishes a real URL because crawlers and shared links
+  // need one, and because it is the only page here that works without a session.
+  'market-pulse': '/market-pulse',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -328,6 +333,7 @@ const NAV = [
   { id: 'buildings' as Page, label: 'Buildings', icon: Building2 },
   { id: 'capital-flow' as Page, label: 'Capital Flow', icon: Globe },
   { id: 'export' as Page, label: 'Export', icon: Download },
+  { id: 'market-pulse' as Page, label: 'Pulse', icon: Activity },
 ]
 
 function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
@@ -3218,17 +3224,13 @@ function AppInner() {
     }
     const path = window.location.pathname.replace(/\/+$/, '')
     if (path === '/auth/signin' || path === '/signin') setPage('signin')
-    // Day 5: the pricing page is public and lives at /pricing, so the URL has to
-    // select it — the nav button alone left a shared /pricing link on the landing page.
-    if (path === '/pricing') setPage('pricing')
-    // Day 6: same reasoning — a shared /cma link must open the CMA tool, not the landing page.
-    if (path === '/cma') setPage('cma')
-    // Day 8: a shared /portfolio link opens the dashboard rather than the landing page.
-    if (path === '/portfolio') setPage('portfolio')
-    // Day 9/10: two tools published after the nav was built, plus the first
-    // parameterised route in the app.
-    if (path === '/capital-flow') setPage('capital-flow')
-    if (path === '/buildings') setPage('buildings')
+    // Pages that publish a URL resolve through PAGE_PATHS rather than a hand-maintained
+    // if-chain. The chain here had grown one `if` per day and silently omitted later
+    // entries — `/export` (Day 11) and `/market-pulse` (Day 13) both fell through to the
+    // landing page on a cold load even though the URL was correct, while `navigate` and
+    // the popstate handler (which already do this lookup) worked. One source of truth.
+    const fromPath = (Object.keys(PAGE_PATHS) as Page[]).find((k) => PAGE_PATHS[k] === path)
+    if (fromPath) setPage(fromPath)
     const bm = BUILDING_PATH.exec(path)
     if (bm) {
       setSelectedBuilding(decodeURIComponent(bm[1]))
@@ -3325,6 +3327,7 @@ function AppInner() {
       {page === 'capital-flow' && <CapitalFlowPage onNavigate={navigate} />}
       {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
       {page === 'export' && <ExportPage onNavigate={navigate} />}
+      {page === 'market-pulse' && <MarketPulsePage onBack={() => navigate('landing')} />}
       {page === 'building' && (
         <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
       )}
@@ -3335,9 +3338,14 @@ function AppInner() {
       {page === 'waitlist' && <WaitlistPage setPage={navigate} />}
       {page === 'glossary' && <Glossary />}
       {page === 'signin' && <SignInPage setPage={navigate} />}
+      {/* Day 13 Task C — the assistant is mounted once at the shell level, not per page,
+          so the conversation survives navigation instead of resetting on every route
+          change. */}
+      <AiChatWidget onNavigate={navigate} />
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
           <button onClick={() => navigate('analytics')} className="transition-colors hover:text-white">Market Analytics</button>
+          <button onClick={() => navigate('market-pulse')} className="transition-colors hover:text-white">Market Pulse</button>
           <button onClick={() => navigate('intelligence')} className="transition-colors hover:text-white">Pro Intelligence</button>
           <button onClick={() => navigate('pricing')} className="transition-colors hover:text-white">Pricing</button>
           <button onClick={() => navigate('yield')} className="transition-colors hover:text-white">Yield Calculator</button>

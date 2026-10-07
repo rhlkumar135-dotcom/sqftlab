@@ -30,6 +30,7 @@
     "@shogo-ai/sdk": "^1.10.0",
     "@stripe/stripe-js": "^10.0.0",
     "@types/leaflet": "^1.9.22",
+    "ai": "^6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.3.0",

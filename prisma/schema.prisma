@@ -820,3 +820,32 @@ model EjariContract {
   @@index([buildingName, contractStart])
   @@map("ejari_contracts")
 }
+
+/// Day 13 — one turn of an AI market-assistant conversation.
+///
+/// `sessionId` is the identity the daily quota is counted against, and its value is
+/// deliberately NOT taken from a request header. The brief keys guests on an
+/// `X-Session-Id` header, which the caller supplies — so rotating it would reset the
+/// allowance and make the "10 messages/day" limit unenforceable. Here a signed-in
+/// caller is keyed on the resolved account id and a guest on the server-issued guest
+/// cookie (`readGuestId`), which the client cannot mint.
+///
+/// `userId` is kept separate rather than folded into `sessionId` so a conversation
+/// started as a guest can be recognised later if that cookie ever becomes an account.
+model AiChatMessage {
+  id         String   @id @default(cuid())
+  /// The account id when signed in; null for a guest turn.
+  userId     String?  @map("user_id")
+  /// Quota key: account id when signed in, otherwise the guest cookie id.
+  sessionId  String   @map("session_id")
+  /// "user" | "assistant"
+  role       String
+  content    String
+  /// Total tokens billed for an assistant turn; null on user turns.
+  tokensUsed Int?     @map("tokens_used")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([sessionId, createdAt])
+  @@map("ai_chat_messages")
+}

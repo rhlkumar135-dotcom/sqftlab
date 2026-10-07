@@ -38,6 +38,12 @@ import {
   rowLimitFor, EXCEL_MIN_RANK, SAFETY_CEILING,
   type ExportFilters, type ExportFormat,
 } from './src/lib/export-data'
+import {
+  AI_HISTORY_PAGE, AI_MAX_MESSAGE_CHARS, AI_MODEL, MARKET_CONTEXT_DAYS,
+  aiDailyLimitFor, aiTierIsUnlimited,
+  buildMarketContext, buildSystemPrompt, generateAssistantReply,
+  normalizeHistory, resolveAiCredential,
+} from './src/lib/ai-chat'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -5429,6 +5435,263 @@ app.get('/sqftlab/export/history', async (c) => {
     select: { id: true, eventData: true, createdAt: true },
   })
   return c.json({ exports: events })
+})
+
+// ─── AI market assistant (Day 13 Task B) ─────────────────────────────────────
+//
+// QUOTA IDENTITY — not the brief's, and deliberately so.
+//
+// The brief counts messages with `...(userId ? { userId } : { sessionId })`, where
+// `sessionId` comes from the `X-Session-Id` request header. A header is caller-supplied,
+// so a script rotates it per call and the "10 messages/day" cap never fires — the same
+// shape as the Day 4 limiter that handed every cookie-less client a fresh bucket.
+//
+// Here the key is an identity this server issues: the account id when signed in,
+// otherwise the guest cookie the caller *presented*. A caller presenting no cookie at
+// all shares one bucket, which bounds it too. `AiChatMessage.sessionId` records
+// whichever key was used, so the quota is auditable after the fact.
+const AI_QUOTA_ANON_KEY = 'anon:no-cookie'
+
+/** Local midnight — this deployment runs Asia/Dubai, so the day turns at UTC+4. */
+function aiQuotaWindowStart(now = new Date()): Date {
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+function aiQuotaKeyFor(c: Context): string {
+  return getUserId(c) ?? readGuestId(c) ?? AI_QUOTA_ANON_KEY
+}
+
+app.post('/sqftlab/ai/chat', async (c) => {
+  const accountId = getUserId(c)
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const quotaKey = aiQuotaKeyFor(c)
+  const limit = aiDailyLimitFor(tier)
+  const unlimited = aiTierIsUnlimited(tier)
+  const windowStart = aiQuotaWindowStart()
+  const resetAt = new Date(windowStart.getTime() + 86_400_000).toISOString()
+
+  const used = await prisma.aiChatMessage.count({
+    where: { sessionId: quotaKey, role: 'user', createdAt: { gte: windowStart } },
+  })
+
+  if (used >= limit) {
+    return c.json(
+      { error: 'Daily AI message limit reached', limit, used, unlimited, upgradeUrl: '/pricing', resetAt },
+      429,
+    )
+  }
+
+  const body = await readJsonBody(c)
+  const raw = typeof body.message === 'string' ? body.message.trim() : ''
+  if (raw === '') return c.json({ error: 'Message required' }, 400)
+
+  // Truncated, not rejected: the brief places no bound on the message, so a caller
+  // could post an unbounded string and spend a quota slot on it.
+  const message = raw.slice(0, AI_MAX_MESSAGE_CHARS)
+  // Rebuilt from validated turns rather than trusted — see normalizeHistory.
+  const history = normalizeHistory(body.history)
+
+  const credential = resolveAiCredential()
+  if (!credential) {
+    return c.json(
+      {
+        error: 'The AI assistant is not configured on this deployment.',
+        code: 'ai_unavailable',
+        configured: false,
+        detail: 'No model credential found. Expected AI_PROXY_TOKENS (pod) or SHOGO_API_KEY.',
+      },
+      503,
+    )
+  }
+
+  const ctx = await buildMarketContext(MARKET_CONTEXT_DAYS)
+
+  let reply: string
+  let tokensUsed: number
+  try {
+    ;({ reply, tokensUsed } = await generateAssistantReply({
+      credential,
+      system: buildSystemPrompt(ctx),
+      history,
+      message,
+    }))
+  } catch (err) {
+    // Quota is deliberately NOT consumed. A call that produced no answer cost nothing,
+    // and charging for it would lock a caller out of a feature that never replied.
+    return c.json(
+      {
+        error: 'The AI assistant could not answer just now.',
+        code: 'ai_error',
+        configured: true,
+        detail: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+      },
+      502,
+    )
+  }
+
+  // Both rows written together and only once a reply exists, so the counter can never
+  // exceed the number of answers actually delivered. The brief writes fire-and-forget
+  // and counts before the call, which charges for failures and loses the turn entirely
+  // if the write is dropped.
+  await prisma.aiChatMessage.createMany({
+    data: [
+      { userId: accountId, sessionId: quotaKey, role: 'user', content: message, tokensUsed: null },
+      { userId: accountId, sessionId: quotaKey, role: 'assistant', content: reply, tokensUsed },
+    ],
+  })
+
+  await trackEvent(c, 'ai_chat', { tier, model: AI_MODEL, tokensUsed, dataBacked: ctx.dataAvailable })
+
+  return c.json({
+    reply,
+    remaining: Math.max(0, limit - used - 1),
+    limit,
+    unlimited,
+    model: AI_MODEL,
+    /** False when the register is empty, so the UI can say why answers are general. */
+    dataBacked: ctx.dataAvailable,
+    resetAt,
+  })
+})
+
+// GET /sqftlab/ai/chat/history — recent turns, plus the quota state so the widget can
+// render "X remaining today" on open without having sent a message first.
+app.get('/sqftlab/ai/chat/history', async (c) => {
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const quotaKey = aiQuotaKeyFor(c)
+  const limit = aiDailyLimitFor(tier)
+
+  const [rows, used] = await Promise.all([
+    prisma.aiChatMessage.findMany({
+      where: { sessionId: quotaKey },
+      orderBy: { createdAt: 'desc' },
+      take: AI_HISTORY_PAGE,
+      select: { role: true, content: true, createdAt: true },
+    }),
+    prisma.aiChatMessage.count({
+      where: { sessionId: quotaKey, role: 'user', createdAt: { gte: aiQuotaWindowStart() } },
+    }),
+  ])
+
+  return c.json({
+    messages: rows.reverse(),
+    used,
+    remaining: Math.max(0, limit - used),
+    limit,
+    unlimited: aiTierIsUnlimited(tier),
+    configured: resolveAiCredential() !== null,
+  })
+})
+
+// ─── Public Market Pulse (Day 13 Task D) ─────────────────────────────────────
+//
+// PUBLIC: no auth, no tier gate — this is the SEO surface, and a login wall would
+// defeat its purpose. The `/sqftlab/*` middleware still rate-limits it, which is the
+// only protection a public endpoint needs here.
+//
+// Cached for a day in-process rather than in Redis (there is no Redis in this project;
+// see the note on the tier cache). The cache is process-local, so each instance keeps
+// its own copy and a restart refills it — acceptable for data that changes daily.
+const MARKET_PULSE_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The brief computes a `quarterly` aggregate and never reads it, so it is not here.
+ * Its `area`/`amount`/`pricePsf` columns do not exist either: transactions key off
+ * `communityId`, and the money columns are `priceAed` / `pricePerSqft`.
+ */
+async function buildMarketPulse() {
+  const since = new Date()
+  since.setDate(since.getDate() - MARKET_CONTEXT_DAYS)
+
+  const saleWindow = {
+    transactionType: { in: [...SALE_TXN_TYPES] },
+    transactionDate: { gte: since },
+  }
+
+  const [month, grouped, premium] = await Promise.all([
+    prisma.transaction.aggregate({
+      where: { ...saleWindow, pricePerSqft: { gt: 100 } },
+      _avg: { pricePerSqft: true },
+      _count: { id: true },
+      _sum: { priceAed: true },
+    }),
+    prisma.transaction.groupBy({
+      by: ['communityId'],
+      where: saleWindow,
+      _avg: { pricePerSqft: true },
+      _count: { id: true },
+      _sum: { priceAed: true },
+      orderBy: { _count: { id: 'desc' } },
+      take: 10,
+    }),
+    prisma.transaction.findMany({
+      where: { ...saleWindow, pricePerSqft: { gt: 100 } },
+      orderBy: { pricePerSqft: 'desc' },
+      take: 5,
+      select: {
+        buildingName: true, pricePerSqft: true, priceAed: true, transactionDate: true,
+        community: { select: { nameEn: true } },
+      },
+    }),
+  ])
+
+  const names = await prisma.community.findMany({
+    where: { id: { in: grouped.map((g) => g.communityId) } },
+    select: { id: true, nameEn: true },
+  })
+  const nameById = new Map(names.map((n) => [n.id, n.nameEn]))
+  const round = (v: number | null): number => (v === null ? 0 : Math.round(v))
+
+  const totalTransactions = month._count.id
+
+  return {
+    generatedAt: new Date().toISOString(),
+    period: `${MARKET_CONTEXT_DAYS} days`,
+    periodDays: MARKET_CONTEXT_DAYS,
+    source: 'sqftLab transaction register',
+    // The page must not present an empty register as a market where nothing sold.
+    // Zeros here mean "no data loaded", which is a different statement from "no sales".
+    dataAvailable: totalTransactions > 0,
+    note:
+      totalTransactions > 0
+        ? null
+        : `No sales are loaded for the last ${MARKET_CONTEXT_DAYS} days. Figures below are zero because the register is empty, not because the market was inactive.`,
+    market: {
+      totalTransactions,
+      avgPsfAed: round(month._avg.pricePerSqft),
+      totalVolumeAed: month._sum.priceAed ?? 0,
+    },
+    topAreas: grouped.map((g) => ({
+      area: nameById.get(g.communityId) ?? g.communityId,
+      count: g._count.id,
+      avgPsfAed: round(g._avg.pricePerSqft),
+      volumeAed: g._sum.priceAed ?? 0,
+    })),
+    premiumDeals: premium.map((t) => ({
+      area: t.community?.nameEn ?? '',
+      building: t.buildingName ?? '',
+      psfAed: round(t.pricePerSqft),
+      totalAed: t.priceAed,
+      date: t.transactionDate.toISOString().slice(0, 10),
+    })),
+  }
+}
+
+let marketPulseCache: { body: Awaited<ReturnType<typeof buildMarketPulse>>; expiresAt: number } | null = null
+
+app.get('/sqftlab/public/market-pulse', async (c) => {
+  if (marketPulseCache !== null && marketPulseCache.expiresAt > Date.now()) {
+    c.header('X-Market-Pulse-Cache', 'hit')
+    return c.json(marketPulseCache.body)
+  }
+
+  const body = await buildMarketPulse()
+  marketPulseCache = { body, expiresAt: Date.now() + MARKET_PULSE_TTL_MS }
+  c.header('X-Market-Pulse-Cache', 'miss')
+  c.header('Cache-Control', 'public, max-age=3600')
+  return c.json(body)
 })
 
 // Catch-all — must be registered LAST so every real route wins.

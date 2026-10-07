@@ -20,6 +20,7 @@ for f in scripts/verify-*.ts; do
     verify-deal-engine) cp prisma/dev.db /tmp/deal-e2e.db; url="file:/tmp/deal-e2e.db" ;;
     verify-day11) cp prisma/dev.db /tmp/day11-e2e.db; url="file:/tmp/day11-e2e.db" ;;
     verify-day12) cp prisma/dev.db /tmp/day12-e2e.db; url="file:/tmp/day12-e2e.db" ;;
+    verify-day13) cp prisma/dev.db /tmp/day13-e2e.db; url="file:/tmp/day13-e2e.db" ;;
     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
