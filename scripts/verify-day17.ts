@@ -151,6 +151,16 @@ async function main() {
       pre.headers.get('access-control-allow-origin') === 'https://sqftlab.com',
       String(pre.headers.get('access-control-allow-origin')),
     )
+
+    // The SPA shell is served by server.tsx, outside the /api mount where custom-routes
+    // lives — so the API middleware never sees it. It is the response that most needs
+    // X-Frame-Options, and setting the headers only on /api left every rendered page
+    // without them.
+    for (const path of ['/', '/docs', '/api-keys']) {
+      const r = await req(path)
+      check(`SPA shell ${path}: X-Frame-Options`, r.headers.get('x-frame-options') === 'DENY', String(r.headers.get('x-frame-options')))
+      check(`SPA shell ${path}: X-Content-Type-Options`, r.headers.get('x-content-type-options') === 'nosniff')
+    }
   }
 
   // ── E3: environment audit ──────────────────────────────────────────────────

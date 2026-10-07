@@ -78,7 +78,26 @@ app.use('*', async (c, next) => {
 //    previous build's asset names from cache.
 app.use('*', async (c, next) => {
   await next()
+  // The /api mount answers through custom-routes, which sets the security headers itself
+  // (see the "Security headers (Day 17 Task E2)" block there). This branch is for the
+  // responses that mount never sees — the SPA shell and its assets.
+  //
+  // It matters more here than on the API: X-Frame-Options is what stops this app being
+  // framed by another site, and a JSON API is not what gets framed. Setting them only in
+  // custom-routes left every rendered page without them.
   if (c.req.path.startsWith('/api/')) return
+  try {
+    c.header('X-Content-Type-Options', 'nosniff')
+    c.header('X-Frame-Options', 'DENY')
+    c.header('X-XSS-Protection', '1; mode=block')
+    c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
+    c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    if (process.env.NODE_ENV === 'production') {
+      c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    }
+  } catch {
+    // Response already committed (streaming) — best-effort, as elsewhere.
+  }
   if (/\.(js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(c.req.path)) {
     c.header('Cache-Control', 'public, max-age=31536000, immutable')
   } else {
