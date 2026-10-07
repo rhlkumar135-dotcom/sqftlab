@@ -6683,6 +6683,619 @@ app.post('/sqftlab/onboarding/complete', async (c) => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Day 16 — Deal Origination Network
+//
+// A private, enterprise-only layer where members post investment opportunities
+// ("deal briefs") and other members express interest.
+//
+// NAMING. The brief specifies `/sqftlab/deals`. That path is taken: `GET
+// /sqftlab/deals` is the Day 8 market scan (listings 8%+ below their area's DLD
+// median) and has four consumers — the SPA's Deals page, verify-day1,
+// verify-fixes and the offline snapshot. Two different resources answering on
+// one path (a listing feed on `GET /deals`, a deal brief on `GET /deals/:id`)
+// is a footgun, so the network is namespaced under `/sqftlab/deal-briefs` —
+// also the model's own name. The SPA still serves it at `/deals`, as asked.
+//
+// PRIVACY. server.tsx mounts the auto-generated CRUD at /api *before* this
+// file, which would expose every brief with no gate at all. In this deployment
+// that layer is dead: `createAllRoutes()` throws on a stale generated import
+// (`getVerificationTokenList` is missing from server-functions.ts) and
+// server.tsx's bare `catch {}` swallows it, so /api/deal-briefs answers 404
+// like every other generated route. Verified by request, not assumed. If that
+// layer is ever repaired these two models must be gated there as well.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DEAL_TYPES = ['acquisition', 'off-plan', 'portfolio-sale', 'distressed'] as const
+const DEAL_STATUSES = ['active', 'under-offer', 'closed'] as const
+const DEAL_NETWORK_TIER = 'enterprise' as const
+const DEAL_TITLE_MAX = 200
+const DEAL_DESC_MAX = 5_000
+const DEAL_MESSAGE_MAX = 2_000
+const DEAL_TXN_WINDOW_DAYS = 90
+const DEAL_COMP_WINDOW_DAYS = 180
+const DEAL_PAGE_SIZE = 50
+
+/** Enterprise gate shared by every route in the network. Answers 403. */
+function dealNetworkBlocked(c: Context) {
+  return requireTier(c, DEAL_NETWORK_TIER, 'Deal Origination Network')
+}
+
+async function readDealJson(c: Context): Promise<{ body?: unknown; error?: string }> {
+  try {
+    return { body: await c.req.json() }
+  } catch {
+    return { error: 'Body must be valid JSON' }
+  }
+}
+
+/** Optional numeric field: absent/empty becomes null, anything else must be in range. */
+function optNumber(
+  v: unknown,
+  min: number,
+  max: number,
+  label: string,
+): { value?: number | null; error?: string } {
+  if (v === undefined || v === null || v === '') return { value: null }
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return { error: `${label} must be a number` }
+  if (n < min || n > max) return { error: `${label} must be between ${min} and ${max}` }
+  return { value: n }
+}
+
+interface DealInput {
+  title: string
+  community: string
+  description: string
+  dealType: string
+  bedrooms: number | null
+  sizeSqftMin: number | null
+  sizeSqftMax: number | null
+  askingPriceAed: number | null
+  targetYieldPct: number | null
+  isConfidential: boolean
+}
+
+/**
+ * Validate and whitelist a create payload.
+ *
+ * The brief spreads the raw body into `prisma.dealBrief.create`, which lets a
+ * caller set `userId` (post as somebody else), `status` (a deal born "closed")
+ * and every `dld*` field (fabricating the market context the network's whole
+ * premise rests on). Same mass-assignment shape as the Day 17 white-label
+ * route, so the fields are enumerated rather than forwarded.
+ */
+function parseDealInput(raw: unknown): { data?: DealInput; error?: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'Body must be a JSON object' }
+  }
+  const b = raw as Record<string, unknown>
+
+  const title = typeof b.title === 'string' ? b.title.trim() : ''
+  if (title.length < 3 || title.length > DEAL_TITLE_MAX) {
+    return { error: `title must be 3-${DEAL_TITLE_MAX} characters` }
+  }
+
+  const community = typeof b.community === 'string' ? b.community.trim() : ''
+  if (community.length < 2 || community.length > 120) {
+    return { error: 'community must be 2-120 characters' }
+  }
+
+  const description = typeof b.description === 'string' ? b.description.trim() : ''
+  if (description.length < 10 || description.length > DEAL_DESC_MAX) {
+    return { error: `description must be 10-${DEAL_DESC_MAX} characters` }
+  }
+
+  const dealType = typeof b.dealType === 'string' ? b.dealType.trim() : ''
+  if (!(DEAL_TYPES as readonly string[]).includes(dealType)) {
+    return { error: `dealType must be one of: ${DEAL_TYPES.join(', ')}` }
+  }
+
+  const bedrooms = optNumber(b.bedrooms, 0, 50, 'bedrooms')
+  if (bedrooms.error) return { error: bedrooms.error }
+  if (bedrooms.value != null && !Number.isInteger(bedrooms.value)) {
+    return { error: 'bedrooms must be a whole number' }
+  }
+
+  const sizeMin = optNumber(b.sizeSqftMin, 1, 1_000_000, 'sizeSqftMin')
+  if (sizeMin.error) return { error: sizeMin.error }
+  const sizeMax = optNumber(b.sizeSqftMax, 1, 1_000_000, 'sizeSqftMax')
+  if (sizeMax.error) return { error: sizeMax.error }
+  if (sizeMin.value != null && sizeMax.value != null && sizeMin.value > sizeMax.value) {
+    return { error: 'sizeSqftMin cannot exceed sizeSqftMax' }
+  }
+
+  const price = optNumber(b.askingPriceAed, 1, 1e12, 'askingPriceAed')
+  if (price.error) return { error: price.error }
+  const yieldPct = optNumber(b.targetYieldPct, 0, 100, 'targetYieldPct')
+  if (yieldPct.error) return { error: yieldPct.error }
+
+  if (b.isConfidential !== undefined && typeof b.isConfidential !== 'boolean') {
+    return { error: 'isConfidential must be a boolean' }
+  }
+
+  return {
+    data: {
+      title,
+      community,
+      description,
+      dealType,
+      bedrooms: bedrooms.value ?? null,
+      sizeSqftMin: sizeMin.value ?? null,
+      sizeSqftMax: sizeMax.value ?? null,
+      askingPriceAed: price.value ?? null,
+      targetYieldPct: yieldPct.value ?? null,
+      isConfidential: (b.isConfidential as boolean | undefined) ?? true,
+    },
+  }
+}
+
+/**
+ * DLD market context for a community name.
+ *
+ * The brief queries `area: { contains, mode: 'insensitive' }` and
+ * `transactionType: 'Sales'`. None of that exists here: Transaction has no
+ * `area` column (it keys on `communityId`), the stored sale types are `sale`
+ * and `off_plan_sale`, and SQLite rejects `mode` outright. Both traps are
+ * already documented in src/lib/deals.ts and src/lib/community-match.ts.
+ *
+ * Returns nulls rather than a fallback number. This deployment has zero
+ * transaction rows, so a market level can only come from somewhere else, and a
+ * fabricated one is worse than an absent one — the UI states the absence.
+ */
+async function dealDldContext(communityName: string) {
+  const community = await findCommunityByName(communityName)
+  if (!community) {
+    return { communityId: null, communityName: null, avgPsf: null, transCount: 0, windowDays: DEAL_TXN_WINDOW_DAYS, matched: false }
+  }
+
+  const since = new Date()
+  since.setDate(since.getDate() - DEAL_TXN_WINDOW_DAYS)
+
+  const agg = await prisma.transaction.aggregate({
+    where: {
+      communityId: community.id,
+      transactionType: { in: [...SALE_TXN_TYPES] },
+      pricePerSqft: { gt: 100 },
+      transactionDate: { gte: since },
+    },
+    _avg: { pricePerSqft: true },
+    _count: { _all: true },
+  })
+
+  const avg = agg._avg.pricePerSqft
+  return {
+    communityId: community.id,
+    communityName: community.nameEn,
+    avgPsf: avg != null ? Math.round(avg) : null,
+    transCount: agg._count._all,
+    windowDays: DEAL_TXN_WINDOW_DAYS,
+    matched: true,
+  }
+}
+
+/**
+ * The area's asking-price level, with its provenance, for the deal cards.
+ *
+ * Kept separate from the DLD figure above on purpose. `medianAedSqft` carries a
+ * `psfSource` of "dld" or "listing", and while the DLD register is empty that
+ * listing-derived median is the only real market level available — presenting
+ * it as a DLD number would be a lie, but hiding it leaves the cards blank.
+ */
+async function dealMarketContext(communityName: string) {
+  const community = await findCommunityByName(communityName)
+  if (!community) return { communityName: null, medianAedSqft: null, source: null, matched: false }
+  return {
+    communityName: community.nameEn,
+    medianAedSqft: community.medianAedSqft > 0 ? community.medianAedSqft : null,
+    source: community.psfSource,
+    matched: true,
+  }
+}
+
+/** Escape interpolated values before they go into email HTML. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * Tell the poster somebody is interested.
+ *
+ * The brief imports `resend`, which is not a dependency of this project — the
+ * dynamic import would fail at runtime and the `await` would reject inside the
+ * request. The app already has a mail path (see sendMagicLinkEmail above), so
+ * this mirrors it and reports 'unconfigured' when no transport exists rather
+ * than pretending the message went out.
+ */
+async function sendDealInterestEmail(opts: {
+  to: string
+  posterName: string | null
+  dealTitle: string
+  dealId: string
+  community: string
+  interestedName: string | null
+  interestedCompany: string | null
+  message: string | null
+  contactOk: boolean
+}): Promise<'sent' | 'unconfigured'> {
+  const { createEmailOptional } = await import('@shogo-ai/sdk/email/server')
+  const email = createEmailOptional()
+  if (!email) return 'unconfigured'
+
+  const who = escapeHtml(opts.interestedName ?? 'A member')
+  const company = opts.interestedCompany ? ` (${escapeHtml(opts.interestedCompany)})` : ''
+  const title = escapeHtml(opts.dealTitle)
+  const community = escapeHtml(opts.community)
+  const posterName = escapeHtml(opts.posterName ?? 'there')
+  const link = `${process.env.APP_URL ?? 'https://sqftlab.com'}/deals/${encodeURIComponent(opts.dealId)}`
+
+  await email.send({
+    to: opts.to,
+    subject: `sqftLab: New expression of interest in "${opts.dealTitle}"`,
+    html:
+      `<p>Hi ${posterName},</p>` +
+      `<p><strong>${who}</strong>${company} has expressed interest in your deal:</p>` +
+      `<p><strong>${title}</strong> — ${community}</p>` +
+      (opts.message
+        ? `<blockquote style="border-left:3px solid #2563EB;padding-left:12px;color:#475569">${escapeHtml(opts.message)}</blockquote>`
+        : '') +
+      (opts.contactOk ? '<p>They consent to being contacted directly.</p>' : '') +
+      `<p><a href="${link}" style="background:#2563EB;color:white;padding:10px 20px;border-radius:6px;text-decoration:none">View Deal</a></p>`,
+  })
+  return 'sent'
+}
+
+// ─── List ────────────────────────────────────────────────────────────────────
+
+app.get('/sqftlab/deal-briefs', async (c) => {
+  const blocked = dealNetworkBlocked(c)
+  if (blocked) return blocked
+
+  const status = c.req.query('status') ?? 'active'
+  const dealType = c.req.query('dealType')
+  const community = c.req.query('community')?.trim()
+
+  if (!(DEAL_STATUSES as readonly string[]).includes(status)) {
+    return c.json({ error: `status must be one of: ${DEAL_STATUSES.join(', ')}` }, 400)
+  }
+  if (dealType && !(DEAL_TYPES as readonly string[]).includes(dealType)) {
+    return c.json({ error: `dealType must be one of: ${DEAL_TYPES.join(', ')}` }, 400)
+  }
+
+  // `contains` compiles to LIKE on SQLite, which is ASCII case-insensitive by
+  // default — so "marina" matches "Dubai Marina" without `mode: 'insensitive'`,
+  // which SQLite rejects.
+  const deals = await prisma.dealBrief.findMany({
+    where: {
+      status,
+      ...(dealType ? { dealType } : {}),
+      ...(community ? { community: { contains: community } } : {}),
+    },
+    include: {
+      // Never select email: the poster's address is not part of the network's
+      // public face, and a `select` that omits it cannot leak it later.
+      user: { select: { name: true, company: true } },
+      _count: { select: { expressions: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: DEAL_PAGE_SIZE,
+  })
+
+  const enriched = await Promise.all(
+    deals.map(async (d) => ({ ...d, marketContext: await dealMarketContext(d.community) })),
+  )
+
+  return c.json({
+    deals: enriched,
+    filters: { status, dealType: dealType ?? null, community: community ?? null },
+    dealTypes: [...DEAL_TYPES],
+    ...(enriched.length === 0
+      ? {
+          message:
+            'No deal briefs match. The network is private, so an empty result is normal until members post.',
+        }
+      : {}),
+  })
+})
+
+// ─── Own deals ──────────────────────────────────────────────────────────────
+//
+// Registered before `/:id` deliberately: Hono matches in registration order, so
+// a `/:id` route declared first would swallow `/mine` and look up a deal whose
+// id is the literal string "mine".
+
+app.get('/sqftlab/deal-briefs/mine', async (c) => {
+  const blocked = dealNetworkBlocked(c)
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const deals = await prisma.dealBrief.findMany({
+    where: { userId },
+    include: { _count: { select: { expressions: true } } },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  return c.json({ deals })
+})
+
+// ─── Create ─────────────────────────────────────────────────────────────────
+
+app.post('/sqftlab/deal-briefs', async (c) => {
+  const blocked = dealNetworkBlocked(c)
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const { body, error: bodyError } = await readDealJson(c)
+  if (bodyError) return c.json({ error: bodyError }, 400)
+
+  const parsed = parseDealInput(body)
+  if (!parsed.data) return c.json({ error: parsed.error }, 400)
+
+  const dld = await dealDldContext(parsed.data.community)
+
+  const deal = await prisma.dealBrief.create({
+    data: {
+      userId,
+      ...parsed.data,
+      dldAvgPsfAed: dld.avgPsf,
+      dldTransCount: dld.transCount,
+      dldLastUpdated: new Date(),
+    },
+    include: { _count: { select: { expressions: true } } },
+  })
+
+  await trackEvent(c, 'deal_posted', { community: parsed.data.community, dealType: parsed.data.dealType })
+
+  return c.json(
+    {
+      ...deal,
+      marketContext: await dealMarketContext(parsed.data.community),
+      // Whether the poster's area resolved, so an unmatched community reads as
+      // "we could not find this area" rather than "there is no market data".
+      communityMatched: dld.matched,
+    },
+    201,
+  )
+})
+
+// ─── Detail ─────────────────────────────────────────────────────────────────
+
+app.get('/sqftlab/deal-briefs/:id', async (c) => {
+  const blocked = dealNetworkBlocked(c)
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+
+  const deal = await prisma.dealBrief.findUnique({
+    where: { id: c.req.param('id') },
+    include: { user: { select: { name: true, company: true } } },
+  })
+  if (!deal) return c.json({ error: 'Deal not found' }, 404)
+
+  const isOwner = userId != null && deal.userId === userId
+
+  // Messages and consent flags are for the poster only. The brief's route
+  // returns `expressions` filtered to the caller, which never exposes the
+  // poster's inbox — that stays true here, and the owner's view is the one
+  // place the list appears.
+  const [expressions, myExpression, marketContext] = await Promise.all([
+    isOwner
+      ? prisma.dealExpression.findMany({
+          where: { dealId: deal.id },
+          include: { user: { select: { name: true, company: true } } },
+          orderBy: { createdAt: 'desc' },
+        })
+      : Promise.resolve([]),
+    !isOwner && userId
+      ? prisma.dealExpression.findUnique({
+          where: { dealId_userId: { dealId: deal.id, userId } },
+          select: { id: true, createdAt: true },
+        })
+      : Promise.resolve(null),
+    dealMarketContext(deal.community),
+  ])
+
+  // Recent sale comparables for the deal's area, from the register.
+  const community = await findCommunityByName(deal.community)
+  let comps: unknown[] = []
+  if (community) {
+    const since = new Date()
+    since.setDate(since.getDate() - DEAL_COMP_WINDOW_DAYS)
+    comps = await prisma.transaction.findMany({
+      where: {
+        communityId: community.id,
+        transactionType: { in: [...SALE_TXN_TYPES] },
+        pricePerSqft: { gt: 100 },
+        transactionDate: { gte: since },
+        ...(deal.bedrooms != null ? { beds: deal.bedrooms } : {}),
+      },
+      select: {
+        transactionDate: true,
+        pricePerSqft: true,
+        priceAed: true,
+        areaSqft: true,
+        beds: true,
+        buildingName: true,
+      },
+      orderBy: { transactionDate: 'desc' },
+      take: 10,
+    })
+  }
+
+  const { userId: _ownerId, ...safeDeal } = deal
+
+  return c.json({
+    deal: { ...safeDeal, isOwner },
+    comps,
+    compWindowDays: DEAL_COMP_WINDOW_DAYS,
+    marketContext,
+    expressions: isOwner ? expressions : undefined,
+    expressionCount: isOwner ? expressions.length : undefined,
+    myExpression,
+    // Explains an empty comparables table instead of leaving it looking broken.
+    compsNote: !community
+      ? `No area in the database matches "${deal.community}", so no comparables could be looked up.`
+      : comps.length === 0
+        ? `No registered sale transactions in ${community.nameEn} in the last ${DEAL_COMP_WINDOW_DAYS} days.`
+        : null,
+  })
+})
+
+// ─── Update (owner only) ────────────────────────────────────────────────────
+
+app.patch('/sqftlab/deal-briefs/:id', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const existing = await prisma.dealBrief.findFirst({
+    where: { id: c.req.param('id'), userId },
+    select: { id: true, status: true },
+  })
+  if (!existing) return c.json({ error: 'Deal not found or not yours' }, 404)
+
+  const { body, error: bodyError } = await readDealJson(c)
+  if (bodyError) return c.json({ error: bodyError }, 400)
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return c.json({ error: 'Body must be a JSON object' }, 400)
+  }
+  const b = body as Record<string, unknown>
+
+  // Only these three are updatable. The brief forwards the whole body, which
+  // would also let the owner rewrite `userId`, `dldAvgPsfAed` and `createdAt`.
+  const data: { status?: string; title?: string; description?: string } = {}
+
+  if (b.status !== undefined) {
+    if (typeof b.status !== 'string' || !(DEAL_STATUSES as readonly string[]).includes(b.status)) {
+      return c.json({ error: `status must be one of: ${DEAL_STATUSES.join(', ')}` }, 400)
+    }
+    data.status = b.status
+  }
+  if (b.title !== undefined) {
+    const title = typeof b.title === 'string' ? b.title.trim() : ''
+    if (title.length < 3 || title.length > DEAL_TITLE_MAX) {
+      return c.json({ error: `title must be 3-${DEAL_TITLE_MAX} characters` }, 400)
+    }
+    data.title = title
+  }
+  if (b.description !== undefined) {
+    const description = typeof b.description === 'string' ? b.description.trim() : ''
+    if (description.length < 10 || description.length > DEAL_DESC_MAX) {
+      return c.json({ error: `description must be 10-${DEAL_DESC_MAX} characters` }, 400)
+    }
+    data.description = description
+  }
+
+  if (Object.keys(data).length === 0) {
+    return c.json(
+      { error: `Nothing to update. Updatable fields: status, title, description.` },
+      400,
+    )
+  }
+
+  const updated = await prisma.dealBrief.update({
+    where: { id: existing.id },
+    data,
+    include: { _count: { select: { expressions: true } } },
+  })
+
+  if (data.status && data.status !== existing.status) {
+    await trackEvent(c, 'deal_status_changed', { dealId: existing.id, from: existing.status, to: data.status })
+  }
+
+  return c.json(updated)
+})
+
+// ─── Express interest ───────────────────────────────────────────────────────
+
+app.post('/sqftlab/deal-briefs/:id/express', async (c) => {
+  const blocked = dealNetworkBlocked(c)
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const deal = await prisma.dealBrief.findUnique({
+    where: { id: c.req.param('id') },
+    select: { id: true, userId: true, title: true, community: true, status: true },
+  })
+  if (!deal) return c.json({ error: 'Deal not found' }, 404)
+  if (deal.userId === userId) {
+    return c.json({ error: 'Cannot express interest in your own deal' }, 400)
+  }
+  // A closed deal cannot be introduced to anybody, so accepting interest would
+  // create a record nobody acts on.
+  if (deal.status === 'closed') {
+    return c.json({ error: 'This deal is closed and is no longer accepting interest' }, 409)
+  }
+
+  const { body, error: bodyError } = await readDealJson(c)
+  if (bodyError) return c.json({ error: bodyError }, 400)
+  if (body !== undefined && body !== null && (typeof body !== 'object' || Array.isArray(body))) {
+    return c.json({ error: 'Body must be a JSON object' }, 400)
+  }
+  const b = (body ?? {}) as Record<string, unknown>
+
+  let message: string | null = null
+  if (b.message !== undefined && b.message !== null && b.message !== '') {
+    if (typeof b.message !== 'string') return c.json({ error: 'message must be a string' }, 400)
+    message = b.message.trim()
+    if (message.length > DEAL_MESSAGE_MAX) {
+      return c.json({ error: `message must be at most ${DEAL_MESSAGE_MAX} characters` }, 400)
+    }
+    if (message === '') message = null
+  }
+  if (b.contactOk !== undefined && typeof b.contactOk !== 'boolean') {
+    return c.json({ error: 'contactOk must be a boolean' }, 400)
+  }
+  const contactOk = (b.contactOk as boolean | undefined) ?? false
+
+  // Upsert on the (dealId, userId) unique key, so expressing twice edits the
+  // first expression instead of stacking duplicates.
+  const expression = await prisma.dealExpression.upsert({
+    where: { dealId_userId: { dealId: deal.id, userId } },
+    update: { message, contactOk },
+    create: { dealId: deal.id, userId, message, contactOk },
+  })
+
+  const [poster, interested] = await Promise.all([
+    prisma.user.findUnique({ where: { id: deal.userId }, select: { email: true, name: true } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { name: true, company: true } }),
+  ])
+
+  let emailStatus: 'sent' | 'unconfigured' | 'failed' = 'unconfigured'
+  if (poster?.email) {
+    try {
+      emailStatus = await sendDealInterestEmail({
+        to: poster.email,
+        posterName: poster.name,
+        dealTitle: deal.title,
+        dealId: deal.id,
+        community: deal.community,
+        interestedName: interested?.name ?? null,
+        interestedCompany: interested?.company ?? null,
+        message,
+        contactOk,
+      })
+    } catch {
+      // A mail failure must not lose the expression of interest, which is the
+      // thing the poster can actually act on.
+      emailStatus = 'failed'
+    }
+  }
+
+  await trackEvent(c, 'deal_expression', { dealId: deal.id })
+  return c.json({ ...expression, emailStatus }, 201)
+})
+
 // Catch-all — must be registered LAST so every real route wins.
 //
 // The pattern is '*' and not '/api/*': server.tsx mounts this app with

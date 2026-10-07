@@ -88,6 +88,11 @@ model User {
   watchlists   Watchlist[]
   alerts       Alert[]
   dealAlerts   DealAlert[]
+  // Day 16 — the Deal Origination Network. Both sides are required: Prisma will
+  // not validate a relation declared on one model only, and the brief's schema
+  // declares only the owning side.
+  dealBriefs     DealBrief[]
+  dealExpressions DealExpression[]
   subscription Subscription?
   apiKeys      ApiKey[]
   whiteLabelConfig WhiteLabelConfig?
@@ -919,4 +924,80 @@ model WhiteLabelConfig {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("white_label_configs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Day 16 — Deal Origination Network
+//
+// A private, enterprise-only layer: members post investment opportunities
+// ("deal briefs") and other members express interest. It is NOT the public
+// listing feed — that is the pre-existing `/sqftlab/deals` endpoint, which
+// scans listings 8% below their area median. Different resource, different
+// audience; the API paths are kept apart for that reason (see custom-routes.ts).
+//
+// Deviations from the Day 16 brief's schema, each forced by this deployment:
+//   1. No `@db.Text` on `description`. The SQLite connector has no native types;
+//      Prisma rejects the attribute and the whole schema fails to validate.
+//   2. The two back-relation arrays on `User` (above). Prisma will not validate a
+//      relation that is declared on only one side, which the brief's version is.
+//   3. `@map`/`@@map` on multi-word columns, matching every other model here.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model DealBrief {
+  id     String @id @default(cuid())
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title          String
+  /// Free text as the poster typed it. Resolved to a Community id for the market
+  /// context below, but stored verbatim so a deal is never lost to a lookup miss.
+  community      String
+  bedrooms       Int?
+  sizeSqftMin    Float? @map("size_sqft_min")
+  sizeSqftMax    Float? @map("size_sqft_max")
+  askingPriceAed Float? @map("asking_price_aed")
+  targetYieldPct Float? @map("target_yield_pct")
+  /// acquisition | off-plan | portfolio-sale | distressed
+  dealType       String  @map("deal_type")
+  description    String
+  /// Informational only — the network is already enterprise-gated and every
+  /// member sees the same fields, so this is a request to handle the introduction
+  /// discreetly, not a redaction rule. See the note in custom-routes.ts.
+  isConfidential Boolean @default(true) @map("is_confidential")
+  /// active | under-offer | closed
+  status         String  @default("active")
+
+  /// Auto-populated from the Dubai Land Department transaction register for the
+  /// resolved community. Deliberately nullable and never guessed: this deployment
+  /// has no DLD transaction source connected, so these stay null and the UI says
+  /// so rather than showing a fabricated market level.
+  dldAvgPsfAed   Float?    @map("dld_avg_psf_aed")
+  dldTransCount  Int?      @map("dld_trans_count")
+  dldLastUpdated DateTime? @map("dld_last_updated")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  expressions DealExpression[]
+
+  @@index([community, status])
+  @@index([userId])
+  @@map("deal_briefs")
+}
+
+model DealExpression {
+  id     String    @id @default(cuid())
+  dealId String    @map("deal_id")
+  deal   DealBrief @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  userId String    @map("user_id")
+  user   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  message   String?
+  /// The expresser consents to being contacted directly by the poster. Defaults
+  /// to false — consent is opt-in, never implied by submitting the form.
+  contactOk Boolean  @default(false) @map("contact_ok")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([dealId, userId])
+  @@map("deal_expressions")
 }

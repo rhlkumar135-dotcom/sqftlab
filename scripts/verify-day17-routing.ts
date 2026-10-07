@@ -51,8 +51,6 @@ function section(t: string) { console.log(`\n── ${t}`) }
 interface Probe {
   method: string
   path: string
-  /** Set for routes that only exist from Day 16, which was never built. */
-  day16?: boolean
   body?: unknown
   expectStatus?: number
 }
@@ -103,12 +101,17 @@ const MANIFEST: Probe[] = [
   // Day 15
   { method: 'POST', path: '/api/sqftlab/onboarding/step' },
   { method: 'POST', path: '/api/sqftlab/onboarding/complete' },
-  // Day 16 — never implemented
-  { method: 'GET', path: '/api/sqftlab/deals', day16: true },
-  { method: 'GET', path: '/api/sqftlab/deals/mine', day16: true },
-  { method: 'GET', path: '/api/sqftlab/deals/verify17-nonexistent', day16: true },
-  { method: 'PATCH', path: '/api/sqftlab/deals/verify17-nonexistent', day16: true },
-  { method: 'POST', path: '/api/sqftlab/deals/verify17-nonexistent/express', day16: true },
+  // Day 8 — the below-market listing scan. Still mounted, and it owns `/sqftlab/deals`
+  // for that reason; the Day 16 network was namespaced away from it (`/deal-briefs`).
+  { method: 'GET', path: '/api/sqftlab/deals' },
+  // Day 16 — Deal Origination Network. These were "known missing" until Day 16 was built;
+  // they are now normal probes that must pass, so a regression fails the audit.
+  { method: 'GET', path: '/api/sqftlab/deal-briefs' },
+  { method: 'POST', path: '/api/sqftlab/deal-briefs' },
+  { method: 'GET', path: '/api/sqftlab/deal-briefs/mine' },
+  { method: 'GET', path: '/api/sqftlab/deal-briefs/verify17-nonexistent' },
+  { method: 'PATCH', path: '/api/sqftlab/deal-briefs/verify17-nonexistent' },
+  { method: 'POST', path: '/api/sqftlab/deal-briefs/verify17-nonexistent/express' },
   // Day 17
   { method: 'POST', path: '/api/sqftlab/white-label/config' },
   { method: 'GET', path: '/api/sqftlab/white-label/config' },
@@ -162,25 +165,25 @@ async function main() {
 
   // ── 1. Server routes ───────────────────────────────────────────────────────
   section('E4a — every manifest route is registered')
-  const missingDay17: Probe[] = []
-  const missingDay16: Probe[] = []
+  const missing: Probe[] = []
 
   for (const p of MANIFEST) {
     const r = await probe(p)
     const label = `${p.method} ${p.path}`
     if (r.registered) {
       check(label, true)
-    } else if (p.day16) {
-      missingDay16.push(p)
     } else {
-      missingDay17.push(p)
+      missing.push(p)
       check(label, false, r.detail)
     }
   }
 
-  if (missingDay16.length > 0) {
-    console.log(`\n  ⚠ ${missingDay16.length} Day 16 (deals) route(s) not mounted — that day was never implemented:`)
-    for (const p of missingDay16) console.log(`      ${p.method} ${p.path}`)
+  // Day 17 kept a `day16` escape hatch here because that day had not been built and the
+  // brief's summary claimed otherwise. Day 16 now ships, so the hatch is gone: a missing
+  // deal-brief route fails the audit like any other.
+  if (missing.length > 0) {
+    console.log(`\n  ⚠ ${missing.length} manifest route(s) not mounted:`)
+    for (const p of missing) console.log(`      ${p.method} ${p.path}`)
   }
 
   // ── 2. Tier gating ─────────────────────────────────────────────────────────

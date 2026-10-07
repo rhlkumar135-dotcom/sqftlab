@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2 } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2, Network } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -22,6 +22,8 @@ import MortgagePage from '@/components/MortgagePage'
 import PortfolioPage from '@/components/PortfolioPage'
 import DocsPage from '@/components/DocsPage'
 import ApiKeysPage from '@/components/ApiKeysPage'
+import DealsNetworkPage from '@/components/DealsNetworkPage'
+import DealDetailPage from '@/components/DealDetailPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { EmptyState } from '@/components/EmptyState'
@@ -283,7 +285,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys' | 'deal-network' | 'deal'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -305,6 +307,12 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   // API-key page); `/api-keys` is Pro-gated server-side, so the URL is safe to share.
   docs: '/docs',
   'api-keys': '/api-keys',
+  // Day 16: the Deal Origination Network publishes `/deals`, which is the route the
+  // brief asks for and — checked before claiming it — an unpublished URL in this app.
+  // Note the page id is `deal-network`, NOT `deals`: `deals` is the older Day 8
+  // below-market listing scan, which also owns the API path `/sqftlab/deals`. The two
+  // features share a name but not a resource, so only the URL is handed over here.
+  'deal-network': '/deals',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -312,6 +320,11 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
 // per building — the slug lives in `selectedBuilding`, and both the initial path
 // parse and popstate resolve it through this one pattern.
 const BUILDING_PATH = /^\/buildings\/([^/]+)$/
+
+// Day 16: `/deals/<id>` — one deal brief. Matched the same way as BUILDING_PATH, and
+// anchored with `[^/]+` so `/deals` itself (no id) does not match and still resolves to
+// the network list through PAGE_PATHS.
+const DEAL_PATH = /^\/deals\/([^/]+)$/
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -336,6 +349,9 @@ const NAV = [
   { id: 'market-pulse' as Page, label: 'Pulse', icon: Activity },
   { id: 'api-keys' as Page, label: 'API', icon: KeyRound },
   { id: 'docs' as Page, label: 'Docs', icon: FileCode2 },
+  // Day 16. Deliberately labelled "Deal Network", not "Deals": the entry above it is the
+  // Day 8 below-market scanner, and two nav items called "Deals" would be indistinguishable.
+  { id: 'deal-network' as Page, label: 'Deal Network', icon: Network },
 ]
 
 // Day 15 Task A — where the getting-started tour may appear. Excluded: the marketing and
@@ -3193,6 +3209,8 @@ function AppInner() {
   const [selectedCommunity, setSelectedCommunity] = useState('dubai-marina')
   const [selectedListing, setSelectedListing] = useState('')
   const [selectedBuilding, setSelectedBuilding] = useState<string | null>(null)
+  // Day 16: the deal brief being viewed, resolved from `/deals/<id>`.
+  const [selectedDeal, setSelectedDeal] = useState<string | null>(null)
 
   // Spec Part 16 — one SSE connection for the whole app.
   const live = useLiveMarket()
@@ -3208,6 +3226,21 @@ function AppInner() {
     const onHash = () => {
       if (window.location.hash.startsWith('#glossary-')) setPage('glossary')
       if (window.location.hash === '#signin') setPage('signin')
+      // Day 16: a parameterised route entered COLD arrives as `#/deals/<id>` or
+      // `#/buildings/<slug>` — the bundle's relative asset base means the pretty
+      // two-segment path cannot be cold-loaded (see the boot script in index.html).
+      // In-app navigation still writes the pretty path; this is the entry form.
+      const nested = /^#\/(deals|buildings)\/(.+)$/.exec(window.location.hash)
+      if (nested) {
+        const value = decodeURIComponent(nested[2])
+        if (nested[1] === 'deals') {
+          setSelectedDeal(value)
+          setPage('deal')
+        } else {
+          setSelectedBuilding(value)
+          setPage('building')
+        }
+      }
     }
     const path = window.location.pathname.replace(/\/+$/, '')
     if (path === '/auth/signin' || path === '/signin') setPage('signin')
@@ -3222,6 +3255,13 @@ function AppInner() {
     if (bm) {
       setSelectedBuilding(decodeURIComponent(bm[1]))
       setPage('building')
+    }
+    // Day 16: `/deals/<id>`. Checked after PAGE_PATHS (which resolved `/deals` alone to
+    // the network list), so the two never race.
+    const dm = DEAL_PATH.exec(path)
+    if (dm) {
+      setSelectedDeal(decodeURIComponent(dm[1]))
+      setPage('deal')
     }
     if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
@@ -3255,6 +3295,17 @@ function AppInner() {
     }
   }, [])
 
+  // Day 16: same contract for a deal brief — `/deals/<id>`, with the id in the history
+  // state so back/forward restores the right brief rather than the last one viewed.
+  const navigateDeal = useCallback((id: string) => {
+    setSelectedDeal(id)
+    setPage('deal')
+    const path = `/deals/${id}`
+    if (window.location.pathname !== path) {
+      window.history.pushState({ page: 'deal', slug: id }, '', path)
+    }
+  }, [])
+
   // Back/forward should move between pages, not out of the app.
   //
   // An entry created before our first pushState — the initial page load — carries
@@ -3275,6 +3326,12 @@ function AppInner() {
       if (bm) {
         setSelectedBuilding(decodeURIComponent(bm[1]))
         setPage('building')
+        return
+      }
+      const dm = DEAL_PATH.exec(path)
+      if (dm) {
+        setSelectedDeal(decodeURIComponent(dm[1]))
+        setPage('deal')
         return
       }
       const fromPath = (Object.keys(PAGE_PATHS) as Page[]).find((k) => PAGE_PATHS[k] === path)
@@ -3333,6 +3390,18 @@ function AppInner() {
       {page === 'market-pulse' && <MarketPulsePage onBack={() => navigate('landing')} />}
       {page === 'docs' && <DocsPage onNavigate={navigate} />}
       {page === 'api-keys' && <ApiKeysPage onNavigate={navigate} />}
+      {/* Day 16 — Deal Origination Network. `onNavigate` is only ever called with
+          'pricing' (the upgrade CTA), which `navigate` already routes. */}
+      {page === 'deal-network' && (
+        <DealsNetworkPage onOpenDeal={navigateDeal} onNavigate={(p) => navigate(p)} />
+      )}
+      {page === 'deal' && (
+        <DealDetailPage
+          dealId={selectedDeal}
+          onBack={() => navigate('deal-network')}
+          onNavigate={(p) => navigate(p)}
+        />
+      )}
       {page === 'building' && (
         <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
       )}

@@ -21,14 +21,24 @@
          `/auth/assets/…`, the static handler falls through to the SPA shell, and
          the browser receives HTML where it expects a JS module — a blank page.
          So client routes are entered through the root path plus a hash, and this
-         runs before the module script so the redirect wins the race. -->
+         runs before the module script so the redirect wins the race.
+
+         Day 16: this cost a blank page on `/deals/<id>`, and it had silently been
+         breaking `/buildings/<slug>` since Day 10 — a ONE-segment path (`/cma`,
+         `/deals`) is fine, because `./assets/x.js` resolves against `/`, but a
+         two-segment path resolves against `/deals/`. Parameterised routes are
+         rewritten to the same root+hash form rather than special-cased one at a
+         time, so the next one added is covered too. -->
     <script>
       ;(function () {
         var path = location.pathname.replace(/\/+$/, '')
         if (!path || path.indexOf('/p/') === 0) return
         var routes = { '/auth/signin': '#signin', '/signin': '#signin' }
         var hash = routes[path]
-        if (hash) location.replace('/' + hash)
+        if (hash) return location.replace('/' + hash)
+        // Parameterised routes: /deals/<id>, /buildings/<slug>.
+        var nested = /^\/(deals|buildings)\/(.+)$/.exec(path)
+        if (nested) location.replace('/#/' + nested[1] + '/' + nested[2])
       })()
     </script>
   </head>

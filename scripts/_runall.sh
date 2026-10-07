@@ -32,6 +32,10 @@ for f in scripts/verify-*.ts; do
     # read-mostly but creates two accounts for the IDOR check, so it gets the same guard.
     verify-day17) url="file:$(pwd)/prisma/dev.db" ;;
     verify-day17-routing) url="file:$(pwd)/prisma/dev.db" ;;
+    # Day 16 goes over HTTP too, for the same reason: the gate and the `/mine` vs `/:id`
+    # precedence are properties of the mounted app, not of a route handler, and it must
+    # write its fixtures where the server reads them. Same guard, same scoped teardown.
+    verify-day16) url="file:$(pwd)/prisma/dev.db" ;;
     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;

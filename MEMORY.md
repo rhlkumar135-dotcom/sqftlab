@@ -1038,3 +1038,76 @@ No commits, and 4 of its manifest routes are absent (`/deals/mine`, `POST /deals
 `/deals/:id`, `/deals/:id/express`). `/sqftlab/deals` exists but is the older Day-8
 "listings 8% below the area median" endpoint, not the deal network. The Day 17 brief's
 closing summary asserts "Days 1–17 complete" — that is false until Day 16 is built.
+
+---
+
+## Day 16 — Deal Origination Network (IMPLEMENTED this iteration)
+
+Closes the gap recorded above. Enterprise-only private deal-sharing: members post "deal
+briefs", other members express interest, DLD market context attaches automatically.
+
+### Where the brief and the codebase disagreed, and what was done
+
+| Brief says | Reality | Action |
+|---|---|---|
+| `GET/POST /sqftlab/deals` | `GET /sqftlab/deals` is the Day-8 below-market **listing scan** (4 consumers: App.tsx `Deals`, verify-day1, verify-fixes, build-snapshot) | Network namespaced at **`/sqftlab/deal-briefs`** (also the model name). Two resources on one path — a listing feed on `GET /deals` and a brief on `GET /deals/:id` — is a footgun |
+| page `/deals` | page id `deals` exists (Day-8 scan) but **owns no URL** — `PAGE_PATHS` never mapped it | Network gets page id `deal-network` → URL **`/deals`**, as the brief asks. Zero published URL changed |
+| `src/pages/*.tsx` | no `src/pages/` dir; app uses `src/components/` | `src/components/DealsNetworkPage.tsx`, `DealDetailPage.tsx` |
+| `description String @db.Text` | **SQLite has no native types**; `@db.Text` fails schema validation | plain `String` |
+| model declares only the owning side of each relation | Prisma rejects a one-sided relation | added `User.dealBriefs` / `User.dealExpressions` |
+| `area: { contains, mode: 'insensitive' }` | `Transaction` has **no `area`** column (keys on `communityId`); SQLite **rejects `mode`** | resolve via existing `findCommunityByName()` |
+| `transactionType: 'Sales'` | stored values are `sale` / `off_plan_sale` (already documented in `src/lib/deals.ts`) | `SALE_TXN_TYPES` |
+| `pricePsf` / `amount` / `size` / `bedrooms` | `pricePerSqft` / `priceAed` / `areaSqft` / `beds` | mapped |
+| `import { Resend }` + `RESEND_API_KEY` | **`resend` is not installed**; the app already has a mail path | `createEmailOptional()` (mirrors `sendMagicLinkEmail`), returns `'unconfigured'` rather than pretending |
+| spreads `...body` into `create` / `update` | mass-assignment: `userId`, `status`, all `dld*` fields settable by the client | whitelisted + range/enum validated (same class as Day-17 white-label) |
+| `status` any string on PATCH | would break the `status: 'active'` list filter | validated against the 3 statuses |
+| interpolates body into email HTML | HTML injection into the poster's inbox | `escapeHtml` on every interpolated value |
+
+### Deviation worth knowing: DLD context is honestly EMPTY here
+
+`Transaction` has **0 rows** (no `DUBAI_PULSE_API_KEY`), so `dldAvgPsfAed` is `null` and
+`dldTransCount` is `0` for every brief. It is never faked. The cards state "DLD avg: no
+registered transactions in <area>" and separately show the area's **listing-derived**
+median (`Community.medianAedSqft` + `psfSource`), labelled with its provenance.
+The demo account is `elite`, so it is correctly REFUSED (403) — the gate is spec-correct.
+
+### The `shogo generate` landmine (cost real time; read before any schema edit)
+
+`server.tsx` carries a `// SHOGO:CUSTOM-START asset-routing` block holding **two
+load-bearing middlewares** (the `/p/<projectId>/` + nested-asset fold-back, and the
+SPA-shell security/cache headers). Its own comment warns generate *relocates* it below the
+SPA catch-all. In practice it **DELETED it outright** (2 markers → 0, 73 lines), and the
+only symptom was two unrelated-looking suites failing:
+
+    verify-server-routing  → 1/8      (boots server.tsx on :4599)
+    verify-day17           → 6 failed (SPA shell X-Frame-Options null)
+
+Fix: `git checkout HEAD -- server.tsx`, then **never run `bun x shogo generate` without
+re-checking `grep -c SHOGO:CUSTOM server.tsx`**. Editing `prisma/schema.prisma` is enough
+to trigger the pipeline. Note the server-side fold-back does NOT cover the runtime preview:
+`/deals/assets/<bundle>` 404s on :8080, so a nested cold load has to be fixed client-side.
+
+### Nested cold-load paths render a BLANK page (pre-existing, fixed for the class)
+
+Vite is built with a RELATIVE asset base (`base: './'` in vite.config.ts, so one bundle
+serves both `/` and `/p/<projectId>/`). Therefore `./assets/x.js` resolves against the
+directory: `/cma` (one segment) is fine, `/deals/<id>` (two) becomes `/deals/assets/…` →
+404 → **blank page, no console error**. This had been silently breaking `/buildings/<slug>`
+since Day 10. `index.html` already redirected `/auth/signin` → `#signin` for this reason;
+that mechanism is now generalised to `/deals/<id>` and `/buildings/<slug>`, with `App.tsx`
+resolving `#/deals/<id>` / `#/buildings/<slug>`. In-app navigation still writes the pretty
+path.
+
+### Verified
+
+    scripts/verify-day16.ts       103 passed, 0 failed   (HTTP, gate/validation/privacy/mass-assignment)
+    scripts/_shot-day16.ts         61 passed, 0 failed   (real browser, 390px + 1440px, gate/list/detail/owner)
+    all 30 suites                 pass, 0 failed
+    tsc --noEmit                  0 errors outside src/generated/ (94 baseline, unchanged)
+
+Privacy check worth repeating after any change: `server.tsx` mounts the auto-generated CRUD
+at `/api` **before** custom-routes, so `/api/deal-briefs` would expose every brief ungated.
+It 404s today only because `createAllRoutes()` throws on a stale generated import
+(`getVerificationTokenList` missing from server-functions.ts) and server.tsx's bare
+`catch {}` swallows it — the whole generated CRUD layer is dead. `verify-day16.ts` asserts
+both `/api/deal-briefs` and `/api/deal-expressions` return 404.
