@@ -280,8 +280,25 @@ app.use('/sqftlab/*', async (c, next) => {
 
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
   const userId = getUserId(c)
+  // KNOWN LIMITATION, deliberately not "fixed" into something worse.
+  //
+  // The guest middleware mints an id for any request arriving without one, so
+  // `guestId` is always set. A cookie-less client therefore gets a fresh bucket per
+  // request and is effectively unlimited: measured on the origin,
+  // `X-RateLimit-Remaining` stayed pinned at 19 across four anonymous requests while
+  // the same four sent with a cookie stepped 19 → 18 → 17 → 16. So the guest
+  // allowance bounds nothing except clients that echo the cookie.
+  //
+  // Keying on the client address instead is NOT a safe substitute here. Measured
+  // through the deployed edge, every visitor arrives with socket address
+  // ::ffff:127.0.0.1 and no forwarding headers at all — cf-connecting-ip,
+  // x-forwarded-for and x-real-ip are all absent, and the edge also strips Cookie
+  // and Authorization. An address key would collapse the whole internet into ONE
+  // 20/min bucket and 429 the entire site. Per-client throughput control has to come
+  // from the edge (which does impose its own limit) or from the edge forwarding the
+  // real client address; until then, leave this keyed on the minted guest id.
   const guestId = c.get('guestId') as string | undefined
-  const identity = userId ?? guestId ?? c.req.header('CF-Connecting-IP') ?? 'anon'
+  const identity = userId ?? guestId ?? 'anon'
 
   const windowStart = Math.floor(Date.now() / 60_000)
   const key = `${identity}:${windowStart}`
@@ -1183,9 +1200,17 @@ async function pfFetchPage(catId: number, locationId: string, page: number): Pro
   }
 }
 
-function pfParse(property: any, source: string, purpose: string) {
+export function pfParse(property: any, source: string, purpose: string) {
   const price = property.price?.value ?? 0
-  const area = property.size ?? 0
+  // PropertyFinder returns `size` as `{ value, unit }`, not a bare number. Passing
+  // that object straight into `areaSqft` made EVERY upsert throw ("Expected Float,
+  // provided Object") and, because `object > 0` is false, silently computed
+  // pricePerSqft as 0 as well. scripts/scraper-pf.ts has handled both shapes since
+  // bdc193c; this in-server copy never got the same treatment, so the live crawl
+  // persisted nothing while still reporting a healthy run. Accept either shape.
+  const rawSize = property.size
+  const numericSize = typeof rawSize === 'number' ? rawSize : Number(rawSize?.value)
+  const area = Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 0
   const loc = property.location ?? {}
   return {
     externalId: `${source}_${property.id}`,
@@ -1264,6 +1289,8 @@ app.get('/sqftlab/scrape', async (c) => {
 
   const startedAt = Date.now()
   let totalSaved = 0
+  let saveFailures = 0
+  let firstSaveError: string | null = null
   const logs: string[] = []
 
   // Any row still marked 'running' when a new run starts belongs to a process
@@ -1355,7 +1382,14 @@ app.get('/sqftlab/scrape', async (c) => {
                 },
               })
               totalSaved++
-            } catch {}
+            } catch (err) {
+              // Never let one bad listing abort the crawl — but never lose it
+              // silently either. A bare `catch {}` here hid a total write failure
+              // (every listing rejected by Prisma) behind a run that reported
+              // success having saved 0. Count it, keep the first message, report both.
+              saveFailures++
+              if (!firstSaveError) firstSaveError = err instanceof Error ? err.message : String(err)
+            }
           }
           // Jittered 3–6s. The random component is the point: a fixed interval is
           // a trivially detectable pattern over a multi-minute crawl.
@@ -1433,13 +1467,19 @@ app.get('/sqftlab/scrape', async (c) => {
   const elapsed = Math.round((Date.now() - startedAt) / 1000)
   const finalCount = await prisma.listing.count()
 
+  if (saveFailures > 0) {
+    logs.push(`${saveFailures} listing(s) failed to persist — first error: ${firstSaveError}`)
+  }
+
   if (logRun) {
     await prisma.scraperLog
       .update({
         where: { id: logRun.id },
         data: {
-          status: circuitBroken ? 'partial' : 'success',
+          // A run that saved nothing because every write threw is not a success.
+          status: circuitBroken || saveFailures > 0 ? 'partial' : 'success',
           recordsNew: totalSaved,
+          errorMsg: firstSaveError ?? undefined,
           finishedAt: new Date(),
           durationMs: Date.now() - startedAt,
         },
@@ -1450,6 +1490,8 @@ app.get('/sqftlab/scrape', async (c) => {
   return c.json({
     ok: true,
     saved: totalSaved,
+    saveFailures,
+    firstSaveError,
     deleted: deleted.count,
     dealsDetected,
     totalListings: finalCount,
