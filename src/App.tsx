@@ -10,6 +10,7 @@ import { Sparkline } from '@/components/Sparkline'
 import { FeatureGate } from '@/components/FeatureGate'
 import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
+import PricingPage from '@/components/PricingPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
@@ -1875,72 +1876,6 @@ function YieldCalculator() {
   )
 }
 
-// ─── Pricing Page (Display Only — Spec §6) ──────────────────────────────────
-
-function PricingPage({ setPage }: { setPage: (p: Page) => void }) {
-  const [annual, setAnnual] = useState(false)
-  const tiers = [
-    { name: 'Free', price: 0, features: ['Homepage intelligence overview', 'District heatmap (PSF view)', '5 property intelligence reports/day', '3-month price trend', 'Transaction data count', 'Basic neighbourhood score'], cta: 'Get started free', primary: false },
-    { name: 'Pro', price: 49, annualPrice: 39, features: ['Everything in Free', 'Unlimited property reports', 'Full comps (up to 20 transactions)', 'Fair value range calculation', 'Rental yield with Ejari data', 'Investment score (0–100)', '12-month price trends', 'Yield calculator with district data', 'CSV export'], cta: 'Coming soon', primary: true },
-    { name: 'Elite', price: 149, annualPrice: 119, features: ['Everything in Pro', 'AI price forecast (6-month LSTM)', 'Deal alerts via email', 'Developer risk tracker', 'Portfolio performance analytics', 'PDF market reports', 'REST API (rate-limited) — keys issued on request', 'Priority 60-second data refresh'], cta: 'Coming soon', primary: false },
-  ]
-
-  return (
-    <div className="max-w-[960px] mx-auto px-4 py-12">
-      <div className="text-center mb-8">
-        <h2 className="text-3xl font-bold mb-3" style={{ color: 'var(--ink)' }}>Simple, transparent pricing</h2>
-        <p className="mb-6" style={{ color: 'var(--ink-5)' }}>Start free. Upgrade when you need more data and power tools.</p>
-        {/* The QA run went looking for a key-management screen and found none, because
-            there isn't one. Saying so beats leaving "REST API" listed with no way in. */}
-        <p className="text-xs -mt-4 mb-6" style={{ color: 'var(--ink-5)' }}>
-          REST API keys are not self-serve yet — they are issued on request, so there is no
-          key-management screen to find. Paid checkout is likewise not enabled on this deployment.
-        </p>
-        <div className="inline-flex items-center gap-0.5 p-1 rounded-[14px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)' }}>
-          <button onClick={() => setAnnual(false)} className="px-4 py-1.5 rounded-[10px] text-sm font-medium transition-all"
-            style={{ background: !annual ? 'var(--b600)' : 'transparent', color: !annual ? '#fff' : 'var(--ink-4)' }}>Monthly</button>
-          <button onClick={() => setAnnual(true)} className="px-4 py-1.5 rounded-[10px] text-sm font-medium transition-all"
-            style={{ background: annual ? 'var(--b600)' : 'transparent', color: annual ? '#fff' : 'var(--ink-4)' }}>
-            Annual <span className="text-[10px]" style={{ color: 'var(--up)' }}>Save 20%</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="grid md:grid-cols-3 gap-5">
-        {tiers.map(t => (
-          <div key={t.name} className="p-6 rounded-[18px] relative"
-            style={{ background: 'var(--g2)', border: t.primary ? '2px solid var(--b600)' : '1px solid var(--gb)', boxShadow: t.primary ? 'var(--sh-blue)' : 'var(--sh-card)' }}>
-            {t.primary && <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold px-3 py-1 rounded-full text-white" style={{ background: 'var(--b600)' }}>Most popular</div>}
-            <h3 className="text-xl font-bold" style={{ color: 'var(--ink)' }}>{t.name}</h3>
-            <div className="mt-2 mb-4">
-              {t.price === 0 ? <span className="text-3xl font-bold" style={{ color: 'var(--ink)' }}>Free</span> : (
-                <><span className="text-3xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>AED {annual ? t.annualPrice : t.price}</span><span className="text-sm" style={{ color: 'var(--ink-5)' }}>/mo</span></>
-              )}
-            </div>
-            <ul className="space-y-2 mb-6">
-              {t.features.map((f, i) => (
-                <li key={i} className="flex items-start gap-2 text-sm" style={{ color: 'var(--ink)' }}>
-                  <span style={{ color: 'var(--up)' }} className="mt-0.5">✓</span> {f}
-                </li>
-              ))}
-            </ul>
-            <button onClick={t.primary ? handlePaymentAttempt : undefined}
-              className="w-full py-2.5 rounded-[14px] font-semibold transition-colors"
-              style={{ background: t.primary ? 'var(--b600)' : 'var(--g3)', color: t.primary ? '#fff' : 'var(--ink)', border: t.primary ? 'none' : '1px solid var(--gb)' }}>
-              {t.cta}
-            </button>
-            {t.primary && (
-              <p className="text-center text-xs mt-2" style={{ color: 'var(--ink-5)' }}>
-                <button onClick={() => setPage('waitlist')} className="hover:underline" style={{ color: 'var(--b600)' }}>Join the waitlist →</button>
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 // ─── About / Methodology Page ───────────────────────────────────────────────
 
 interface SourceStatus { name: string; kind: string; requiresCredentials: boolean; envVar: string | null; connected: boolean }
@@ -3270,6 +3205,9 @@ function AppInner() {
     }
     const path = window.location.pathname.replace(/\/+$/, '')
     if (path === '/auth/signin' || path === '/signin') setPage('signin')
+    // Day 5: the pricing page is public and lives at /pricing, so the URL has to
+    // select it — the nav button alone left a shared /pricing link on the landing page.
+    if (path === '/pricing') setPage('pricing')
     if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
     window.addEventListener('hashchange', onHash)
@@ -3289,7 +3227,7 @@ function AppInner() {
       {page === 'watchlist' && <Watchlist setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'deals' && <Deals setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'alerts' && <AlertsPage setPage={setPage} setSelectedListing={setSelectedListing} />}
-      {page === 'pricing' && <PricingPage setPage={setPage} />}
+      {page === 'pricing' && <PricingPage onNavigate={setPage} />}
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
       {page === 'about' && <AboutPage />}

@@ -17,6 +17,10 @@ import {
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
 import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
+import {
+  getStripe, priceIdFor, missingStripeEnv, isPaidPlan, isBillingPeriod,
+  subscriptionPeriodEnd, customerIdOf, normalizeStripeStatus, PAID_PLANS, BILLING_PERIODS,
+} from './src/lib/stripe'
 import { dldConfigured } from './src/lib/dld'
 import { adrecConfigured } from './src/lib/adrec'
 
@@ -2802,17 +2806,249 @@ for (const path of ['/checkout', '/subscribe', '/create-payment-intent']) {
   app.all(path, (c) => paymentsBlocked(c) ?? c.json({ error: 'Not implemented' }, 501))
 }
 
-// Stripe webhooks are accepted and logged, never processed, so a delayed event
-// cannot start a subscription behind the kill switch.
-app.post('/webhooks/stripe', async (c) => {
-  const body = await c.req.text().catch(() => '')
-  console.info(
-    `[sqftLab] Stripe webhook received (PAYMENTS_ENABLED=${PAYMENTS_ENABLED}) — ${body.length} bytes`,
-  )
-  // Always 200: a non-2xx makes Stripe retry an event we are deliberately
-  // dropping. `processed` stays false even with the flag on, because no processor
-  // exists behind it yet — setting the env var does not by itself start charging.
-  return c.json({ received: true, processed: false, paymentsEnabled: PAYMENTS_ENABLED })
+// ─── Day 5: Stripe checkout, webhooks and the caller's subscription ──────────
+
+/**
+ * The origin to send a customer back to after checkout.
+ *
+ * The Day 5 sketch used `process.env.NEXTAUTH_URL` — there is no NextAuth here, so
+ * that is always undefined and every checkout would bounce to `undefined/pricing`.
+ * Prefer an explicit configuration, then the request's own Origin (which the CORS
+ * layer already trusts), then Host.
+ */
+function appOrigin(c: Context): string {
+  const configured = process.env.APP_URL ?? process.env.PUBLIC_APP_URL
+  if (configured) return configured.replace(/\/+$/, '')
+  const origin = c.req.header('Origin')
+  if (origin) return origin.replace(/\/+$/, '')
+  const host = c.req.header('Host')
+  if (!host) return ''
+  return `${c.req.header('X-Forwarded-Proto') ?? 'https'}://${host}`
+}
+
+// POST /sqftlab/subscribe — create a Stripe Checkout session for a paid plan.
+//
+// Order matters. The kill switch is checked FIRST: while it is engaged this
+// feature does not exist, and telling an anonymous caller "Unauthorized" would
+// imply a login is all that stands between them and a purchase. Only once
+// payments are genuinely live does "sign in first" become the true answer.
+app.post('/sqftlab/subscribe', async (c) => {
+  const blocked = paymentsBlocked(c)
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized', signInUrl: '/signin' }, 401)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return c.json({ error: 'Request body must be a JSON object.' }, 400)
+  }
+
+  const plan = body.plan
+  const billing = body.billing ?? 'monthly'
+  if (!isPaidPlan(plan) || !isBillingPeriod(billing)) {
+    return c.json({ error: 'Invalid plan', plans: PAID_PLANS, billing: BILLING_PERIODS }, 400)
+  }
+
+  const price = priceIdFor(plan, billing)
+  const stripeClient = getStripe()
+  if (!stripeClient || !price) {
+    // Payments are on but the account is not wired up. Say exactly what is missing
+    // rather than failing with an opaque Stripe error.
+    return c.json(
+      { error: 'Payments are enabled but Stripe is not configured.', missingEnv: missingStripeEnv() },
+      503,
+    )
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, name: true, stripeCustomerId: true },
+  })
+  if (!user) return c.json({ error: 'User not found' }, 404)
+
+  try {
+    let customerId = user.stripeCustomerId
+    if (!customerId) {
+      const customer = await stripeClient.customers.create({
+        email: user.email,
+        name: user.name ?? undefined,
+      })
+      customerId = customer.id
+      await prisma.user.update({ where: { id: userId }, data: { stripeCustomerId: customerId } })
+    }
+
+    const origin = appOrigin(c)
+    const session = await stripeClient.checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      line_items: [{ price, quantity: 1 }],
+      subscription_data: {
+        trial_period_days: plan === 'pro' ? 14 : 30,
+        // Copied onto the subscription, so later subscription events can be traced
+        // back to a user without relying on the checkout session.
+        metadata: { userId, plan },
+      },
+      success_url: `${origin}/dashboard?upgraded=true`,
+      cancel_url: `${origin}/pricing`,
+      allow_promotion_codes: true,
+      metadata: { userId, plan },
+    })
+
+    await trackEvent(c, 'checkout_started', { plan, billing })
+    return c.json({ url: session.url })
+  } catch (err) {
+    // A Stripe failure is an upstream failure, not ours — and it must not become a
+    // 500 with no explanation.
+    const message = err instanceof Error ? err.message : 'Stripe request failed'
+    console.error('[sqftLab] checkout session failed:', message)
+    return c.json({ error: 'Could not start checkout', detail: message }, 502)
+  }
+})
+
+/**
+ * Stripe webhook. Registered on both paths: the Day 5 brief's `/stripe/webhook`
+ * (external `/api/stripe/webhook`) and the `/webhooks/stripe` endpoint Day 4
+ * already exposed. One handler, so the two cannot drift apart.
+ */
+async function handleStripeWebhook(c: Context): Promise<Response> {
+  const stripeClient = getStripe()
+  const secret = process.env.STRIPE_WEBHOOK_SECRET ?? ''
+  const raw = await c.req.text().catch(() => '')
+  const signature = c.req.header('stripe-signature') ?? ''
+
+  // Not configured: acknowledge and drop. Day 4's rule stands — a non-2xx makes
+  // Stripe retry an event we are deliberately not acting on.
+  if (!stripeClient || !secret) {
+    console.info(`[sqftLab] Stripe webhook received but Stripe is unconfigured — ${raw.length} bytes`)
+    return c.json({ received: true, processed: false, paymentsEnabled: PAYMENTS_ENABLED })
+  }
+
+  let event: import('stripe').default.Event
+  try {
+    event = stripeClient.webhooks.constructEvent(raw, signature, secret)
+  } catch {
+    // The one case that must 4xx: an unverified payload is not from Stripe.
+    return c.json({ error: 'Invalid signature' }, 400)
+  }
+
+  // A VERIFIED event still must not mutate anything while the kill switch is
+  // engaged, or a delayed event from earlier testing would start a subscription
+  // behind it. Verify, acknowledge, do nothing.
+  if (!PAYMENTS_ENABLED) {
+    console.info(`[sqftLab] Stripe webhook ${event.type} verified but NOT applied — PAYMENTS_ENABLED=false`)
+    return c.json({ received: true, processed: false, paymentsEnabled: false, eventType: event.type })
+  }
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object
+        const userId = session.metadata?.userId
+        const subId =
+          typeof session.subscription === 'string' ? session.subscription : session.subscription?.id
+        if (!userId || !subId) break
+
+        const sub = await stripeClient.subscriptions.retrieve(subId)
+        const tier = session.metadata?.plan ?? 'pro'
+        const periodEnd = subscriptionPeriodEnd(sub)
+
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            subscriptionTier: tier,
+            subscriptionStatus: normalizeStripeStatus(sub.status),
+            subscriptionId: sub.id,
+            stripeCustomerId: customerIdOf(sub.customer),
+            trialEndsAt: sub.trial_end ? new Date(sub.trial_end * 1000) : null,
+            currentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
+          },
+        })
+        invalidateTier(userId)
+        break
+      }
+
+      case 'customer.subscription.updated': {
+        const sub = event.data.object
+        const owner = await prisma.user.findFirst({ where: { subscriptionId: sub.id }, select: { id: true } })
+        if (!owner) break
+        const periodEnd = subscriptionPeriodEnd(sub)
+        await prisma.user.update({
+          where: { id: owner.id },
+          data: {
+            subscriptionStatus: normalizeStripeStatus(sub.status),
+            currentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
+            trialEndsAt: sub.trial_end ? new Date(sub.trial_end * 1000) : null,
+          },
+        })
+        invalidateTier(owner.id)
+        break
+      }
+
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object
+        const owner = await prisma.user.findFirst({ where: { subscriptionId: sub.id }, select: { id: true } })
+        if (!owner) break
+        await prisma.user.update({
+          where: { id: owner.id },
+          data: { subscriptionStatus: 'cancelled', subscriptionTier: 'free' },
+        })
+        invalidateTier(owner.id)
+        break
+      }
+
+      default:
+        break
+    }
+  } catch (err) {
+    // Our own write failed: a non-2xx is correct here so Stripe retries the event.
+    const message = err instanceof Error ? err.message : 'webhook processing failed'
+    console.error(`[sqftLab] Stripe webhook ${event.type} failed to apply:`, message)
+    return c.json({ error: 'Webhook processing failed', detail: message }, 500)
+  }
+
+  return c.json({ received: true, processed: true, eventType: event.type })
+}
+
+app.post('/stripe/webhook', handleStripeWebhook)
+
+// Stripe webhooks are accepted and logged, never processed while the kill switch
+// is engaged, so a delayed event cannot start a subscription behind it.
+app.post('/webhooks/stripe', handleStripeWebhook)
+
+// GET /sqftlab/users/me — the caller with their subscription state.
+app.get('/sqftlab/users/me', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true, email: true, name: true, image: true,
+      subscriptionTier: true, subscriptionStatus: true,
+      trialEndsAt: true, currentPeriodEnd: true,
+      onboardingCompleted: true, tourCompleted: true,
+      role: true, company: true,
+    },
+  })
+  if (!user) return c.json({ error: 'Unauthorized' }, 401)
+
+  // `entitled` mirrors the tier middleware exactly, so a UI asking "may I?" gets
+  // the same answer the API will give. `tier` is included for the older client.
+  const entitled =
+    user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing'
+
+  return c.json({
+    ...user,
+    tier: user.subscriptionTier,
+    entitled,
+    paymentsEnabled: PAYMENTS_ENABLED,
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
