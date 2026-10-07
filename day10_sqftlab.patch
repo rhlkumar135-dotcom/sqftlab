@@ -1,7 +1,7 @@
 From 618cbdba52404f7b4107a510377da7f689e32513 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:07:58 +0000
-Subject: [PATCH 01/13] fix(static publish): emirate filter, district detail,
+Subject: [PATCH 01/14] fix(static publish): emirate filter, district detail,
  honest predictions
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -256,7 +256,7 @@ index afc62a4..c7b3870 100644
 From 646b12888d2c18938f3a7a2551cff1c93efb9626 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:42:42 +0000
-Subject: [PATCH 02/13] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
+Subject: [PATCH 02/14] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
  Investment Score engine
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1383,7 +1383,7 @@ index 0000000..ec37030
 From 59bf076bb75e6f867b203a55b3e3ed6e7d3ea4d5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:03:18 +0000
-Subject: [PATCH 03/13] Day 4: tier middleware, requireTier, payment kill
+Subject: [PATCH 03/14] Day 4: tier middleware, requireTier, payment kill
  switch, per-tier rate limiter
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2162,7 +2162,7 @@ index 0000000..fd0bf24
 From 3f879cf5a9777ee8e4ed0f827f45c787f45b6070 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:55:21 +0000
-Subject: [PATCH 04/13] fix(scraper): the listing crawl persisted nothing, and
+Subject: [PATCH 04/14] fix(scraper): the listing crawl persisted nothing, and
  reported success
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2453,7 +2453,7 @@ index 0000000..2930c2e
 From 56e70bbe1d89887ea58e3dd39011f91a49f420cd Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 08:12:23 +0000
-Subject: [PATCH 05/13] fix(ui,api): a denial is not data, and a missing
+Subject: [PATCH 05/14] fix(ui,api): a denial is not data, and a missing
  measurement is not a zero
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3345,7 +3345,7 @@ index c7b3870..f4ee5b8 100644
 From d40a40006748e449907196f59a680b947fe1fdb2 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:01:03 +0000
-Subject: [PATCH 06/13] fix(api): the calculators answered 200 with a payload
+Subject: [PATCH 06/14] fix(api): the calculators answered 200 with a payload
  of nulls
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3661,7 +3661,7 @@ index b413ade..a07ce9f 100644
 From e316223d53fe7faf245b6c7bff3a3750b688f385 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:20:16 +0000
-Subject: [PATCH 07/13] Day 5: Stripe wired end to end, pricing page, checkout
+Subject: [PATCH 07/14] Day 5: Stripe wired end to end, pricing page, checkout
  + webhook handlers
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -5082,7 +5082,7 @@ index 0000000..90fe75f
 From 0649ef69b6955262c2b6c800677da3cae7e763a5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:41:53 +0000
-Subject: [PATCH 08/13] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
+Subject: [PATCH 08/14] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
  =?UTF-8?q?nd=20PSF=20analysis=20+=20frontend=20results=20page?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -7078,7 +7078,7 @@ index 0000000..c3cf8a1
 From 61e4473b221447bad1aca344a88141dc0fdd6012 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:10:39 +0000
-Subject: [PATCH 09/13] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
+Subject: [PATCH 09/14] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
  =?UTF-8?q?enerator=20=E2=80=94=20Puppeteer=20HTML=E2=86=92PDF=20with=20CM?=
  =?UTF-8?q?A=20data?=
 MIME-Version: 1.0
@@ -8557,7 +8557,7 @@ index 0000000..5bccad0
 From 744c4a485abd29b2c36431a36d28242c9d7c5245 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:43:38 +0000
-Subject: [PATCH 10/13] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
+Subject: [PATCH 10/14] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
  =?UTF-8?q?=E2=80=94=20holdings=20valued=20from=20real=20comparables,=20no?=
  =?UTF-8?q?=20invented=20figures?=
 MIME-Version: 1.0
@@ -10975,7 +10975,7 @@ index 5fe7be6..ba24d02 100644
 From 09e776f79a4dc40204d9224bfee975fee814ee08 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 11:48:33 +0000
-Subject: [PATCH 11/13] Day 9+10: capital flow by nationality, Ejari rental
+Subject: [PATCH 11/14] Day 9+10: capital flow by nationality, Ejari rental
  yield, developer positioning, building scorecards
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -14247,7 +14247,7 @@ index 0000000..8382d17
 From 716e97622c5461ee0dfc986e3e648d0216ad6b37 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 12:08:14 +0000
-Subject: [PATCH 12/13] Day 1 (Task F): prove the deal engine's positive path
+Subject: [PATCH 12/14] Day 1 (Task F): prove the deal engine's positive path
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -14589,7 +14589,7 @@ index 0000000..d487f0f
 From faea407277b4f54b59d44aab458dd38c4e016a55 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 12:17:52 +0000
-Subject: [PATCH 13/13] Day 11: Public Data API v1 + Export Centre (CSV/Excel)
+Subject: [PATCH 13/14] Day 11: Public Data API v1 + Export Centre (CSV/Excel)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -16507,6 +16507,1216 @@ index 0000000..1a35302
 +  // SheetJS types `write` as returning `any`; the buffer form is a Uint8Array.
 +  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Uint8Array
 +}
+-- 
+2.47.3
+
+
+From c43a2e83495c7dc610bf2e16bb186dce9c5146a9 Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 12:40:02 +0000
+Subject: [PATCH 14/14] Day 12: saved searches, price alerts, Investment Score
+ breakdown
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Tasks A-E. DealAlert/AlertMatch and the alert engine already existed from earlier
+days, so this reconciles against them rather than restructuring: the existing
+design alerts on LISTINGS below a district's median PSF (a property you can still
+buy), where the spec alerts on DLD transactions already completed. Kept.
+
+Task A — schema
+  · added `name` (the spec's user-given label) and `lastCheckedAt`. The latter is
+    distinct from createdAt: an alert can sit for weeks without a match, and
+    "checked 3m ago" is what answers "is the engine running?".
+
+Task B — alert routes
+  · added the per-plan cap the spec asks for (pro 5) with 403 + upgradeUrl. The
+    spec's ladder again omits `elite` — it is a real tier ranking between pro and
+    enterprise, so it sits at 25 rather than losing a paid feature.
+  · "unlimited" (999999) replaced with a reported ceiling: the scan walks every
+    active alert each run, so the count is a real cost.
+  · GET now returns each alert's 3 newest matches plus limit/atLimit, so the list
+    needs one request and the page reports the server's own allowance.
+  · DELETE is now SOFT. It used to hard-delete and cascade the match history away
+    with the rule — deleting a watch should not rewrite what it reported.
+
+Task C — scan + notify: already wired into the hourly pipeline (more often than
+  the spec's 6h). The scan now stamps lastCheckedAt on every evaluation, including
+  the no-community / no-median path, since it did evaluate. Notify already refuses
+  to mark an undelivered match as sent; the spec's updateMany({ notifiedAt: null })
+  after a .catch(() => {}) erased alerts permanently on any send failure.
+
+Task D — Investment Score
+  · GAP: no endpoint ever returned a breakdown. Added GET /sqftlab/scores/:slug,
+    gated server-side: the composite is public, the five weighted factors are
+    withheld (not merely un-rendered) below Pro. The guest payload contains no
+    factor key at all.
+  · The spec's breakdown shape (psf/yield/momentum/neighbourhood/developer at
+    25/25/20/15/15) is NOT the engine's (psfMomentum/rentalYield/supplyAbsorption/
+    volumeTrend/capitalFlow at 30/25/20/15/10). Wiring it as written would have
+    labelled supplyAbsorption "Neighbourhood" and the placeholder capitalFlow
+    "Developer". Rebuilt to the engine's real factors.
+  · Kept the descriptive bands (FIX-07): the spec's "Strong Buy Signal" is advice
+    wording a composite score must not give.
+  · Placeholder factors are greyed and marked n/a rather than drawn as a
+    measurement, and are only sent when the breakdown is.
+
+Task E — AlertsPage: added the name field, the "N/limit" banner from the server's
+  count, and per-alert "Checked Xm ago". Note the page is gated to ELITE in the UI
+  while the API now allows pro; flagged rather than silently flipped, since the
+  ELITE badge and FeatureGate copy are the marketed positioning.
+
+Verified: 22 suites / 698 checks green, verify-day12 61 checks, 0 hand-written TS
+errors, build clean, plus a live pass (guest vs elite score payloads, named alert
+create, soft delete).
+
+Co-authored-by: Shogo Agent <agent@shogo.ai>
+---
+ custom-routes.ts                   | 163 +++++++++++++-
+ prisma/schema.prisma               |   9 +
+ scripts/_runall.sh                 |   1 +
+ scripts/verify-day12.ts            | 344 +++++++++++++++++++++++++++++
+ src/App.tsx                        |  65 +++++-
+ src/components/InvestmentScore.tsx | 300 ++++++++++++++++++++++---
+ src/lib/alerts.ts                  |  10 +-
+ 7 files changed, 843 insertions(+), 49 deletions(-)
+ create mode 100644 scripts/verify-day12.ts
+
+diff --git a/custom-routes.ts b/custom-routes.ts
+index 682541b..b232b64 100644
+--- a/custom-routes.ts
++++ b/custom-routes.ts
+@@ -838,6 +838,82 @@ app.get('/sqftlab/scores', async (c) => {
+   })
+ })
+ 
++// GET /sqftlab/scores/:slug — one community's ENGINE score, with the factors
++// behind it.
++//
++// The composite is public; the five weighted inputs that explain it are the paid
++// tier's view. Withheld server-side rather than hidden in the client, so a free
++// caller does not merely fail to see them — they are never sent.
++//
++// `dataCoverage` and `notes` stay public on purpose: they say how much of the
++// number is real data versus a neutral stand-in, which is a caveat the reader
++// needs MOST when they can see the least.
++app.get('/sqftlab/scores/:slug', async (c) => {
++  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
++  const community = await prisma.community.findUnique({
++    where: { slug: c.req.param('slug') },
++    select: { id: true, slug: true, nameEn: true, emirate: true, medianAedSqft: true, psfSource: true },
++  })
++  if (!community) return c.json({ error: 'Community not found' }, 404)
++
++  const latest = await latestInvestmentScores([community.id])
++  const row = latest.get(community.id)
++
++  if (!row) {
++    return c.json({
++      community: community.nameEn,
++      slug: community.slug,
++      emirate: community.emirate,
++      score: null,
++      scored: false,
++      reason: 'No score has been computed for this community yet.',
++      breakdown: null,
++      breakdownLocked: true,
++      dataCoverage: 0,
++      notes: null,
++      medianAedSqft: community.medianAedSqft,
++      psfSource: community.psfSource,
++      tier,
++    })
++  }
++
++  const entitled = (TIER_RANK[tier] ?? 0) >= (TIER_RANK.pro ?? 0)
++
++  return c.json({
++    community: community.nameEn,
++    slug: community.slug,
++    emirate: community.emirate,
++    score: row.score,
++    scored: true,
++    calculatedAt: row.calculatedAt,
++    // How much of the composite is measurement rather than stand-in.
++    dataCoverage: row.dataCoverage,
++    notes: row.notes,
++    breakdown: entitled
++      ? {
++          psfMomentum: row.psfMomentum,
++          rentalYield: row.rentalYield,
++          supplyAbsorption: row.supplyAbsorption,
++          volumeTrend: row.volumeTrend,
++          capitalFlow: row.capitalFlow,
++        }
++      : null,
++    breakdownLocked: !entitled,
++    lockedReason: entitled ? null : 'The factor breakdown is part of the Pro plan.',
++    upgradeUrl: entitled ? null : '/pricing',
++    // capitalFlow is a hard-coded neutral in the engine (it needs Ejari ownership
++    // data) and is deliberately excluded from dataCoverage. Naming it here stops
++    // the UI from drawing a placeholder bar that reads as a measurement.
++    // Only meaningful alongside the breakdown. A locked caller has no factor bars
++    // to annotate, so sending the names would disclose part of what is withheld
++    // while being useless to them.
++    placeholderFactors: entitled ? ['capitalFlow'] : [],
++    medianAedSqft: community.medianAedSqft,
++    psfSource: community.psfSource,
++    tier,
++  })
++})
++
+ // Recompute every score. The nightly cron calls the engine directly; this exists
+ // so the job can also be triggered and verified on demand.
+ app.post('/sqftlab/scores/recompute', async (c) => {
+@@ -3323,17 +3399,64 @@ app.get('/sqftlab/me', async (c) => {
+   return c.json({ user: { ...rest, tier: subscriptionTier, subscriptionTier } })
+ })
+ 
+-// GET /sqftlab/alerts — active alerts plus the recent matches they produced.
++// ─── Alert allowance (Day 12 Task B) ─────────────────────────────────────────
++//
++// The spec's ladder is pro = 5 and enterprise = "unlimited" (999999). Two changes:
++//
++//  · `elite` is a real tier here and ranks between pro and enterprise, but the
++//    spec omits it entirely. An omitted tier must not silently LOSE a paid
++//    feature — the same omission that demoted the seeded elite account to guest
++//    in Day 1. Elite sits between the two.
++//  · "unlimited" is implemented as a generous, REPORTED ceiling rather than a
++//    number large enough to look infinite. The scan walks every active alert on
++//    every run, so the count is a real cost rather than a formality.
++const ALERT_CEILINGS: Record<string, number> = {
++  pro: 5,
++  elite: 25,
++  enterprise: 250,
++  institutional: 250,
++}
++
++function alertLimitFor(tier: CallerTier | undefined): number {
++  return ALERT_CEILINGS[tier ?? 'free'] ?? 0
++}
++
++// GET /sqftlab/alerts — the caller's ACTIVE watches, each with its recent matches.
+ app.get('/sqftlab/alerts', async (c) => {
+   const userId = getUserId(c)
+   if (!userId) return upgradeRequired(c)
+ 
++  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
+   const alerts = await prisma.dealAlert.findMany({
+-    where: { userId },
++    // `active: true` because DELETE deactivates instead of erasing: a
++    // deactivated alert must stop appearing here, and the scan already skips it.
++    where: { userId, active: true },
+     orderBy: { createdAt: 'desc' },
+-    include: { _count: { select: { matches: true } } },
++    include: {
++      _count: { select: { matches: true } },
++      // The three newest matches ride along so the list renders in one request.
++      // Prisma batches the include, so this is not a query per alert.
++      matches: {
++        orderBy: { detectedAt: 'desc' },
++        take: 3,
++        include: {
++          listing: {
++            select: {
++              id: true, title: true, priceAed: true, pricePerSqft: true, beds: true,
++              community: { select: { nameEn: true, slug: true, medianAedSqft: true } },
++            },
++          },
++        },
++      },
++    },
++  })
++  return c.json({
++    alerts,
++    activeCount: alerts.length,
++    limit: alertLimitFor(tier),
++    tier,
++    atLimit: alerts.length >= alertLimitFor(tier),
+   })
+-  return c.json({ alerts })
+ })
+ 
+ app.get('/sqftlab/alerts/matches', async (c) => {
+@@ -3381,6 +3504,25 @@ app.post('/sqftlab/alerts', async (c) => {
+     return c.json({ error: 'minBeds must be a non-negative integer' }, 400)
+   }
+ 
++  // Per-plan allowance. Counted on ACTIVE alerts so deactivating one frees a slot.
++  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
++  const limit = alertLimitFor(tier)
++  const activeCount = await prisma.dealAlert.count({ where: { userId, active: true } })
++  if (activeCount >= limit) {
++    return c.json(
++      {
++        error: `Alert limit reached (${limit} active on the ${tier} plan)`,
++        limit,
++        current: activeCount,
++        tier,
++        upgradeUrl: '/pricing',
++      },
++      403,
++    )
++  }
++
++  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) || null : null
++
+   const alert = await prisma.dealAlert.create({
+     data: {
+       userId,
+@@ -3388,6 +3530,7 @@ app.post('/sqftlab/alerts', async (c) => {
+       propertyType,
+       maxPrice,
+       minBeds,
++      name,
+       active: true,
+     },
+   })
+@@ -3397,7 +3540,13 @@ app.post('/sqftlab/alerts', async (c) => {
+   return c.json({ alert, scan }, 201)
+ })
+ 
+-// DELETE /sqftlab/alerts/:id — matches cascade via the relation.
++// DELETE /sqftlab/alerts/:id — DEACTIVATES instead of erasing (Day 12 Task B).
++//
++// The original hard-deleted, which cascaded the match history away with the rule.
++// That history is the record of what the alert actually found; deleting the rule
++// should not rewrite what it already reported, and a mis-click is unrecoverable
++// with a hard delete. Inactive alerts are excluded from the list and skipped by
++// the scan, so they stop costing anything.
+ app.delete('/sqftlab/alerts/:id', async (c) => {
+   const userId = getUserId(c)
+   if (!userId) return upgradeRequired(c)
+@@ -3406,8 +3555,8 @@ app.delete('/sqftlab/alerts/:id', async (c) => {
+   const existing = await prisma.dealAlert.findFirst({ where: { id, userId } })
+   if (!existing) return c.json({ error: 'Alert not found' }, 404)
+ 
+-  await prisma.dealAlert.delete({ where: { id } })
+-  return c.json({ ok: true, deleted: id })
++  await prisma.dealAlert.update({ where: { id }, data: { active: false } })
++  return c.json({ ok: true, deactivated: id, active: false })
+ })
+ 
+ // POST /sqftlab/alerts/scan — run the engine on demand (the scraper cron also
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 682d368..e37d9f1 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -287,6 +287,15 @@ model DealAlert {
+   maxPrice     Float?   @map("max_price")
+   minBeds      Int?     @map("min_beds")
+   active       Boolean  @default(true)
++  // User-given label, e.g. "2BR Downtown under 2M" (Day 12 Task A). Nullable:
++  // existing rows and stricter API clients may omit it, and the UI derives a
++  // summary from the filters when it is absent, so this is additive.
++  name         String?
++  // When the scan last EVALUATED this alert — which is not the same as when it
++  // was created. An alert can sit for weeks without a listing matching, and
++  // "last checked 3 minutes ago" is the honest answer to a user asking whether
++  // the engine is running, where "created 3 weeks ago" is not.
++  lastCheckedAt DateTime? @map("last_checked_at")
+   createdAt    DateTime @default(now()) @map("created_at")
+ 
+   user    User         @relation(fields: [userId], references: [id])
+diff --git a/scripts/_runall.sh b/scripts/_runall.sh
+index 86dbee4..ec52815 100644
+--- a/scripts/_runall.sh
++++ b/scripts/_runall.sh
+@@ -19,6 +19,7 @@ for f in scripts/verify-*.ts; do
+     # flag, so it would corrupt real state before its guard even mattered.
+     verify-deal-engine) cp prisma/dev.db /tmp/deal-e2e.db; url="file:/tmp/deal-e2e.db" ;;
+     verify-day11) cp prisma/dev.db /tmp/day11-e2e.db; url="file:/tmp/day11-e2e.db" ;;
++    verify-day12) cp prisma/dev.db /tmp/day12-e2e.db; url="file:/tmp/day12-e2e.db" ;;
+     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
+     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
+     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
+diff --git a/scripts/verify-day12.ts b/scripts/verify-day12.ts
+new file mode 100644
+index 0000000..995b721
+--- /dev/null
++++ b/scripts/verify-day12.ts
+@@ -0,0 +1,344 @@
++// Day 12 verification — saved searches, price alerts, and the Investment Score UI.
++//
++// Run:
++//   cp prisma/dev.db /tmp/day12-e2e.db
++//   DATABASE_URL=file:/tmp/day12-e2e.db bun run scripts/verify-day12.ts
++//
++// Runs the real Hono app in-process against a throwaway COPY of the database and
++// creates its own users, alerts and listings. Everything it creates is removed in
++// `finally`.
++//
++// A COPY is required: this suite drives the alert SCAN, which is not scoped to
++// the caller — it walks every active alert in the database and writes matches. On
++// the project database that would attach synthetic matches to real alerts and
++// notify real addresses once a mail transport exists.
++import { prisma } from '../src/lib/db'
++
++const dbUrl = process.env.DATABASE_URL ?? ''
++if (!dbUrl.includes('day12-e2e')) {
++  throw new Error(
++    `Refusing to run: DATABASE_URL must point at the disposable copy (…day12-e2e.db), got "${dbUrl || '<unset>'}".\n` +
++      'The alert scan is not caller-scoped and would write matches against real alerts.',
++  )
++}
++
++const { default: app } = await import('../custom-routes')
++const { scanDealAlerts, notifyPendingMatches, DEAL_DISCOUNT_THRESHOLD } = await import('../src/lib/alerts')
++const { computeInvestmentScore, latestInvestmentScores } = await import('../src/lib/score-engine')
++
++let passed = 0
++let failed = 0
++const failures: string[] = []
++
++function check(name: string, ok: boolean, detail?: unknown) {
++  if (ok) {
++    passed++
++    console.log(`  ✓ ${name}`)
++  } else {
++    failed++
++    failures.push(name)
++    console.log(`  ✗ ${name}${detail === undefined ? '' : ` — ${JSON.stringify(detail).slice(0, 300)}`}`)
++  }
++}
++
++async function req(path, opts = {}) {
++  const headers = { 'Content-Type': 'application/json' }
++  if (opts.token) headers.Authorization = `Bearer ${opts.token}`
++  const res = await app.request(path, {
++    method: opts.method ?? 'GET',
++    headers,
++    ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
++  })
++  const text = await res.text()
++  let body = {}
++  try {
++    body = text ? JSON.parse(text) : {}
++  } catch {
++    body = {}
++  }
++  return { status: res.status, body, text, res }
++}
++
++const ID = 'zz-verify-day12'
++const createdUserIds: string[] = []
++const createdListingIds: string[] = []
++const createdAlertIds: string[] = []
++
++async function makeUser(role, tier) {
++  const u = await prisma.user.create({
++    data: { email: `${ID}-${role}@example.invalid`, subscriptionTier: tier, subscriptionStatus: 'active' },
++    select: { id: true },
++  })
++  createdUserIds.push(u.id)
++  return u.id
++}
++
++try {
++  // ── a market to alert against ───────────────────────────────────────────────
++  const community = await prisma.community.findFirst({
++    where: { medianAedSqft: { gt: 0 } },
++    select: { id: true, slug: true, nameEn: true, medianAedSqft: true },
++    orderBy: { id: 'asc' },
++  })
++  if (!community) throw new Error('no community with a medianAedSqft to build the test market from')
++  const median = community.medianAedSqft
++  const threshold = median * (1 - DEAL_DISCOUNT_THRESHOLD)
++
++  const mkListing = async (tag, psf, purpose = 'sale') => {
++    const l = await prisma.listing.create({
++      data: {
++        externalId: `${ID}-${tag}`,
++        source: 'bayut',
++        communityId: community.id,
++        purpose,
++        propertyType: 'apartment',
++        beds: 2,
++        baths: 2,
++        title: `Zz ${tag}`,
++        areaSqft: 1000,
++        priceAed: psf * 1000,
++        pricePerSqft: psf,
++        listedAt: new Date(),
++      },
++      select: { id: true },
++    })
++    createdListingIds.push(l.id)
++    return l.id
++  }
++
++  // One genuine deal (below the district threshold) and one that is not.
++  await mkListing('below', Math.floor(threshold * 0.9))
++  await mkListing('above', Math.ceil(threshold * 1.4))
++  await mkListing('rent-cheap', 1, 'rent')
++
++  const proUser = await makeUser('pro', 'pro')
++  const freeUser = await makeUser('free', 'free')
++  const entUser = await makeUser('ent', 'enterprise')
++
++  // ── Task A — model shape ────────────────────────────────────────────────────
++  console.log('\n── Task A: schema ──')
++  const cols = await prisma.$queryRawUnsafe('PRAGMA table_info(deal_alerts)')
++  const names = cols.map((c) => c.name)
++  check('deal_alerts has `name` (user-given label)', names.includes('name'))
++  check('deal_alerts has `last_checked_at`', names.includes('last_checked_at'))
++  check('deal_alerts has `active` for soft delete', names.includes('active'))
++
++  const matchCols = (await prisma.$queryRawUnsafe('PRAGMA table_info(alert_matches)')).map((c) => c.name)
++  check(
++    'alert_matches keys on listing_id, not transaction_id',
++    matchCols.includes('listing_id') && !matchCols.includes('transaction_id'),
++    matchCols,
++  )
++  check('alert_matches stores psf_discount', matchCols.includes('psf_discount'))
++
++  // ── Task B — routes and gating ──────────────────────────────────────────────
++  console.log('\n── Task B: alert routes ──')
++
++  // No identity at all → 401 (upgradeRequired). A caller who IS signed in but
++  // below the tier gets 403 from requireTier — asserted separately below.
++  const guestList = await req('/sqftlab/alerts')
++  check('guest GET /alerts is refused (401)', guestList.status === 401, guestList.status)
++
++  const freeCreate = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: community.slug }, token: freeUser,
++  })
++  check('free tier cannot create an alert (403)', freeCreate.status === 403, freeCreate.status)
++
++  const noDistrict = await req('/sqftlab/alerts', { method: 'POST', body: {}, token: proUser })
++  check('missing district → 400', noDistrict.status === 400, noDistrict.status)
++
++  const bogus = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: 'ZZ Not A Real Place' }, token: proUser,
++  })
++  check('unknown district → 400 (a bogus alert would never fire)', bogus.status === 400, bogus.status)
++
++  const badPrice = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: community.slug, maxPrice: -5 }, token: proUser,
++  })
++  check('negative maxPrice → 400', badPrice.status === 400, badPrice.status)
++
++  const badBeds = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: community.slug, minBeds: 1.5 }, token: proUser,
++  })
++  check('non-integer minBeds → 400', badBeds.status === 400, badBeds.status)
++
++  const made = await req('/sqftlab/alerts', {
++    method: 'POST',
++    body: { district: community.slug, name: 'Zz named alert', minBeds: 1 },
++    token: proUser,
++  })
++  check('pro creates an alert (201)', made.status === 201, made.status)
++  check('the user-given name is stored', made.body.alert?.name === 'Zz named alert', made.body.alert?.name)
++  check('creation runs the scan immediately', typeof made.body.scan === 'object')
++  if (made.body.alert?.id) createdAlertIds.push(made.body.alert.id)
++
++  // The cap: pro = 5. `made` above is #1.
++  for (let i = 2; i <= 5; i++) {
++    const r = await req('/sqftlab/alerts', {
++      method: 'POST', body: { district: community.slug, name: `Zz cap ${i}` }, token: proUser,
++    })
++    if (r.body.alert?.id) createdAlertIds.push(r.body.alert.id)
++  }
++  const overCap = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: community.slug, name: 'Zz cap 6' }, token: proUser,
++  })
++  check('6th alert on pro → 403', overCap.status === 403, overCap.status)
++  check('the refusal names the cap', overCap.body.limit === 5, overCap.body.limit)
++  check('the refusal offers an upgrade path', overCap.body.upgradeUrl === '/pricing')
++
++  const entAlert = await req('/sqftlab/alerts', {
++    method: 'POST', body: { district: community.slug, name: 'Zz ent alert' }, token: entUser,
++  })
++  check('enterprise is not capped by the pro limit', entAlert.status === 201, entAlert.status)
++  if (entAlert.body.alert?.id) createdAlertIds.push(entAlert.body.alert.id)
++
++  const listed = await req('/sqftlab/alerts', { token: proUser })
++  check('GET /alerts → 200', listed.status === 200, listed.status)
++  check('only ACTIVE alerts are listed', listed.body.alerts?.every((a) => a.active === true))
++  check('the list reports the tier limit', listed.body.limit === 5, listed.body.limit)
++  check('the list flags being at the limit', listed.body.atLimit === true, listed.body.atLimit)
++
++  const first = listed.body.alerts?.[0]
++  check('each alert carries its match count', typeof first?._count?.matches === 'number', first?._count)
++  check('each alert carries at most 3 recent matches', Array.isArray(first?.matches) && first.matches.length <= 3, first?.matches?.length)
++  check('the recent-match rows include their listing', first?.matches?.[0]?.listing != null)
++  check('lastCheckedAt was stamped by the scan', first?.lastCheckedAt != null, first?.lastCheckedAt)
++
++  // The threshold has to actually mean something: the cheap listing should have
++  // matched, the expensive one should not.
++  const allMatches = await prisma.alertMatch.findMany({ where: { alertId: { in: createdAlertIds } }, select: { listingId: true, psfDiscount: true } })
++  const matchedIds = new Set(allMatches.map((m) => m.listingId))
++  const [belowId, aboveId, rentId] = createdListingIds
++  check('a listing below the district threshold matched', matchedIds.has(belowId))
++  check('a listing above the threshold did NOT match', !matchedIds.has(aboveId))
++  check('a cheap RENTAL did not match a sale alert', !matchedIds.has(rentId))
++  check('matches carry a positive psfDiscount', allMatches.every((m) => m.psfDiscount > 0), allMatches.slice(0, 2))
++
++  // ── Task C — the scan is idempotent and honest ──────────────────────────────
++  console.log('\n── Task C: scan + notify ──')
++  const before = await prisma.alertMatch.count({ where: { alertId: { in: createdAlertIds } } })
++  const rescan = await scanDealAlerts()
++  const after = await prisma.alertMatch.count({ where: { alertId: { in: createdAlertIds } } })
++  check('re-running the scan creates no duplicate matches', after === before, { before, after })
++  check('re-running reports them as already matched', rescan.alreadyMatched > 0, rescan.alreadyMatched)
++
++  const notify = await notifyPendingMatches()
++  check('notify reports when no mail transport is configured', notify.transport === 'unconfigured', notify.transport)
++  check('notify sends nothing without a transport', notify.sent === 0, notify.sent)
++  check('notify explains why', typeof notify.reason === 'string' && notify.reason.length > 0)
++
++  // THE HONESTY PROPERTY: the spec marked every pending match `notifiedAt` right
++  // after a `.catch(() => {})` on the send — so a failed or impossible delivery
++  // erased the alert permanently. With no transport, nothing may be marked sent.
++  const stillPending = await prisma.alertMatch.count({ where: { alertId: { in: createdAlertIds }, notified: false } })
++  check(
++    'an undelivered match is NOT marked notified (it would be lost forever)',
++    stillPending === before,
++    { stillPending, before },
++  )
++
++  // ── Task B — deactivation preserves history ─────────────────────────────────
++  console.log('\n── Task B: delete is soft ──')
++  const victim = createdAlertIds[0]
++  const matchesBeforeDelete = await prisma.alertMatch.count({ where: { alertId: victim } })
++  const del = await req(`/sqftlab/alerts/${victim}`, { method: 'DELETE', token: proUser })
++  check('DELETE → 200', del.status === 200, del.status)
++  check('DELETE reports deactivation, not deletion', del.body.deactivated === victim)
++
++  const row = await prisma.dealAlert.findUnique({ where: { id: victim }, select: { active: true } })
++  check('the row still EXISTS after delete', row !== null)
++  check('the row is marked inactive', row?.active === false, row?.active)
++  const matchesAfter = await prisma.alertMatch.count({ where: { alertId: victim } })
++  check('its match history SURVIVES the delete', matchesAfter === matchesBeforeDelete, { matchesBeforeDelete, matchesAfter })
++
++  const afterList = await req('/sqftlab/alerts', { token: proUser })
++  check('the deactivated alert leaves the list', !afterList.body.alerts?.some((a) => a.id === victim))
++  check('deactivating frees a slot', afterList.body.atLimit === false, afterList.body.atLimit)
++
++  const missing = await req('/sqftlab/alerts/zz-does-not-exist', { method: 'DELETE', token: proUser })
++  check('deleting an unknown alert → 404', missing.status === 404, missing.status)
++
++  const othersAlert = await req(`/sqftlab/alerts/${victim}`, { method: 'DELETE', token: freeUser })
++  check("another user cannot deactivate someone else's alert", othersAlert.status === 404, othersAlert.status)
++
++  // ── Task D — score endpoint and its tier gate ───────────────────────────────
++  console.log('\n── Task D: Investment Score ──')
++
++  const scored = await latestInvestmentScores()
++  let slug = scored.size > 0 ? null : community.slug
++  if (!slug) {
++    const someId = [...scored.keys()][0]
++    const c2 = await prisma.community.findUnique({ where: { id: someId }, select: { slug: true } })
++    slug = c2?.slug ?? community.slug
++  }
++  if (scored.size === 0) await computeInvestmentScore(community.id)
++
++  const unknownSlug = await req('/sqftlab/scores/zz-no-such-community')
++  check('unknown community → 404', unknownSlug.status === 404, unknownSlug.status)
++
++  const asGuest = await req(`/sqftlab/scores/${slug}`)
++  check('guest score request → 200', asGuest.status === 200, asGuest.status)
++  check('guest sees the composite', typeof asGuest.body.score === 'number', asGuest.body.score)
++  check('guest does NOT receive a breakdown', asGuest.body.breakdown === null, asGuest.body.breakdown)
++  check('guest is told why it is locked', typeof asGuest.body.lockedReason === 'string')
++  check('guest still gets the data-coverage caveat', typeof asGuest.body.dataCoverage === 'number')
++  check('guest still gets the driver note', asGuest.body.notes !== undefined)
++  check('the locked response advertises the upgrade', asGuest.body.upgradeUrl === '/pricing')
++
++  const asPro = await req(`/sqftlab/scores/${slug}`, { token: proUser })
++  check('pro score request → 200', asPro.status === 200, asPro.status)
++  check('pro RECEIVES the breakdown', asPro.body.breakdown !== null, asPro.body.breakdown)
++  check(
++    "the breakdown carries the engine's five factors",
++    ['psfMomentum', 'rentalYield', 'supplyAbsorption', 'volumeTrend', 'capitalFlow'].every(
++      (k) => k in (asPro.body.breakdown ?? {}),
++    ),
++    Object.keys(asPro.body.breakdown ?? {}),
++  )
++  check('pro is not marked locked', asPro.body.breakdownLocked === false)
++  check(
++    'the breakdown names its placeholder factor honestly',
++    Array.isArray(asPro.body.placeholderFactors) && asPro.body.placeholderFactors.includes('capitalFlow'),
++    asPro.body.placeholderFactors,
++  )
++
++  // Withholding has to mean ABSENT, not merely un-rendered: no factor key may
++  // appear anywhere in the guest payload.
++  //
++  // This compares KEYS, not values. A value comparison false-fires whenever the
++  // composite coincides with a factor — with every input at the neutral 50 the
++  // composite is exactly 50, so `"score":50` looks like a leaked factor.
++  const factorKeys = ['psfMomentum', 'rentalYield', 'supplyAbsorption', 'volumeTrend', 'capitalFlow']
++  const guestRaw = JSON.stringify(asGuest.body)
++  const leakedKeys = factorKeys.filter((k) => guestRaw.includes(k))
++  check('no factor key appears anywhere in the guest payload', leakedKeys.length === 0, { leakedKeys })
++
++  const listRaw = JSON.stringify((await req('/sqftlab/scores')).body)
++  check('the scores LIST endpoint withholds the factor keys too', !factorKeys.some((k) => listRaw.includes(k)))
++
++  // ── the engineer's own contract: score matches the stored row ───────────────
++  const stored = (await latestInvestmentScores()).get(
++    (await prisma.community.findUnique({ where: { slug }, select: { id: true } }))?.id ?? '',
++  )
++  if (stored) {
++    check('the served score equals the persisted composite', asPro.body.score === stored.score, {
++      served: asPro.body.score, stored: stored.score,
++    })
++  }
++} catch (e) {
++  failed++
++  failures.push('suite threw')
++  console.log(`  ✗ suite threw — ${(e as Error).message}`)
++} finally {
++  const m = await prisma.alertMatch.deleteMany({ where: { alertId: { in: createdAlertIds } } })
++  const a = await prisma.dealAlert.deleteMany({ where: { userId: { in: createdUserIds } } })
++  const l = await prisma.listing.deleteMany({ where: { externalId: { startsWith: ID } } })
++  const ue = await prisma.userEvent.deleteMany({ where: { userId: { in: createdUserIds } } })
++  const us = await prisma.user.deleteMany({ where: { email: { startsWith: ID } } })
++  console.log(`\n  cleaned up: ${m.count} matches, ${a.count} alerts, ${l.count} listings, ${ue.count} events, ${us.count} users`)
++  await prisma.$disconnect()
++
++  console.log(`\n  ${passed} passed, ${failed} failed`)
++  if (failed > 0) console.log(`  failing: ${failures.join(' | ')}`)
++  process.exit(failed > 0 ? 1 : 0)
++}
+diff --git a/src/App.tsx b/src/App.tsx
+index dc046fd..3a35469 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -4,7 +4,7 @@ import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, C
+ import { cn } from '@/lib/cn'
+ import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
+ import { ToastProvider } from '@/components/Toast'
+-import { InvestmentScore, ScoreBadge } from '@/components/InvestmentScore'
++import { InvestmentScore, ScoreBadge, CommunityScoreCard } from '@/components/InvestmentScore'
+ import { DataLabel } from '@/components/DataLabel'
+ import { Sparkline } from '@/components/Sparkline'
+ import { FeatureGate } from '@/components/FeatureGate'
+@@ -1012,6 +1012,12 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
+               ))}
+             </div>
+           </div>
++
++          {/* Day 12 Task D — the engine's score and its factor breakdown. Pro+
++              sees the five weighted inputs; below that the card shows the
++              composite plus an upgrade prompt, because the server withholds the
++              breakdown rather than the client deciding to hide it. */}
++          <CommunityScoreCard slug={slug} onUpgrade={() => setPage('pricing')} />
+         </div>
+       </div>
+ 
+@@ -1474,6 +1480,18 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void;
+ 
+ // ─── Deal Alert Engine page (TASK 12 — Elite tier) ───────────────────────────
+ 
++/** "3m ago" / "2h ago" / "5d ago" — coarse resolution suits an hourly scan. */
++function timeAgo(iso: string): string {
++  const ms = Date.now() - new Date(iso).getTime()
++  if (!Number.isFinite(ms) || ms < 0) return 'just now'
++  const mins = Math.floor(ms / 60000)
++  if (mins < 1) return 'just now'
++  if (mins < 60) return `${mins}m ago`
++  const hours = Math.floor(mins / 60)
++  if (hours < 24) return `${hours}h ago`
++  return `${Math.floor(hours / 24)}d ago`
++}
++
+ interface DealAlertRow {
+   id: string
+   district: string
+@@ -1482,6 +1500,10 @@ interface DealAlertRow {
+   minBeds: number | null
+   active: boolean
+   createdAt: string
++  /** User-given label (Day 12 Task A). Falls back to the district when absent. */
++  name: string | null
++  /** When the scan last evaluated this alert — not when it was created. */
++  lastCheckedAt: string | null
+   _count?: { matches: number }
+ }
+ 
+@@ -1502,18 +1524,21 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
+   const [busy, setBusy] = useState(false)
+   const [error, setError] = useState<string | null>(null)
+   const [notice, setNotice] = useState<string | null>(null)
+-  const [form, setForm] = useState({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
++  const [form, setForm] = useState({ name: '', district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+   const [tier, setTier] = useState<string | null>(null)
++  const [caps, setCaps] = useState<{ limit: number; atLimit: boolean } | null>(null)
+   const [accessStatus, setAccessStatus] = useState<number | null>(null)
+   const { format } = useCurrency()
+ 
+   const load = useCallback(() => {
+     setLoading(true)
+     Promise.all([
+-      loadResource<{ alerts: DealAlertRow[] }>('/api/sqftlab/alerts', { alerts: [] }),
++      loadResource<{ alerts: DealAlertRow[]; limit: number; atLimit: boolean }>('/api/sqftlab/alerts', { alerts: [], limit: 0, atLimit: false }),
+       loadResource<{ matches: AlertMatchRow[] }>('/api/sqftlab/alerts/matches', { matches: [] }),
+     ]).then(([a, m]) => {
+       setAlerts(a.data.alerts || [])
++      // The server owns the allowance; the page reports it rather than guessing.
++      setCaps({ limit: a.data.limit ?? 0, atLimit: a.data.atLimit === true })
+       setMatches(m.data.matches || [])
+       // Both endpoints are account-scoped. When the server refuses them, an empty
+       // list renders as a working "No alerts yet" state, which is a lie — record the
+@@ -1551,6 +1576,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
+           ...(uid ? { Authorization: `Bearer ${uid}` } : {}),
+         },
+         body: JSON.stringify({
++          name: form.name || null,
+           district: form.district,
+           propertyType: form.propertyType,
+           maxPrice: form.maxPrice || null,
+@@ -1567,7 +1593,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
+             ? `Alert saved — ${created} matching deal${created === 1 ? '' : 's'} found straight away.`
+             : 'Alert saved — no current listings match, we will watch for new ones.',
+         )
+-        setForm({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
++        setForm({ name: '', district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
+         load()
+       }
+     } catch {
+@@ -1630,12 +1656,29 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
+         <AccessNotice status={accessStatus} feature="Alerts" setPage={setPage} onRetry={load} />
+       ) : (
+       <Gate>
++        {/* Plan allowance, reported from the server's own count so the page never
++            disagrees with what the API will actually accept. */}
++        {caps && caps.limit > 0 && (
++          <div className="mb-4 px-4 py-3 rounded-xl text-sm flex flex-wrap items-center gap-2" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', color: 'var(--ink-4)' }}>
++            <span style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{alerts.length}/{caps.limit}</span>
++            <span>{caps.atLimit ? 'active alerts — at your plan limit' : 'active alerts on your plan'}</span>
++            {caps.atLimit && (
++              <button onClick={() => setPage('pricing')} className="underline font-semibold" style={{ color: 'var(--b600)' }}>
++                Upgrade for more →
++              </button>
++            )}
++          </div>
++        )}
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+           {/* Create + list */}
+           <div className="space-y-5">
+             <form onSubmit={createAlert} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+               <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>New alert</h3>
+               <div className="space-y-3">
++                <div>
++                  <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Alert name</label>
++                  <input type="text" maxLength={80} placeholder="e.g. 2BR Downtown under 2M" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} style={inputStyle} />
++                </div>
+                 <div>
+                   <label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>District</label>
+                   <select value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} className={inputClass} style={inputStyle}>
+@@ -1687,12 +1730,22 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
+                   {alerts.map((a) => (
+                     <div key={a.id} className="flex flex-wrap items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--g1)', border: '1px solid var(--gb)' }}>
+                       <div className="flex-1 min-w-[160px]">
+-                        <div className="text-sm font-medium capitalize" style={{ color: 'var(--ink)' }}>{a.district.replace(/-/g, ' ')}</div>
++                        <div className="text-sm font-medium capitalize" style={{ color: 'var(--ink)' }}>{a.name || a.district.replace(/-/g, ' ')}</div>
+                         <div className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
+-                          {[a.propertyType || 'any type', a.minBeds != null ? `${a.minBeds}+ BR` : null, a.maxPrice ? `≤ ${format(a.maxPrice)}` : null]
++                          {[
++                            ...(a.name ? [a.district.replace(/-/g, ' ')] : []),
++                            a.propertyType || 'any type',
++                            a.minBeds != null ? `${a.minBeds}+ BR` : null,
++                            a.maxPrice ? `≤ ${format(a.maxPrice)}` : null,
++                          ]
+                             .filter(Boolean)
+                             .join(' · ')}
+                         </div>
++                        {/* "Last checked", not "created": an alert can sit for weeks
++                            without a match, and this is what answers "is it running?". */}
++                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--ink-6)' }}>
++                          {a.lastCheckedAt ? `Checked ${timeAgo(a.lastCheckedAt)}` : 'Not checked yet'}
++                        </div>
+                       </div>
+                       <span className="text-[11px] px-2 py-1 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)' }}>
+                         {a._count?.matches ?? 0} match{(a._count?.matches ?? 0) === 1 ? '' : 'es'}
+diff --git a/src/components/InvestmentScore.tsx b/src/components/InvestmentScore.tsx
+index 93dce4e..d609873 100644
+--- a/src/components/InvestmentScore.tsx
++++ b/src/components/InvestmentScore.tsx
+@@ -1,17 +1,38 @@
+ import { useEffect, useRef, useState } from 'react'
++import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts'
++import { authedFetch } from '@/lib/session'
+ 
+-interface ScoreBreakdown {
+-  psf: number        // max 25
+-  yield: number      // max 25
+-  momentum: number   // max 20
+-  neighbourhood: number  // max 15
+-  developer: number  // max 15
++/**
++ * Investment Score, as the engine actually defines it (src/lib/score-engine.ts).
++ *
++ * The five factors and their weights are the engine's, not the spec's. The spec's
++ * breakdown used `psf / yield / momentum / neighbourhood / developer` at
++ * 25/25/20/15/15 — a different set entirely. Rendering the engine's numbers under
++ * those labels would have mislabelled every bar: `supplyAbsorption` would have
++ * appeared as "Neighbourhood" and the placeholder `capitalFlow` as "Developer".
++ * A reader cannot audit a number whose label does not describe it.
++ */
++export interface ScoreBreakdown {
++  psfMomentum: number | null
++  rentalYield: number | null
++  supplyAbsorption: number | null
++  volumeTrend: number | null
++  capitalFlow: number | null
+ }
+ 
+ interface ScoreProps {
+   score: number
+-  breakdown?: ScoreBreakdown
++  breakdown?: ScoreBreakdown | null
+   size?: 'sm' | 'md' | 'lg'
++  /** Set when the caller is not entitled to the breakdown. */
++  breakdownLocked?: boolean
++  lockedReason?: string | null
++  /** Factors the engine filled with a neutral stand-in rather than a measurement. */
++  placeholderFactors?: string[]
++  /** How many of the inputs were real data (0–1). */
++  dataCoverage?: number
++  notes?: string | null
++  onUpgrade?: () => void
+ }
+ 
+ function scoreColour(score: number): string {
+@@ -21,8 +42,9 @@ function scoreColour(score: number): string {
+   return 'var(--score-d)'
+ }
+ 
+-// Descriptive bands only. The spec (FIX-07) requires advice wording such as
+-// "Strong buy" to be absent — a composite score is not a recommendation.
++// Descriptive bands only. The spec calls for advice wording ("Strong Buy
++// Signal"); a composite score is not a recommendation, and FIX-07 removed that
++// phrasing deliberately. These say what the number IS, not what to do about it.
+ function scoreLabel(score: number): string {
+   if (score >= 80) return 'High'
+   if (score >= 65) return 'Above average'
+@@ -36,7 +58,26 @@ const SIZE_MAP = {
+   lg: { outer: 260, font: 60, label: 14, ring: 10 },
+ }
+ 
+-export function InvestmentScore({ score, breakdown, size = 'md' }: ScoreProps) {
++/** The engine's factors, in weight order. `key` indexes ScoreBreakdown. */
++const FACTORS: { key: keyof ScoreBreakdown; label: string; weight: number }[] = [
++  { key: 'psfMomentum', label: 'PSF momentum', weight: 30 },
++  { key: 'rentalYield', label: 'Rental yield', weight: 25 },
++  { key: 'supplyAbsorption', label: 'Supply absorption', weight: 20 },
++  { key: 'volumeTrend', label: 'Volume trend', weight: 15 },
++  { key: 'capitalFlow', label: 'Capital flow', weight: 10 },
++]
++
++export function InvestmentScore({
++  score,
++  breakdown,
++  size = 'md',
++  breakdownLocked = false,
++  lockedReason,
++  placeholderFactors = [],
++  dataCoverage,
++  notes,
++  onUpgrade,
++}: ScoreProps) {
+   const [offset, setOffset] = useState(314)
+   const mounted = useRef(false)
+   const s = SIZE_MAP[size]
+@@ -50,7 +91,7 @@ export function InvestmentScore({ score, breakdown, size = 'md' }: ScoreProps) {
+   }, [score])
+ 
+   return (
+-    <div className="flex flex-col items-center">
++    <div className="flex flex-col items-center w-full">
+       <div style={{ width: s.outer, height: s.outer }} className="relative">
+         <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+           <circle cx="60" cy="60" r="50" fill="none" stroke="var(--ink-6)" strokeWidth="0.5" />
+@@ -71,39 +112,129 @@ export function InvestmentScore({ score, breakdown, size = 'md' }: ScoreProps) {
+       </div>
+ 
+       {breakdown && (
+-        <ScoreBreakdownPanel breakdown={breakdown} />
++        <ScoreBreakdownPanel breakdown={breakdown} placeholderFactors={placeholderFactors} showRadar />
++      )}
++
++      {/* Coverage and driver notes are shown to EVERYONE, including locked
++          callers. They qualify how much of the number is real data — the caveat
++          matters most to the reader who can see the least. */}
++      {(notes || dataCoverage != null) && (
++        <p className="text-[11px] mt-3 text-center leading-relaxed" style={{ color: 'var(--ink-5)' }}>
++          {notes}
++          {dataCoverage != null && (
++            <>
++              {notes ? ' · ' : ''}
++              <span style={{ fontFamily: 'var(--font-data)' }}>
++                {Math.round(dataCoverage * 100)}% of inputs backed by real data
++              </span>
++            </>
++          )}
++        </p>
+       )}
++
++      {!breakdown && breakdownLocked && <LockedPanel reason={lockedReason} onUpgrade={onUpgrade} />}
+     </div>
+   )
+ }
+ 
+-function ScoreBreakdownPanel({ breakdown }: { breakdown: ScoreBreakdown }) {
+-  const items = [
+-    { label: 'PSF vs value', value: breakdown.psf, max: 25 },
+-    { label: 'Rental yield', value: breakdown.yield, max: 25 },
+-    { label: 'Price momentum', value: breakdown.momentum, max: 20 },
+-    { label: 'Neighbourhood', value: breakdown.neighbourhood, max: 15 },
+-    { label: 'Developer', value: breakdown.developer, max: 15 },
+-  ]
++function LockedPanel({ reason, onUpgrade }: { reason?: string | null; onUpgrade?: () => void }) {
++  return (
++    <div
++      className="w-full mt-4 rounded-[12px] px-4 py-4 text-center"
++      style={{ background: 'var(--g4)', border: '1px dashed var(--gb)' }}
++    >
++      <p className="text-xs leading-relaxed" style={{ color: 'var(--ink-4)' }}>
++        {reason ?? 'The factor breakdown is part of the Pro plan.'}
++      </p>
++      {onUpgrade ? (
++        <button
++          onClick={onUpgrade}
++          className="inline-block mt-2 px-4 py-1.5 rounded-[8px] text-xs font-semibold"
++          style={{ background: 'var(--b600)', color: '#fff' }}
++        >
++          Upgrade to Pro →
++        </button>
++      ) : (
++        <a
++          href="/pricing"
++          className="inline-block mt-2 px-4 py-1.5 rounded-[8px] text-xs font-semibold"
++          style={{ background: 'var(--b600)', color: '#fff' }}
++        >
++          Upgrade to Pro →
++        </a>
++      )}
++    </div>
++  )
++}
++
++function ScoreBreakdownPanel({
++  breakdown,
++  placeholderFactors,
++  showRadar,
++}: {
++  breakdown: ScoreBreakdown
++  placeholderFactors: string[]
++  showRadar?: boolean
++}) {
++  const radarData = FACTORS.map((f) => ({
++    factor: f.label,
++    value: breakdown[f.key] ?? 0,
++    weight: f.weight,
++  }))
+ 
+   return (
+-    <div className="w-full space-y-2 mt-4">
+-      {items.map((item) => {
+-        const pct = (item.value / item.max) * 100
+-        const color = scoreColour(pct * 100 / 100)
+-        return (
+-          <div key={item.label} className="flex items-center gap-2 text-xs">
+-            <span className="text-[var(--ink-4)] w-24 text-right" style={{ fontFamily: 'var(--font-ui)' }}>{item.label}</span>
+-            <div className="flex-1 h-[5px] rounded-full bg-[var(--ink-6)]/20 overflow-hidden">
+-              <div
+-                className="h-full rounded-full transition-all duration-700"
+-                style={{ width: `${pct}%`, backgroundColor: color }}
++    <div className="w-full mt-4">
++      {showRadar && (
++        <div style={{ width: '100%', height: 190 }}>
++          <ResponsiveContainer width="100%" height="100%">
++            <RadarChart data={radarData} outerRadius="72%">
++              <PolarGrid stroke="var(--ink-6)" />
++              <PolarAngleAxis dataKey="factor" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} />
++              <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
++              <Radar dataKey="value" stroke="var(--b600)" fill="var(--b600)" fillOpacity={0.2} />
++              <Tooltip
++                formatter={(v: number) => [`${v}/100`, 'Score']}
++                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--gb)' }}
+               />
++            </RadarChart>
++          </ResponsiveContainer>
++        </div>
++      )}
++
++      <div className="w-full space-y-2 mt-2">
++        {FACTORS.map((f) => {
++          const value = breakdown[f.key]
++          const isPlaceholder = placeholderFactors.includes(f.key)
++          const pct = value == null ? 0 : Math.min(100, Math.max(0, value))
++          return (
++            <div key={f.key} className="flex items-center gap-2 text-xs">
++              <span className="w-[104px] shrink-0 text-right" style={{ color: 'var(--ink-4)', fontFamily: 'var(--font-ui)' }}>
++                {f.label}
++                <span style={{ color: 'var(--ink-6)', fontFamily: 'var(--font-data)' }}> {f.weight}%</span>
++              </span>
++              <div className="flex-1 h-[5px] rounded-full overflow-hidden" style={{ background: 'var(--ink-6)', opacity: isPlaceholder ? 0.45 : 1 }}>
++                <div
++                  className="h-full rounded-full transition-all duration-700"
++                  style={{
++                    width: `${pct}%`,
++                    backgroundColor: isPlaceholder ? 'var(--ink-5)' : scoreColour(pct),
++                  }}
++                />
++              </div>
++              <span className="w-[46px] shrink-0 text-right" style={{ color: 'var(--ink-5)', fontFamily: 'var(--font-data)' }}>
++                {isPlaceholder ? 'n/a' : value == null ? '—' : `${Math.round(value)}`}
++              </span>
+             </div>
+-            <span className="text-[var(--ink-5)] w-8 text-right" style={{ fontFamily: 'var(--font-data)' }}>{item.value}/{item.max}</span>
+-          </div>
+-        )
+-      })}
++          )
++        })}
++      </div>
++
++      {placeholderFactors.length > 0 && (
++        <p className="text-[10.5px] mt-2 leading-relaxed" style={{ color: 'var(--ink-5)' }}>
++          Greyed factors are neutral stand-ins, not measurements — the engine has no data behind
++          them yet, so they do not move the score.
++        </p>
++      )}
+     </div>
+   )
+ }
+@@ -123,3 +254,102 @@ export function ScoreBadge({ score }: { score: number }) {
+     </span>
+   )
+ }
++
++// ─── Community score card ────────────────────────────────────────────────────
++
++interface ScoreResponse {
++  community: string
++  slug: string
++  score: number | null
++  scored: boolean
++  reason?: string
++  breakdown: ScoreBreakdown | null
++  breakdownLocked: boolean
++  lockedReason?: string | null
++  placeholderFactors?: string[]
++  dataCoverage: number
++  notes: string | null
++  tier: string
++}
++
++/**
++ * Fetches one community's ENGINE score and renders it.
++ *
++ * Deliberately not a client-side estimate: `/sqftlab/scores/:slug` returns the
++ * persisted composite from the scoring engine, and withholds the factor
++ * breakdown server-side for callers below Pro. The locked state therefore
++ * reflects what the server actually sent rather than a guess about the tier.
++ */
++export function CommunityScoreCard({ slug, onUpgrade }: { slug: string; onUpgrade?: () => void }) {
++  const [data, setData] = useState<ScoreResponse | null>(null)
++  const [error, setError] = useState<string | null>(null)
++
++  useEffect(() => {
++    let alive = true
++    setData(null)
++    setError(null)
++    authedFetch(`/api/sqftlab/scores/${encodeURIComponent(slug)}`)
++      .then(async (res) => {
++        const body = (await res.json().catch(() => ({}))) as ScoreResponse & { error?: string }
++        if (!alive) return
++        if (!res.ok) {
++          // Surface the server's own words rather than a generic failure.
++          setError(body.error ?? `Could not load the score (${res.status})`)
++          return
++        }
++        setData(body)
++      })
++      .catch(() => {
++        if (alive) setError('Could not reach the score service.')
++      })
++    return () => {
++      alive = false
++    }
++  }, [slug])
++
++  if (error) {
++    return (
++      <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)' }}>
++        <h3 className="font-semibold mb-2" style={{ color: 'var(--ink)' }}>Investment Score</h3>
++        <p className="text-xs" style={{ color: 'var(--warn)' }}>{error}</p>
++      </div>
++    )
++  }
++
++  if (!data) {
++    return (
++      <div className="p-5 rounded-[18px] flex items-center justify-center" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', minHeight: 220 }}>
++        <p className="text-xs" style={{ color: 'var(--ink-5)' }}>Loading score…</p>
++      </div>
++    )
++  }
++
++  // No fabricated number when the engine has not scored this community yet.
++  if (!data.scored || data.score == null) {
++    return (
++      <div className="p-5 rounded-[18px] flex flex-col items-center justify-center text-center" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', minHeight: 220 }}>
++        <h3 className="font-semibold mb-2" style={{ color: 'var(--ink)' }}>Investment Score</h3>
++        <p className="text-xs leading-relaxed" style={{ color: 'var(--ink-4)' }}>
++          {data.reason ?? 'This community has not been scored yet.'}
++        </p>
++      </div>
++    )
++  }
++
++  return (
++    <div className="p-5 rounded-[18px] flex flex-col items-center" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
++      <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Investment Score</h3>
++      <InvestmentScore
++        score={data.score}
++        breakdown={data.breakdown}
++        breakdownLocked={data.breakdownLocked}
++        lockedReason={data.lockedReason}
++        placeholderFactors={data.placeholderFactors ?? []}
++        dataCoverage={data.dataCoverage}
++        notes={data.notes}
++        onUpgrade={onUpgrade}
++        size="md"
++      />
++    </div>
++  )
++}
+diff --git a/src/lib/alerts.ts b/src/lib/alerts.ts
+index db1e50d..ad31fe6 100644
+--- a/src/lib/alerts.ts
++++ b/src/lib/alerts.ts
+@@ -56,7 +56,13 @@ export async function scanDealAlerts(): Promise<ScanResult> {
+ 
+   for (const alert of alerts) {
+     const community = await prisma.community.findUnique({ where: { slug: alert.district } })
+-    if (!community || !community.medianAedSqft) continue
++    if (!community || !community.medianAedSqft) {
++      // Evaluated, but there is no market level to compare against. Stamp the
++      // check anyway: the user's question is "is the engine running?", and this
++      // alert was genuinely looked at.
++      await prisma.dealAlert.update({ where: { id: alert.id }, data: { lastCheckedAt: new Date() } })
++      continue
++    }
+ 
+     const where: Record<string, unknown> = {
+       purpose: 'sale',
+@@ -92,6 +98,8 @@ export async function scanDealAlerts(): Promise<ScanResult> {
+         title: listing.title,
+       })
+     }
++
++    await prisma.dealAlert.update({ where: { id: alert.id }, data: { lastCheckedAt: new Date() } })
+   }
+ 
+   return { alertsScanned: alerts.length, listingsEvaluated, matchesCreated, alreadyMatched, created }
 -- 
 2.47.3
 
