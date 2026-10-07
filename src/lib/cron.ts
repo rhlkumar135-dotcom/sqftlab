@@ -4,6 +4,7 @@ import { runIntelligencePipeline } from './intelligence'
 import { scanDealAlerts, notifyPendingMatches } from './alerts'
 import { publish } from './events'
 import { detectDeals, SALE_TXN_TYPES } from './deals'
+import { computeAllInvestmentScores } from './score-engine'
 import { dldConfigured, syncDLDTransactions } from './dld'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
 
@@ -212,6 +213,8 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
     }`
   })
 
+  await step('investmentScores', investmentScoresStep)
+
   await step('intelligence', async () => {
     const r = await runIntelligencePipeline()
     // These are objects, not counts — interpolating them directly printed
@@ -259,6 +262,40 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
   }
 
   return { ok: failCount === 0, job: HOURLY_JOB, runId: run.id, okCount, failCount, skipCount, durationMs, steps }
+}
+
+// ─── Investment scores (FEATURE-01) ─────────────────────────────────────────
+
+export const DAILY_JOB = 'daily-scores'
+
+/** Hour of day in the UAE (UTC+4, no daylight saving). */
+function uaeHour(d: Date = new Date()): number {
+  return (d.getUTCHours() + 4) % 24
+}
+
+/**
+ * Recompute every community's investment score once a day, in the 03:00 UAE window.
+ *
+ * Guarded on the hour AND the age of the newest row. A guard on age alone would
+ * drift — each run takes time, so ">24h since last" fires a little earlier every
+ * day until it lands at midnight. Requiring the 03:00 window pins it, and the age
+ * check keeps a retried or duplicated run inside that hour from recomputing twice.
+ *
+ * The batch scores every community with one fixed set of queries, so this is six
+ * round trips rather than six per community.
+ */
+async function investmentScoresStep(): Promise<string | { skipped: string }> {
+  if (uaeHour() !== 3) return { skipped: `outside the 03:00 UAE window (now ${uaeHour()}:00 UAE)` }
+
+  const newest = await prisma.investmentScore.findFirst({
+    orderBy: { calculatedAt: 'desc' },
+    select: { calculatedAt: true },
+  })
+  const ageHours = newest ? (Date.now() - newest.calculatedAt.getTime()) / 3_600_000 : Infinity
+  if (ageHours < 20) return { skipped: `already scored ${Math.round(ageHours)}h ago` }
+
+  const r = await computeAllInvestmentScores()
+  return `${r.written} scores (avg ${r.avgScore ?? 'n/a'}, coverage ${r.avgCoverage ?? 'n/a'})`
 }
 
 /** Most recent runs, newest first — powers /sqftlab/cron/status. */

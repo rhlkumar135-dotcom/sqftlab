@@ -111,6 +111,7 @@ model Community {
   portfolios   Portfolio[]
   watchlists   Watchlist[]
   alerts       Alert[]
+  scores       InvestmentScore[]
 
   @@map("communities")
 }
@@ -723,4 +724,31 @@ model VerificationToken {
 
   @@unique([identifier, token])
   @@map("verification_tokens")
+}
+
+// FEATURE-01 — the single 0–100 investment score, the product's headline number.
+//
+// Append-only like `district_metrics`: every run ADDS a row so the score's own
+// history is preserved and never overwritten. Readers take the newest row per
+// community via `latestInvestmentScores()`.
+model InvestmentScore {
+  id                 String    @id @default(cuid())
+  communityId        String    @map("community_id")
+  community          Community @relation(fields: [communityId], references: [id])
+  score              Float // 0–100 weighted composite
+  psfMomentum        Float?    @map("psf_momentum") // 30% weight
+  rentalYield        Float?    @map("rental_yield") // 25%
+  supplyAbsorption   Float?    @map("supply_absorption") // 20%
+  volumeTrend        Float?    @map("volume_trend") // 15%
+  capitalFlow        Float?    @map("capital_flow") // 10%
+  // Share (0–1) of the five inputs that were backed by real data rather than a
+  // neutral stand-in. A composite built mostly from placeholders is arithmetically
+  // valid and evidentially worthless, so readers need to be able to tell them
+  // apart instead of trusting every `score` equally.
+  dataCoverage       Float     @default(0) @map("data_coverage")
+  notes              String? // human-readable top driver, or what data is missing
+  calculatedAt       DateTime  @default(now()) @map("calculated_at")
+
+  @@index([communityId, calculatedAt])
+  @@map("investment_scores")
 }

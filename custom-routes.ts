@@ -15,6 +15,7 @@ import {
   computeMarketSummary, latestDistrictMetrics, ALL_BEDS,
 } from './src/lib/intelligence'
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
+import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value (Task B).
@@ -272,6 +273,10 @@ app.get('/sqftlab/communities', async (c) => {
       latitude: true, longitude: true, medianAedSqft: true, medianAnnualRentAed: true,
       grossYieldPct: true, neighbourhoodScore: true, priceChange30d: true,
       priceChange1y: true, transactionCount30d: true, totalTransactions: true,
+      // Provenance of `medianAedSqft`: 'dld' (government register), 'listing'
+      // (asking prices, 15–30% above transacted) or 'none'. Without it a caller
+      // cannot tell a measured number from an asking-price stand-in.
+      psfSource: true,
       scoreSchools: true, scoreHealthcare: true, scoreMetro: true,
       scoreRetail: true, scoreParks: true, scoreWorship: true,
     },
@@ -514,6 +519,119 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
         }
       : {}),
   })
+})
+
+// ─── Investment Score (FEATURE-01) ───────────────────────────────────────────
+
+app.get('/sqftlab/communities/:slug/score', async (c) => {
+  const slug = c.req.param('slug')
+  const community = await prisma.community.findUnique({
+    where: { slug },
+    select: { id: true, slug: true, nameEn: true, medianAedSqft: true, psfSource: true },
+  })
+  if (!community) return c.json({ error: 'Community not found' }, 404)
+
+  const tier = await getCallerTier(c)
+  await trackEvent(c, 'score_view', { slug, tier })
+
+  // The newest cached row. `investment_scores` is append-only, so "current" is
+  // the most recent `calculatedAt` — not a unique row.
+  let latest = await prisma.investmentScore.findFirst({
+    where: { communityId: community.id },
+    orderBy: { calculatedAt: 'desc' },
+  })
+
+  // Never scored before → compute once on demand so the endpoint is never empty
+  // just because the nightly batch has not run yet.
+  if (!latest) {
+    await computeInvestmentScore(community.id)
+    latest = await prisma.investmentScore.findFirst({
+      where: { communityId: community.id },
+      orderBy: { calculatedAt: 'desc' },
+    })
+  }
+  if (!latest) return c.json({ error: 'Score unavailable' }, 500)
+
+  // A composite built mostly from neutral stand-ins is not the same claim as one
+  // built from five real inputs, so the caller is told which it is receiving.
+  const confidence =
+    latest.dataCoverage >= 0.75 ? 'high' : latest.dataCoverage >= 0.5 ? 'medium' : 'low'
+
+  // Task B3 — guests and free accounts get the headline number; the weighted
+  // breakdown is the paid tier.
+  const paid = tier === 'pro' || tier === 'enterprise' || tier === 'institutional'
+
+  return c.json({
+    slug: community.slug,
+    name: community.nameEn,
+    score: latest.score,
+    confidence,
+    dataCoverage: latest.dataCoverage,
+    notes: latest.notes,
+    medianAedSqft: community.medianAedSqft,
+    psfSource: community.psfSource,
+    calculatedAt: latest.calculatedAt,
+    breakdown: paid
+      ? {
+          psfMomentum: latest.psfMomentum,
+          rentalYield: latest.rentalYield,
+          supplyAbsorption: latest.supplyAbsorption,
+          volumeTrend: latest.volumeTrend,
+          capitalFlow: latest.capitalFlow,
+        }
+      : null,
+    ...(paid
+      ? {}
+      : {
+          limited: true,
+          message: 'Sign in to see the weighted breakdown behind this score',
+          signInUrl: '/auth/signin',
+        }),
+  })
+})
+
+// All current scores — one row per community, for the map's score layer.
+app.get('/sqftlab/scores', async (c) => {
+  const tier = await getCallerTier(c)
+  const [latest, communities] = await Promise.all([
+    latestInvestmentScores(),
+    prisma.community.findMany({
+      select: { id: true, slug: true, nameEn: true, emirate: true, medianAedSqft: true, psfSource: true },
+    }),
+  ])
+
+  const rows = communities
+    .map((c) => {
+      const s = latest.get(c.id)
+      if (!s) return null
+      return {
+        slug: c.slug,
+        name: c.nameEn,
+        emirate: c.emirate,
+        score: s.score,
+        dataCoverage: s.dataCoverage,
+        medianAedSqft: c.medianAedSqft,
+        psfSource: c.psfSource,
+        calculatedAt: s.calculatedAt,
+      }
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => b.score - a.score)
+
+  return c.json({
+    scores: rows,
+    total: rows.length,
+    unscored: communities.length - rows.length,
+    tier,
+  })
+})
+
+// Recompute every score. The nightly cron calls the engine directly; this exists
+// so the job can also be triggered and verified on demand.
+app.post('/sqftlab/scores/recompute', async (c) => {
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
+  const result = await computeAllInvestmentScores()
+  return c.json({ ok: true, ...result })
 })
 
 // ─── Yield Calculator ────────────────────────────────────────────────────────
@@ -841,24 +959,67 @@ const AD_AREAS = [
 
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function pfFetchPage(catId: number, locationId: string, page: number): Promise<any[]> {
+/**
+ * Fetch with exponential backoff.
+ *
+ * The portals throttle by IP. A bare `fetch` that gives up on the first 429 gets
+ * the run banned and the pipeline silently stops producing data, so a rate-limit
+ * response is retried with a widening delay rather than treated as a failure.
+ *
+ * Returns `null` only when every attempt was exhausted (network failure or a
+ * sustained 429/503) — that is the one case callers must treat as "we were
+ * refused", as distinct from "the portal answered, there is just nothing here".
+ */
+async function fetchWithRetry(url: string, attempts = 3): Promise<Response | null> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        signal: AbortSignal.timeout(15000),
+      })
+      if (res.ok) return res
+      // Back off hard on an explicit refusal. 5s / 10s / 15s.
+      if (res.status === 429 || res.status === 503) {
+        await sleepMs(attempt * 5000)
+        continue
+      }
+      return res
+    } catch {
+      if (attempt === attempts) return null
+      await sleepMs(attempt * 2000)
+    }
+  }
+  return null
+}
+
+interface PageResult {
+  /** Parsed listings. Empty means the portal answered and had nothing more. */
+  props: unknown[]
+  /** True when we were throttled or never got an answer — not an empty result. */
+  throttled: boolean
+}
+
+async function pfFetchPage(catId: number, locationId: string, page: number): Promise<PageResult> {
   const url = `https://www.propertyfinder.ae/en/search?c=${catId}&l=${locationId}&ob=mr&page=${page}`
+  const res = await fetchWithRetry(url)
+  if (!res) return { props: [], throttled: true }
+  if (!res.ok) return { props: [], throttled: res.status === 429 || res.status === 403 }
   try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      signal: AbortSignal.timeout(15000),
-    })
-    if (!res.ok) return []
     const html = await res.text()
     const m = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/)
-    if (!m) return []
+    if (!m) return { props: [], throttled: false }
     const j = JSON.parse(m[1])
     const items = j?.props?.pageProps?.searchResult?.listings ?? []
-    return items.filter((l: any) => l.listing_type === 'property' && l.property).map((l: any) => l.property)
-  } catch { return [] }
+    return {
+      props: items.filter((l: any) => l.listing_type === 'property' && l.property).map((l: any) => l.property),
+      throttled: false,
+    }
+  } catch {
+    return { props: [], throttled: false }
+  }
 }
 
 function pfParse(property: any, source: string, purpose: string) {
@@ -899,7 +1060,18 @@ const EMIRATE_CENTROID: Record<string, [number, number]> = {
   abu_dhabi: [24.4539, 54.3773],
 }
 
-async function ensureCommunity(name: string, slug: string, emirate: string) {
+// Per-run memo of resolved communities.
+//
+// `ensureCommunity` used to hit the database once per scraped listing — roughly
+// 6,000 round trips for a full scrape, spent re-resolving a list that only changes
+// when a genuinely new area appears. Cleared at the start of every run so a
+// renamed or removed community is re-resolved rather than read from a stale map.
+let communityRunCache = new Map<string, { id: string }>()
+
+async function ensureCommunity(name: string, slug: string, emirate: string): Promise<{ id: string }> {
+  const cached = communityRunCache.get(slug)
+  if (cached) return cached
+
   let c = await prisma.community.findFirst({ where: { slug } })
   // Dialect-agnostic name lookup — Prisma's `mode: 'insensitive'` is
   // Postgres-only and throws on SQLite. See src/lib/community-match.ts.
@@ -918,7 +1090,8 @@ async function ensureCommunity(name: string, slug: string, emirate: string) {
     // the next listing in this same scrape pass.
     invalidateCommunityCache()
   }
-  return c
+  communityRunCache.set(slug, { id: c.id })
+  return { id: c.id }
 }
 
 // Deal detection lives in src/lib/deals.ts so the scraper, the /detect-deals
@@ -932,19 +1105,35 @@ app.get('/sqftlab/scrape', async (c) => {
   let totalSaved = 0
   const logs: string[] = []
 
+  // Any row still marked 'running' when a new run starts belongs to a process
+  // that died mid-crawl — a deploy, a crash, or a request the caller killed. This
+  // handler is the only writer, so the row cannot belong to a live run. Left
+  // alone it keeps the health view showing an active scrape that ended hours ago.
+  await prisma.scraperLog
+    .updateMany({
+      where: { source: 'propertyfinder', status: 'running' },
+      data: { status: 'error', errorMsg: 'Interrupted — superseded by a newer run', finishedAt: new Date() },
+    })
+    .catch(() => {})
+
   // Best-effort audit row. A missing/failing log table must never abort a scrape.
   const logRun = await prisma.scraperLog
     .create({ data: { source: 'propertyfinder', status: 'running', startedAt: new Date() } })
     .catch(() => null)
 
-  // Circuit breaker. PropertyFinder returns an empty page both at the natural
-  // end of a result set AND when it starts refusing us — so a run of empties
-  // means we're being throttled. Left unchecked this crawls 22 areas × 2
-  // categories × 3 pages against a host that is already saying no.
+  // Circuit breaker. A refusal (429/403, or retries exhausted) is the signal
+  // worth tripping on. Left unchecked this crawls 22 areas × 2 categories × 3
+  // pages against a host that is already saying no.
   let consecutiveFailures = 0
+  let throttledResponses = 0
   let circuitBroken = false
   const MAX_FAILURES = 3
 
+  // Each run resolves communities afresh — a run must never inherit the previous
+  // run's view of the table.
+  communityRunCache = new Map()
+
+  try {
   // Scrape Dubai + Abu Dhabi
   for (const areas of [DUBAI_AREAS, AD_AREAS]) {
     const emirate = areas === DUBAI_AREAS ? 'dubai' : 'abu_dhabi'
@@ -952,21 +1141,35 @@ app.get('/sqftlab/scrape', async (c) => {
       for (const catId of [1, 2]) {
         const purpose = catId === 1 ? 'sale' : 'rent'
         for (let page = 1; page <= 3; page++) {
-          const props = await pfFetchPage(catId, area.lid, page)
-          if (props.length === 0) {
+          const { props, throttled } = await pfFetchPage(catId, area.lid, page)
+
+          // Only a refusal counts toward the breaker. An empty page from a portal
+          // that answered normally is just the end of this area's results —
+          // counting it as a failure abandoned the remaining areas after three
+          // genuinely thin ones.
+          if (throttled) {
+            throttledResponses++
             consecutiveFailures++
             if (consecutiveFailures >= MAX_FAILURES) {
               circuitBroken = true
-              logs.push(`Circuit breaker tripped: ${MAX_FAILURES} consecutive empty responses — stopping scrape`)
+              logs.push(`Circuit breaker tripped: ${MAX_FAILURES} consecutive refusals — stopping scrape`)
             }
-            break // no further pages of this size
+            break
           }
           consecutiveFailures = 0
+          if (props.length === 0) break // no further pages of this size
+
           for (const p of props) {
             try {
               const parsed = pfParse(p, 'propertyfinder', purpose)
               if (parsed.priceAed <= 0) continue
-              const community = await ensureCommunity(parsed.districtName, parsed.locationSlug, emirate)
+              // Attribute to the AREA being scraped, not `parsed.locationSlug`.
+              // PropertyFinder's card carries the BUILDING's slug, so trusting it
+              // created one community per building — a single run added 484 rows
+              // like `jumeirah-lake-towers-jlt-cluster-e-global-lake-view`, every
+              // one with zero listings and the wrong emirate. A listing returned
+              // by the "Dubai Marina" search belongs to Dubai Marina.
+              const community = await ensureCommunity(area.name, area.slug, emirate)
               await prisma.listing.upsert({
                 where: { externalId: parsed.externalId },
                 create: {
@@ -1091,9 +1294,29 @@ app.get('/sqftlab/scrape', async (c) => {
     totalListings: finalCount,
     communities: statsCommunities.length,
     circuitBroken,
+    throttledResponses,
     logs,
     elapsed: `${elapsed}s`,
   })
+  } catch (err) {
+    // The audit row must reach a terminal state. Without this a scrape that threw
+    // mid-run left its ScraperLog stuck on 'running' forever, so the health view
+    // showed an active run that had actually died minutes earlier.
+    if (logRun) {
+      await prisma.scraperLog
+        .update({
+          where: { id: logRun.id },
+          data: {
+            status: 'error',
+            errorMsg: String(err).slice(0, 1000),
+            finishedAt: new Date(),
+            durationMs: Date.now() - startedAt,
+          },
+        })
+        .catch(() => {})
+    }
+    throw err
+  }
 })
 
 // ─── Scraper status ─────────────────────────────────────────────────────────
