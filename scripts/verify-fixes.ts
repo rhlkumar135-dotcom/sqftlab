@@ -36,7 +36,9 @@ const auth = { Authorization: `Bearer ${userId}` }
 console.log(`\n# FIX-03 — auth (identity from the request, not a constant)`)
 {
   const p = await req('/api/sqftlab/portfolio')
-  check('GET /portfolio without auth → 401', p.status === 401, `got ${p.status}`)
+  // Day 4's requireTier supersedes Day 1's 401 on this route: a guest is rank 0,
+  // below the pro minimum, so it answers 403 with the tier it needs.
+  check('GET /portfolio without auth → 403 + requiredTier', p.status === 403 && p.body?.requiredTier === 'pro', `got ${p.status} ${JSON.stringify(p.body)?.slice(0, 80)}`)
   const pa = await req('/api/sqftlab/portfolio', { headers: auth })
   check('GET /portfolio with auth → 200', pa.status === 200 && Array.isArray(pa.body?.items), `got ${pa.status}`)
   const w = await req('/api/sqftlab/watchlist')
@@ -58,7 +60,7 @@ console.log(`\n# FIX-03 — auth (identity from the request, not a constant)`)
   })
   check('POST /portfolio rejects an unknown district → 400', bad.status === 400, `got ${bad.status}`)
   const noAuth = await req('/api/sqftlab/portfolio', { method: 'POST', body: '{}' })
-  check('POST /portfolio without auth → 401', noAuth.status === 401, `got ${noAuth.status}`)
+  check('POST /portfolio without auth → 403 + requiredTier', noAuth.status === 403 && noAuth.body?.requiredTier === 'pro', `got ${noAuth.status}`)
 }
 
 console.log(`\n# FIX-04 — deal detection`)

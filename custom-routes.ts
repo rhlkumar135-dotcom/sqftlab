@@ -16,10 +16,12 @@ import {
 } from './src/lib/intelligence'
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
+import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
-// `guestId` is the anonymous-visitor cookie value (Task B).
-type AppVariables = { guestId: string }
+// `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
+// request by the tier middleware (Day 4 Task A).
+type AppVariables = { guestId: string; tier: CallerTier }
 
 const app = new Hono<{ Variables: AppVariables }>()
 
@@ -142,6 +144,173 @@ app.use('*', async (c, next) => {
   }
 })
 
+// ─── Tier middleware (Day 4 Task A) ──────────────────────────────────────────
+//
+// Resolves the caller's tier ONCE per request and attaches it to the context.
+// `getCallerTier()` used to be awaited inside seven separate handlers, so a single
+// page load that touched a handful of tier-aware routes paid for the same
+// `prisma.user.findUnique` repeatedly.
+//
+// The brief specifies Redis with a 5-minute TTL. This project has no Redis — the
+// stack is SQLite behind a single Bun process — so the cache is an in-process Map
+// with the same TTL. That is a real semantic difference, not a detail: the map is
+// PROCESS-LOCAL, so with more than one instance a subscription change would take
+// up to 5 minutes to propagate across them, and each instance would still do its
+// own lookups. Swap in Redis before scaling past one process.
+const TIER_TTL_MS = 300_000
+const tierCache = new Map<string, { tier: CallerTier; expiresAt: number }>()
+
+/** Drop a cached tier immediately — call this whenever a subscription changes. */
+export function invalidateTier(userId: string): void {
+  tierCache.delete(userId)
+}
+
+function readCachedTier(userId: string): CallerTier | null {
+  const hit = tierCache.get(userId)
+  if (!hit) return null
+  if (hit.expiresAt <= Date.now()) {
+    tierCache.delete(userId)
+    return null
+  }
+  return hit.tier
+}
+
+app.use('*', async (c, next) => {
+  const userId = getUserId(c)
+  if (!userId) {
+    c.set('tier', 'guest')
+    await next()
+    return
+  }
+
+  const cached = readCachedTier(userId)
+  if (cached) {
+    c.set('tier', cached)
+    await next()
+    return
+  }
+
+  // A lookup failure must not deny access. Middleware that every route depends on
+  // cannot be allowed to throw a 500, and the safe default is the entry tier.
+  let tier: CallerTier = 'free'
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { subscriptionTier: true, subscriptionStatus: true },
+    })
+    if (user && (user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing')) {
+      tier = (user.subscriptionTier ?? 'free') as CallerTier
+    }
+  } catch {
+    tier = 'free'
+  }
+
+  tierCache.set(userId, { tier, expiresAt: Date.now() + TIER_TTL_MS })
+  c.set('tier', tier)
+  await next()
+})
+
+// ─── Tier gate (Day 4 Task B) ────────────────────────────────────────────────
+//
+// NOTE (deliberate contract change): Day 1's Task B3 specified 401 for a guest
+// hitting a subscriber-only route, and `upgradeRequired()` below still does that
+// wherever it is used. Day 4 asks for a single rank-based gate that answers 403
+// with `requiredTier`/`upgradeUrl`, which necessarily includes guests — rank 0 is
+// below every paid tier. The two cannot both be true for the same request, so the
+// routes named in Day 4 now return 403. scripts/verify-day1.ts and
+// scripts/verify-fixes.ts were updated to assert the new status *and* the payload,
+// so no coverage was dropped.
+// The rank ladder is the schema's own: `free | pro | elite | enterprise |
+// institutional` (see the note on User.subscriptionTier). The brief's version
+// omitted `elite`, and because an unknown key fell back to 0 that omission was not
+// harmless — it silently demoted `elite` to GUEST rank. The seeded demo account,
+// which is the identity the whole site runs as, is `elite`, so Portfolio, Alerts
+// and API keys would have 403'd the app's own user and the rate limiter would have
+// capped it at the guest allowance. Any tier added to the schema must be added
+// here too; an unrecognised tier deliberately ranks 0 (deny) rather than being
+// allowed to inherit a paid rank.
+const TIER_RANK: Record<string, number> = {
+  guest: 0,
+  free: 1,
+  pro: 2,
+  elite: 3,
+  enterprise: 4,
+  institutional: 5,
+}
+
+function requireTier(c: Context, minTier: CallerTier, featureName: string): Response | null {
+  const current = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  if ((TIER_RANK[current] ?? 0) >= (TIER_RANK[minTier] ?? 99)) return null
+
+  return c.json(
+    {
+      error: 'Upgrade required',
+      feature: featureName,
+      currentTier: current,
+      requiredTier: minTier,
+      upgradeUrl: '/pricing',
+      limited: true,
+    },
+    403,
+  )
+}
+
+// ─── API rate limiter (Day 4 Task D) ─────────────────────────────────────────
+const RATE_LIMITS: Record<string, number> = {
+  guest: 20,
+  free: 60,
+  pro: 300,
+  elite: 500,
+  enterprise: 1000,
+  institutional: 5000,
+}
+
+// In-process fixed-window counter, process-local for the same no-Redis reason as
+// the tier cache: each instance enforces its own window rather than a shared one.
+const rateWindows = new Map<string, { count: number; expiresAt: number }>()
+
+app.use('/sqftlab/*', async (c, next) => {
+  // A long-lived SSE stream is one request that stays open, not a request rate.
+  // Counting it would let a single reconnecting stream burn the whole window
+  // without the visitor doing anything.
+  if (c.req.header('Accept')?.includes('text/event-stream')) {
+    await next()
+    return
+  }
+
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const userId = getUserId(c)
+  const guestId = c.get('guestId') as string | undefined
+  const identity = userId ?? guestId ?? c.req.header('CF-Connecting-IP') ?? 'anon'
+
+  const windowStart = Math.floor(Date.now() / 60_000)
+  const key = `${identity}:${windowStart}`
+  const prior = rateWindows.get(key)
+  const current = prior && prior.expiresAt > Date.now() ? prior.count + 1 : 1
+  rateWindows.set(key, { count: current, expiresAt: (windowStart + 1) * 60_000 + 1_000 })
+
+  // Opportunistic sweep, so a long-lived process cannot grow this map forever.
+  if (rateWindows.size > 5_000) {
+    const now = Date.now()
+    for (const [k, v] of rateWindows) if (v.expiresAt <= now) rateWindows.delete(k)
+  }
+
+  // An unrecognised tier ranks as a guest (the safe direction for privileges), but
+  // throttling an authenticated account down to the anonymous allowance over a
+  // naming mismatch punishes the wrong party — fall back on whether an account is
+  // actually present.
+  const limit = RATE_LIMITS[tier] ?? (userId ? RATE_LIMITS.free : RATE_LIMITS.guest)
+  c.header('X-RateLimit-Limit', String(limit))
+  c.header('X-RateLimit-Remaining', String(Math.max(0, limit - current)))
+  c.header('X-RateLimit-Reset', String((windowStart + 1) * 60))
+
+  if (current > limit) {
+    return c.json({ error: 'Rate limit exceeded', retryAfter: 60, upgradeUrl: '/pricing' }, 429)
+  }
+
+  await next()
+})
+
 /** Creates the GuestSession row for the current cookie. Never fatal. */
 async function ensureGuestSession(c: Context, opts: { touch?: boolean } = {}): Promise<void> {
   const guestId = c.get('guestId') as string | undefined
@@ -167,7 +336,7 @@ async function ensureGuestSession(c: Context, opts: { touch?: boolean } = {}): P
   }
 }
 
-type CallerTier = 'guest' | 'free' | 'pro' | 'enterprise' | 'institutional'
+type CallerTier = 'guest' | 'free' | 'pro' | 'elite' | 'enterprise' | 'institutional'
 
 /**
  * What the caller is allowed to see.
@@ -176,18 +345,10 @@ type CallerTier = 'guest' | 'free' | 'pro' | 'enterprise' | 'institutional'
  * not AUTHENTICATE. This gate controls the *product experience* (what a guest may
  * browse), not access control: anyone can claim any id by sending it as a bearer
  * token. Security requires the auth layer, not a different tier check.
+ *
+ * The tier is resolved once per request by the tier middleware above and read
+ * with `c.get('tier')`; see `requireTier()` to gate a route on a minimum tier.
  */
-async function getCallerTier(c: Context): Promise<CallerTier> {
-  const userId = getUserId(c)
-  if (!userId) return 'guest'
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { subscriptionTier: true, subscriptionStatus: true },
-  })
-  if (!user) return 'guest'
-  if (user.subscriptionStatus !== 'active' && user.subscriptionStatus !== 'trialing') return 'free'
-  return (user.subscriptionTier ?? 'free') as CallerTier
-}
 
 /** 401 for a guest hitting a subscriber-only endpoint. */
 function upgradeRequired(c: Context) {
@@ -293,7 +454,7 @@ app.get('/sqftlab/communities', async (c) => {
   const dealsByCommunity = new Map(dealGroups.map((g) => [g.communityId, g._count._all]))
 
   // Task B3 — guests get a teaser (6 of 39 districts); signed-in callers get all.
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   const enriched = communities.map((x) => ({ ...x, dealCount: dealsByCommunity.get(x.id) ?? 0 }))
   const visible = tier === 'guest' ? enriched.slice(0, 6) : enriched
 
@@ -333,7 +494,7 @@ app.get('/sqftlab/communities/:slug', async (c) => {
   // Task B3 — guests see headline metrics but not the score breakdown, and no
   // nationality mix. (This payload carries no nationality data at all, so there
   // is nothing to redact for that part; the breakdown is the real gate.)
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   await trackEvent(c, 'community_view', { slug, tier })
 
   if (tier === 'guest') {
@@ -501,7 +662,7 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
 
   // Task B3 — guests get a 3-month window; the 12/36/60-month series is a
   // subscriber feature.
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   const visibleTrend = tier === 'guest' ? trend.slice(-3) : trend
   await trackEvent(c, 'trend_view', { slug, period, tier })
 
@@ -531,7 +692,7 @@ app.get('/sqftlab/communities/:slug/score', async (c) => {
   })
   if (!community) return c.json({ error: 'Community not found' }, 404)
 
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   await trackEvent(c, 'score_view', { slug, tier })
 
   // The newest cached row. `investment_scores` is append-only, so "current" is
@@ -592,7 +753,7 @@ app.get('/sqftlab/communities/:slug/score', async (c) => {
 
 // All current scores — one row per community, for the map's score layer.
 app.get('/sqftlab/scores', async (c) => {
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   const [latest, communities] = await Promise.all([
     latestInvestmentScores(),
     prisma.community.findMany({
@@ -1378,6 +1539,8 @@ async function seededUserId(): Promise<string | null> {
 // ─── Portfolio ───────────────────────────────────────────────────────────────
 
 app.get('/sqftlab/portfolio', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Portfolio')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
@@ -1413,6 +1576,8 @@ app.get('/sqftlab/portfolio', async (c) => {
 // set `purchaseDate` to any value, or `currentValue` to whatever they liked).
 // Fields are validated instead.
 app.post('/sqftlab/portfolio', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Portfolio')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
@@ -1578,7 +1743,7 @@ app.get('/sqftlab/listings', async (c) => {
   // Task B3 — guests get the first 10 rows and no deal badge. `isDeal` is the
   // paid signal (it is the whole point of the deals feed), so it is stripped
   // rather than merely hidden in the UI.
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   const visibleListings =
     tier === 'guest' ? listings.slice(0, 10).map(({ isDeal: _isDeal, ...rest }) => rest) : listings
 
@@ -1623,7 +1788,7 @@ app.get('/sqftlab/listings/:id', async (c) => {
     take: 5,
   })
 
-  const tier = await getCallerTier(c)
+  const tier = c.get('tier') as CallerTier
   const { isDeal: _isDeal, ...rest } = listing
 
   return c.json({
@@ -2373,6 +2538,8 @@ app.get('/sqftlab/alerts/matches', async (c) => {
 // POST /sqftlab/alerts — create a watch. Validated, because an alert with a
 // bogus district silently never fires and looks like a broken engine.
 app.post('/sqftlab/alerts', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Watchlist alerts')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
@@ -2447,17 +2614,16 @@ app.post('/sqftlab/alerts/notify', async (c) => {
   return c.json({ ok: true, notify: result })
 })
 
-// ─── Payment kill switch (spec Part 5.5) ──────────────────────────────────────
-// Mirrors PAYMENTS_ENABLED in src/lib/payments.ts. Every payment endpoint must
-// refuse explicitly — a bare 404 is indistinguishable from a typo in a client,
-// and the spec requires these to answer 503 with a readable message.
-const PAYMENTS_BLOCKED = {
-  error: 'Payment processing is not yet available.',
-  paymentsEnabled: false,
-} as const
-
+// ─── Payment kill switch (spec Part 5.5 / Day 4 Task C) ───────────────────────
+// The flag itself lives in src/lib/payments-server.ts — ONE definition, read from
+// `PAYMENTS_ENABLED`, defaulting to false. It cannot live in src/lib/payments.ts,
+// which is browser code and cannot read process.env (and whose verdict a visitor
+// could edit in the public bundle anyway).
+//
+// Every payment endpoint must refuse explicitly — a bare 404 is indistinguishable
+// from a typo in a client, and the spec requires 503 with a readable message.
 for (const path of ['/checkout', '/subscribe', '/create-payment-intent']) {
-  app.all(path, (c) => c.json(PAYMENTS_BLOCKED, 503))
+  app.all(path, (c) => paymentsBlocked(c) ?? c.json({ error: 'Not implemented' }, 501))
 }
 
 // Stripe webhooks are accepted and logged, never processed, so a delayed event
@@ -2465,9 +2631,12 @@ for (const path of ['/checkout', '/subscribe', '/create-payment-intent']) {
 app.post('/webhooks/stripe', async (c) => {
   const body = await c.req.text().catch(() => '')
   console.info(
-    `[sqftLab] Stripe webhook ignored (PAYMENTS_ENABLED=false) — ${body.length} bytes`,
+    `[sqftLab] Stripe webhook received (PAYMENTS_ENABLED=${PAYMENTS_ENABLED}) — ${body.length} bytes`,
   )
-  return c.json({ received: true, processed: false })
+  // Always 200: a non-2xx makes Stripe retry an event we are deliberately
+  // dropping. `processed` stays false even with the flag on, because no processor
+  // exists behind it yet — setting the env var does not by itself start charging.
+  return c.json({ received: true, processed: false, paymentsEnabled: PAYMENTS_ENABLED })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3434,6 +3603,8 @@ app.post('/sqftlab/auth/onboard', async (c) => {
 // ─── Developer API keys (Task A: ApiKey model) ───────────────────────────────
 
 app.get('/sqftlab/api-keys', async (c) => {
+  const blocked = requireTier(c, 'pro', 'API keys')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
   const keys = await prisma.apiKey.findMany({
@@ -3445,6 +3616,8 @@ app.get('/sqftlab/api-keys', async (c) => {
 })
 
 app.post('/sqftlab/api-keys', async (c) => {
+  const blocked = requireTier(c, 'pro', 'API keys')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
@@ -3470,6 +3643,8 @@ app.post('/sqftlab/api-keys', async (c) => {
 })
 
 app.delete('/sqftlab/api-keys/:id', async (c) => {
+  const blocked = requireTier(c, 'pro', 'API keys')
+  if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
   const id = c.req.param('id')

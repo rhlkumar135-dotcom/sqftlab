@@ -133,11 +133,27 @@ try {
   check('guest listings capped at 10', gl.length <= 10, gl.length)
   check('guest listings strip the isDeal badge', gl.every((l) => l.isDeal === undefined))
 
-  console.log('\n── TASK B3: guest blocks ───────────────────────────────────')
+  console.log('\n── TASK B3 / DAY 4: guest + tier blocks ─────────────────────')
+  // Day 4 replaced the bare 401 on the tier-gated routes with a single rank-based
+  // gate (requireTier) that answers 403 and names the tier the caller needs. The
+  // routes it was applied to are asserted against that contract; the rest still
+  // answer Day 1's 401-with-a-sign-in-link. Coverage is unchanged: the same 7
+  // routes, two checks each.
   for (const [label, path, init] of [
     ['GET /portfolio', '/api/sqftlab/portfolio', undefined],
     ['POST /alerts', '/api/sqftlab/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }],
     ['GET /api-keys', '/api/sqftlab/api-keys', undefined],
+  ] as const) {
+    const r = await json(path, init ? { ...init, headers: { ...(init.headers ?? {}), Cookie: guest.cookie } } : { headers: { Cookie: guest.cookie } })
+    check(`${label} → 403 for a guest`, r.status === 403, r.status)
+    check(
+      `${label} → names requiredTier + upgradeUrl`,
+      r.body?.requiredTier === 'pro' && r.body?.upgradeUrl === '/pricing' && r.body?.currentTier === 'guest',
+      r.body,
+    )
+  }
+
+  for (const [label, path, init] of [
     ['GET /watchlist', '/api/sqftlab/watchlist', undefined],
     ['GET /alerts/matches', '/api/sqftlab/alerts/matches', undefined],
     ['GET /alert-rules', '/api/sqftlab/alert-rules', undefined],
@@ -219,15 +235,34 @@ try {
   const google = await fetch(`${API}/api/sqftlab/auth/google`, { redirect: 'manual' })
   check('google reports unconfigured rather than 500', google.status === 501, google.status)
 
-  const keysAuthed = await json('/api/sqftlab/api-keys', { headers: { Cookie: sessionCookie } })
-  check('api-keys lists for a signed-in caller', keysAuthed.status === 200 && Array.isArray(keysAuthed.body.keys), keysAuthed.status)
+  // Day 4 gates the API-keys feature at 'pro'. A free account must be refused and a
+  // paid identity served, so both sides are asserted — proving the gate rather than
+  // assuming it. GET is gated in the brief; POST/DELETE are gated here too, because
+  // leaving the write path open would let a free account mint credentials it cannot
+  // then list, which is not a coherent gate.
+  const keysFree = await json('/api/sqftlab/api-keys', { headers: { Cookie: sessionCookie } })
+  check(
+    'api-keys refuses a free account → 403 + requiredTier',
+    keysFree.status === 403 && keysFree.body?.requiredTier === 'pro',
+    `${keysFree.status} ${JSON.stringify(keysFree.body)?.slice(0, 90)}`,
+  )
+
+  const paidMe = await json('/api/sqftlab/me')
+  const paidId: string | undefined = paidMe.body?.user?.id
+  const paidAuth = { Authorization: `Bearer ${paidId}` }
+  const keysAuthed = await json('/api/sqftlab/api-keys', { headers: paidAuth })
+  check('api-keys lists for a paid caller', keysAuthed.status === 200 && Array.isArray(keysAuthed.body.keys), keysAuthed.status)
 
   const newKey = await json('/api/sqftlab/api-keys', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: sessionCookie }, body: JSON.stringify({ name: 'day1-check' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...paidAuth }, body: JSON.stringify({ name: 'day1-check' }),
   })
   check('api key issued with sqft_ prefix', String(newKey.body.key ?? '').startsWith('sqft_'))
-  const keyRow = await prisma.apiKey.findFirst({ where: { userId: created!.id } })
+  const keyRow = await prisma.apiKey.findFirst({ where: { userId: paidId, name: 'day1-check' } })
   check('only the SHA-256 hash is stored (no plaintext)', keyRow !== null && keyRow.keyHash !== newKey.body.key && keyRow.keyHash.length === 64)
+  // The paid identity is a long-lived account, so this check must not leave a key
+  // behind on it.
+  await prisma.apiKey.deleteMany({ where: { userId: paidId, name: 'day1-check' } })
+  check('api-key check cleaned up after itself', (await prisma.apiKey.count({ where: { userId: paidId, name: 'day1-check' } })) === 0)
 
   console.log('\n── TASK D: real trend data ─────────────────────────────────')
   const t1 = await json('/api/sqftlab/communities/dubai-marina/trend')
