@@ -827,9 +827,70 @@ app.post('/sqftlab/scores/recompute', async (c) => {
 
 // ─── Yield Calculator ────────────────────────────────────────────────────────
 
+// ─── Input validation for the two calculators ────────────────────────────────
+//
+// Both routes used to read fields straight off the parsed body and compute with
+// them. A caller that omitted one therefore did arithmetic on `undefined`: every
+// output became NaN, `JSON.stringify` turns NaN into `null`, and the response was
+// HTTP 200 with an all-null payload — which a client cannot tell apart from a
+// real answer. An absent body threw straight out of `c.req.json()` as a 500.
+// A calculator must refuse input it cannot compute, so both now validate and
+// answer 400 naming the fields at fault. `/macro/scenario` already did this.
+async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
+  const parsed: unknown = await c.req.json().catch(() => null)
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {}
+}
+
+/** A body field as a finite number, or null when absent, blank or non-numeric. */
+function numField(body: Record<string, unknown>, key: string): number | null {
+  const raw = body[key]
+  if (raw === null || raw === undefined || raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+function badInput(c: Context, fields: string[], expected: Record<string, string>) {
+  return c.json({ error: 'Invalid input', fields, expected }, 400)
+}
+
+const YIELD_EXPECTED: Record<string, string> = {
+  purchasePrice: 'a positive number (AED)',
+  annualRent: 'a number >= 0 (AED per year)',
+  serviceCharge: 'a number >= 0 (AED per year); optional, defaults to 0',
+  mortgageEnabled: 'boolean; optional',
+  mortgageRate: 'required when mortgageEnabled — annual percent, e.g. 4.5',
+  mortgageTerm: 'required when mortgageEnabled — years',
+  downPaymentPct: 'percent between 0 and 100; required when mortgageEnabled',
+}
+
 app.post('/sqftlab/yield/calculate', async (c) => {
-  const body = await c.req.json()
-  const { purchasePrice, annualRent, serviceCharge, mortgageEnabled, mortgageRate, mortgageTerm, downPaymentPct } = body
+  const body = await readJsonBody(c)
+
+  const purchasePrice = numField(body, 'purchasePrice')
+  const annualRent = numField(body, 'annualRent')
+  const serviceCharge = numField(body, 'serviceCharge') ?? 0
+  const mortgageEnabled = body.mortgageEnabled === true
+  const mortgageRate = numField(body, 'mortgageRate') ?? 0
+  const mortgageTerm = numField(body, 'mortgageTerm') ?? 0
+  const downPaymentPct = numField(body, 'downPaymentPct') ?? 0
+
+  const bad: string[] = []
+  if (purchasePrice === null || purchasePrice <= 0) bad.push('purchasePrice')
+  if (annualRent === null || annualRent < 0) bad.push('annualRent')
+  if (serviceCharge < 0) bad.push('serviceCharge')
+  if (mortgageEnabled) {
+    if (mortgageRate <= 0) bad.push('mortgageRate')
+    if (mortgageTerm <= 0) bad.push('mortgageTerm')
+    if (downPaymentPct < 0 || downPaymentPct >= 100) bad.push('downPaymentPct')
+  }
+  if (bad.length || purchasePrice === null || annualRent === null) {
+    return badInput(c, bad.length ? bad : ['purchasePrice', 'annualRent'], YIELD_EXPECTED)
+  }
+  // Narrowed from here: the two required values are numbers, and the optional ones
+  // above were coalesced. (`bad.length` alone does not narrow them — TS cannot tie
+  // the array's emptiness to the per-field null checks — so the nulls are restated.)
 
   const grossYield = (annualRent / purchasePrice) * 100
   const dldFee = purchasePrice * 0.04
@@ -846,7 +907,11 @@ app.post('/sqftlab/yield/calculate', async (c) => {
     totalInterest = totalMortgageCost - loanAmount
   }
 
-  const breakEvenMonths = monthlyCashFlow > 0 ? Math.ceil((purchasePrice * 0.04) / monthlyCashFlow) : Infinity
+  // `null` means "this never breaks even" (negative monthly cash flow). It used to
+  // be `Infinity`, which reached the wire as null only because JSON.stringify
+  // rewrites non-finite numbers — the same accident that turned NaN outputs into
+  // nulls. Say it outright instead.
+  const breakEvenMonths = monthlyCashFlow > 0 ? Math.ceil((purchasePrice * 0.04) / monthlyCashFlow) : null
   const annualCashFlow = annualRent - serviceCharge - emi * 12
 
   // 5-year projection (conservative: 0% price growth)
@@ -868,9 +933,35 @@ app.post('/sqftlab/yield/calculate', async (c) => {
 
 // ─── Mortgage Simulator ──────────────────────────────────────────────────────
 
+const MORTGAGE_EXPECTED: Record<string, string> = {
+  price: 'a positive number (AED)',
+  downPaymentPct: 'percent between 0 and 100',
+  ratePct: 'a positive number — annual percent, e.g. 4.5',
+  termYears: 'a positive number of years, at most 40',
+}
+
 app.post('/sqftlab/mortgage/simulate', async (c) => {
-  const body = await c.req.json()
-  const { price, downPaymentPct, ratePct, termYears } = body
+  const body = await readJsonBody(c)
+
+  const price = numField(body, 'price')
+  const downPaymentPct = numField(body, 'downPaymentPct')
+  const ratePct = numField(body, 'ratePct')
+  const termYears = numField(body, 'termYears')
+
+  const bad: string[] = []
+  if (price === null || price <= 0) bad.push('price')
+  if (downPaymentPct === null || downPaymentPct < 0 || downPaymentPct >= 100) bad.push('downPaymentPct')
+  if (ratePct === null || ratePct <= 0) bad.push('ratePct')
+  if (termYears === null || termYears <= 0 || termYears > 40) bad.push('termYears')
+  if (
+    bad.length ||
+    price === null ||
+    downPaymentPct === null ||
+    ratePct === null ||
+    termYears === null
+  ) {
+    return badInput(c, bad.length ? bad : ['price', 'downPaymentPct', 'ratePct', 'termYears'], MORTGAGE_EXPECTED)
+  }
 
   const downPayment = price * (downPaymentPct / 100)
   const loanAmount = price - downPayment

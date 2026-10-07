@@ -9,6 +9,7 @@
  * Run: DATABASE_URL="file:./prisma/dev.db" bun run scripts/verify-cron.ts
  */
 
+import './_env-guard'
 import app from '../custom-routes'
 import { prisma } from '../src/lib/db'
 

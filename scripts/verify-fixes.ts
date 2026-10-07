@@ -178,6 +178,53 @@ console.log(`\n# FIX-10 — mortgage disclaimers`)
   check('bank rates still returned', Array.isArray(m.body?.bankRates) && m.body.bankRates.length === 5)
 }
 
+console.log(`\n# FIX-10b — the calculators refuse input they cannot compute`)
+{
+  const post = (path: string, body?: string) =>
+    req(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body }),
+    })
+
+  // A missing field used to be arithmetic on `undefined`: every output became NaN,
+  // JSON.stringify wrote NaN as null, and the route answered 200 with an all-null
+  // payload — indistinguishable from a real answer. An absent body threw out of
+  // c.req.json() as a 500. Both must now be a 400 that names the field.
+  for (const [label, path] of [
+    ['mortgage', '/api/sqftlab/mortgage/simulate'],
+    ['yield', '/api/sqftlab/yield/calculate'],
+  ] as const) {
+    const none = await post(path)
+    check(`${label}: no body → 400, not 500`, none.status === 400, `got ${none.status}`)
+    check(`${label}: 400 body names the missing fields`, none.body?.error === 'Invalid input' && Array.isArray(none.body?.fields) && none.body.fields.length > 0, JSON.stringify(none.body?.fields))
+    check(`${label}: 400 body documents what each field expects`, typeof none.body?.expected === 'object' && none.body?.expected !== null, Object.keys(none.body?.expected ?? {}).join(','))
+  }
+
+  // Field names from another API (priceAed, not price) must not read as success.
+  const wrong = await post('/api/sqftlab/mortgage/simulate', JSON.stringify({ priceAed: 2000000 }))
+  check('mortgage: unknown field names → 400, never a 200 of nulls', wrong.status === 400, `got ${wrong.status} ${JSON.stringify(wrong.body)?.slice(0, 70)}`)
+
+  // Out-of-range values are refused, and the field named is the offending one.
+  const down100 = await post('/api/sqftlab/mortgage/simulate', JSON.stringify({ price: 2000000, downPaymentPct: 100, ratePct: 4.5, termYears: 25 }))
+  check('mortgage: downPaymentPct=100 → 400 naming downPaymentPct', down100.status === 400 && (down100.body?.fields ?? []).includes('downPaymentPct'), JSON.stringify(down100.body?.fields))
+  const term50 = await post('/api/sqftlab/mortgage/simulate', JSON.stringify({ price: 2000000, downPaymentPct: 20, ratePct: 4.5, termYears: 50 }))
+  check('mortgage: termYears=50 → 400 naming termYears', term50.status === 400 && (term50.body?.fields ?? []).includes('termYears'), JSON.stringify(term50.body?.fields))
+  const nan = await post('/api/sqftlab/yield/calculate', JSON.stringify({ purchasePrice: 0, annualRent: 'abc' }))
+  check('yield: zero price + non-numeric rent → 400', nan.status === 400 && (nan.body?.fields ?? []).includes('purchasePrice') && (nan.body?.fields ?? []).includes('annualRent'), JSON.stringify(nan.body?.fields))
+  const noRate = await post('/api/sqftlab/yield/calculate', JSON.stringify({ purchasePrice: 2000000, annualRent: 120000, mortgageEnabled: true }))
+  check('yield: mortgageEnabled without a rate → 400 naming the mortgage fields', noRate.status === 400 && (noRate.body?.fields ?? []).includes('mortgageRate'), JSON.stringify(noRate.body?.fields))
+
+  // ...and the valid path is unchanged, to the number.
+  const okYield = await post('/api/sqftlab/yield/calculate', JSON.stringify({ purchasePrice: 2000000, annualRent: 120000, serviceCharge: 15000, mortgageEnabled: false, mortgageRate: 4.5, mortgageTerm: 25, downPaymentPct: 20 }))
+  check('yield: valid input still computes', okYield.status === 200 && okYield.body?.grossYield === 6 && okYield.body?.netYield === 5.17, `${okYield.body?.grossYield} / ${okYield.body?.netYield}`)
+
+  // A negative monthly cash flow never breaks even: said outright as null rather
+  // than left as Infinity for JSON.stringify to rewrite.
+  const neg = await post('/api/sqftlab/yield/calculate', JSON.stringify({ purchasePrice: 2000000, annualRent: 1000, serviceCharge: 90000, mortgageEnabled: false }))
+  check('yield: negative cash flow → breakEvenMonths is explicitly null', neg.status === 200 && neg.body?.breakEvenMonths === null, JSON.stringify(neg.body?.breakEvenMonths))
+}
+
 console.log(`\n# FIX-12 — server health still green`)
 {
   const h = await req('/health')
