@@ -13,6 +13,11 @@ for f in scripts/verify-*.ts; do
   case "$n" in
     verify-day9)  cp prisma/dev.db /tmp/day9-e2e.db;  url="file:/tmp/day9-e2e.db" ;;
     verify-day10) cp prisma/dev.db /tmp/day10-e2e.db; url="file:/tmp/day10-e2e.db" ;;
+    # Positive-path deal-engine test. Named after the feature, not the day: its
+    # guard requires the URL to contain "deal-e2e". Without a case here it would
+    # run against the project database — but detectDeals() rewrites every isDeal
+    # flag, so it would corrupt real state before its guard even mattered.
+    verify-deal-engine) cp prisma/dev.db /tmp/deal-e2e.db; url="file:/tmp/deal-e2e.db" ;;
     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
