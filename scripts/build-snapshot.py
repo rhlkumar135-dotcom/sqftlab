@@ -17,16 +17,28 @@ import sys
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:3101"
 LISTING_PAGES = 10  # the listings route pages at 20/page
 
-ENDPOINTS = [
-    "/api/sqftlab/stats",
-    "/api/sqftlab/communities",
-    "/api/sqftlab/deals",
+# Account-scoped paths are NEVER captured. The snapshot ships inside the public JS
+# bundle, so baking one session's response publishes that account's data to every
+# visitor. This is not hypothetical: /portfolio, /watchlist, /alerts, /alerts/matches
+# and /alert-rules were all captured from the demo session, so the deployed site served
+# the demo portfolio (AED 10,941,214 of holdings) to anyone — and the QA run caught
+# exactly that, a guest reading those figures while the live API answered 403.
+# /me is excluded for the same reason: it identifies the caller, and a baked copy makes
+# the client believe it holds a session it does not have.
+PRIVATE_PATHS = (
     "/api/sqftlab/portfolio",
     "/api/sqftlab/watchlist",
     "/api/sqftlab/alerts",
     "/api/sqftlab/alerts/matches",
     "/api/sqftlab/alert-rules",
+    "/api/sqftlab/api-keys",
     "/api/sqftlab/me",
+)
+
+ENDPOINTS = [
+    "/api/sqftlab/stats",
+    "/api/sqftlab/communities",
+    "/api/sqftlab/deals",
     "/api/sqftlab/markets",
     "/api/sqftlab/market/analytics",
     "/api/sqftlab/predictions",
@@ -39,16 +51,11 @@ ENDPOINTS = [
 FORECAST_MONTHS = 6
 
 # Endpoints that resolve the caller from the request, so they need the bootstrap
-# header: the account-scoped ones answer 401 without a session, and /communities
-# is tier-gated — unauthenticated it returns the 6-district guest teaser, which
-# would bake a near-empty register into the static site.
+# header. Only /communities is left: it is tier-gated, and unauthenticated it returns
+# the 6-district guest teaser, which would bake a near-empty register into the static
+# site. (Account-scoped paths are excluded entirely — see PRIVATE_PATHS.)
 AUTH_ENDPOINTS = {
     "/api/sqftlab/communities",
-    "/api/sqftlab/portfolio",
-    "/api/sqftlab/watchlist",
-    "/api/sqftlab/alerts",
-    "/api/sqftlab/alerts/matches",
-    "/api/sqftlab/alert-rules",
 }
 
 SESSION_ID = None
@@ -65,7 +72,14 @@ MARKET_FILTERS = [
 ]
 
 
-def get(path, auth=False):
+def get(path, auth=False, allow_private=False):
+    # Defence in depth: even if a private path is added to ENDPOINTS by mistake, it
+    # never reaches the snapshot file. `allow_private` exists only for bootstrap_session,
+    # which must READ /me to learn the session id — reading it is required for the
+    # register to be captured in full; writing it into the snapshot is what leaked.
+    if not allow_private and path.split("?")[0] in PRIVATE_PATHS:
+        print(f"  {path:36} REFUSED (account-scoped — never baked)")
+        return None
     cmd = ["curl", "-s", "--max-time", "25"]
     if auth and SESSION_ID:
         cmd += ["-H", f"Authorization: Bearer {SESSION_ID}"]
@@ -88,7 +102,7 @@ def get(path, auth=False):
 def bootstrap_session():
     """Ask /me who we are, the same way the browser does, so the authed endpoints
     above can be captured into the snapshot."""
-    data = get("/api/sqftlab/me")
+    data = get("/api/sqftlab/me", allow_private=True)
     if isinstance(data, dict):
         return ((data.get("user") or {}).get("id"))
     return None

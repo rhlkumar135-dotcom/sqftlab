@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2 } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -103,22 +103,30 @@ function useCurrency() { return useContext(CurrencyContext) }
 const AED = (n: number) => `AED ${n.toLocaleString()}`
 const PCT = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
 
+// A missing measurement is not a zero. "AED 0/sqft" and "0 txns" read as observed
+// facts, when on this deployment they mean "no government transaction feed is
+// connected" — the QA run flagged exactly that. Anything transaction-derived, and
+// any price that does not exist, renders as an em dash instead.
+const DASH = '—'
+const txns = (n: number | null | undefined) => (n && n > 0 ? n.toLocaleString('en-US') : DASH)
+
 const SOURCE_COLORS: Record<string, string> = { propertyfinder: '#007A33', bayut: '#FF6B00', dubizzle: '#3366FF' }
 const SOURCE_LABELS: Record<string, string> = { propertyfinder: 'PropertyFinder', bayut: 'Bayut', dubizzle: 'Dubizzle' }
 
-async function safeFetch<T>(url: string, fallback: T): Promise<T> {
-  try {
-    // Present an identity first: account-scoped routes answer 401 without one.
-    // ensureSession() caches after the first call, so this is not an extra
-    // round-trip per request.
-    const userId = await ensureSession()
-    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
-    if (r.ok) return await r.json() as T
-  } catch { /* no backend reachable — fall through to the baked snapshot */ }
-  // Static deployments (and any moment the API is down) serve the register from a
-  // snapshot baked at build time, so the site shows real data instead of placeholders.
-  // Prefer an exact-URL key (per-district forecasts, filtered market queries) and
-  // fall back to the path-level entry.
+// Endpoints that only ever answer for the account that owns the data. The snapshot
+// is captured from the demo session, so serving it as a fallback published one
+// account's portfolio, watchlist and alert rules to every visitor — exactly what the
+// QA run caught: a guest reading AED 10,941,214 of holdings while /portfolio answered
+// 403. These paths are never resolved from the snapshot, whatever it holds.
+const ACCOUNT_SCOPED = /^\/api\/sqftlab\/(portfolio|watchlist|alerts|alert-rules|api-keys|me)\b/
+
+/**
+ * Public data that is safe to serve from the build-time snapshot. Prefer an
+ * exact-URL key (per-district forecasts, filtered market queries) and fall back to
+ * the path-level entry.
+ */
+function bakedFallback<T>(url: string): T | undefined {
+  if (ACCOUNT_SCOPED.test(url.split('?')[0])) return undefined
   const snap = SNAPSHOT as Record<string, unknown>
   const baked = applyBakedFilter(url, snap[url] ?? snap[url.split('?')[0]])
   if (baked !== undefined) return baked as T
@@ -133,7 +141,128 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
     const row = rows?.find((r) => r.slug === detail[1])
     if (row) return { community: row } as T
   }
-  return fallback
+  return undefined
+}
+
+async function safeFetch<T>(url: string, fallback: T): Promise<T> {
+  try {
+    // Present an identity first: account-scoped routes answer 401 without one.
+    // ensureSession() caches after the first call, so this is not an extra
+    // round-trip per request.
+    const userId = await ensureSession()
+    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
+    if (r.ok) return await r.json() as T
+    // 401/403 are answers about access, not outages. Substituting other data for
+    // them is what produced the fabricated portfolio, so return the caller's own
+    // empty value and let the screen say what happened.
+    if (r.status === 401 || r.status === 403) return fallback
+  } catch { /* no backend reachable — fall through to the baked snapshot */ }
+  const baked = bakedFallback<T>(url)
+  return baked !== undefined ? baked : fallback
+}
+
+/**
+ * Like safeFetch, but reports the HTTP status, so a screen can tell "the server said
+ * no" apart from "here is your data" and say so rather than rendering placeholder
+ * figures that look like real holdings.
+ */
+async function loadResource<T>(url: string, initial: T): Promise<{ data: T; status: number | null }> {
+  try {
+    const userId = await ensureSession()
+    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
+    if (r.ok) {
+      const body = await r.json().catch(() => null)
+      if (body && typeof body === 'object') return { data: body as T, status: 200 }
+    }
+    if (r.status === 401 || r.status === 403) return { data: initial, status: r.status }
+    return { data: bakedFallback<T>(url) ?? initial, status: r.status }
+  } catch {
+    return { data: bakedFallback<T>(url) ?? initial, status: null }
+  }
+}
+
+/** loadResource as a hook, so every gated screen shares one loading/denial story. */
+function useResource<T>(url: string, initial: T) {
+  const [state, setState] = useState<{ data: T; status: number | null; loading: boolean }>({
+    data: initial,
+    status: null,
+    loading: true,
+  })
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    let stopped = false
+    loadResource<T>(url, initial).then((r) => {
+      if (!stopped) setState({ data: r.data, status: r.status, loading: false })
+    })
+    return () => { stopped = true }
+    // `initial` is a fresh object every render; the request is keyed on url+nonce.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, nonce])
+  return { ...state, reload: () => setNonce((n) => n + 1) }
+}
+
+/** One empty/denied state for every screen, so they cannot drift apart. */
+function EmptyState({ icon, title, body, action }: {
+  icon: ReactNode
+  title: string
+  body: string
+  action?: { label: string; onClick: () => void }
+}) {
+  return (
+    <div className="text-center py-16 px-6 max-w-[560px] mx-auto">
+      <div className="mx-auto mb-3 flex justify-center" style={{ color: 'var(--ink-6)' }}>{icon}</div>
+      <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--ink)' }}>{title}</h3>
+      <p className="text-sm mb-5" style={{ color: 'var(--ink-4)' }}>{body}</p>
+      {action && (
+        <button onClick={action.onClick} className="px-5 py-2.5 rounded-xl text-sm font-semibold"
+          style={{ background: 'var(--b700)', color: '#fff' }}>{action.label}</button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What a screen shows when the API refuses it. A denial is never dressed up as data:
+ * the previous build rendered the demo account's holdings in exactly this spot,
+ * because the fetch fell back to the snapshot, so a visitor saw AED 10,941,214 of
+ * somebody else's portfolio with no indication the request had been rejected.
+ */
+function AccessNotice({ status, feature, onRetry, setPage }: {
+  status: number | null
+  feature: string
+  onRetry?: () => void
+  setPage?: (p: Page) => void
+}) {
+  if (status === null) {
+    return (
+      <EmptyState
+        icon={<X size={40} />}
+        title={`Couldn't load ${feature}`}
+        body="The API did not answer. This is usually temporary."
+        action={onRetry ? { label: 'Retry', onClick: onRetry } : undefined}
+      />
+    )
+  }
+  const signIn = status === 401
+  return (
+    <EmptyState
+      icon={<Lock size={40} />}
+      title={signIn ? `Sign in to see your ${feature}` : `${feature} needs a Pro plan`}
+      body={
+        signIn
+          ? `${feature} belongs to your account, so it is only ever shown to a signed-in user — it is never shipped in the public bundle.`
+          : `The server answered ${status} for your account, so there is nothing to show. A plan change unlocks it.`
+      }
+      action={
+        setPage
+          ? {
+              label: signIn ? 'Go to sign in' : 'See plans',
+              onClick: () => setPage(signIn ? 'signin' : 'pricing'),
+            }
+          : undefined
+      }
+    />
+  )
 }
 
 // The snapshot ships a single UNFILTERED copy of the district register, so a
@@ -282,14 +411,21 @@ function relAge(ms: number): string {
 }
 
 function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; setSelectedListing: (id: string) => void }) {
-  const [stats, setStats] = useState<{ communityCount: number; transactionCount: number; listingCount: number } | null>(null)
+  const [stats, setStats] = useState<{ communityCount: number; transactionCount: number; listingCount: number; transactionSource?: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   // The hero used to claim "refreshed every 60 seconds". That was never true —
   // the pipeline runs hourly — so it is now derived from the actual refresh job
   // rather than asserted. An unknown state says so instead of overclaiming.
   const [fresh, setFresh] = useState<{ ageMs: number | null; healthy: boolean; lastStatus: string | null } | null>(null)
   useEffect(() => {
-    safeFetch('/api/sqftlab/stats', { communityCount: 39, transactionCount: 585, listingCount: 607, dealCount: 155, topCommunities: [] }).then(setStats)
+    // No invented figures. This used to fall back to a hardcoded "39 communities /
+    // 585 transactions / 155 deals", which reads as live market data on a deployment
+    // that has no government transaction feed connected at all. An absent value now
+    // stays absent, and the hero reports the count only when a source is behind it.
+    safeFetch<{ communityCount: number; transactionCount: number; listingCount: number; transactionSource?: string }>(
+      '/api/sqftlab/stats',
+      { communityCount: 0, transactionCount: 0, listingCount: 0, transactionSource: 'unconfigured' },
+    ).then(setStats)
   }, [])
   useEffect(() => {
     let stopped = false
@@ -360,30 +496,42 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
 
           {/* Intelligence Preview Strip — Spec §4.2 */}
           <div className="mt-12 p-5 rounded-[18px] max-w-3xl" style={{ background: 'var(--g2)', backdropFilter: 'var(--gblur)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-            <div className="text-[10px] uppercase tracking-widest mb-3" style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>Property intelligence preview · Downtown Dubai 2-bed</div>
+            {/* An illustration of the report format, labelled as such. It used to read as
+                a live Downtown Dubai report — including "47 DLD" — on a page whose own
+                footer said the transaction feed is not connected, which is the same
+                invented-data problem in a different costume. Transaction-derived cells
+                now show the same em dash the rest of the app uses, and everything else
+                carries an explicit sample label. */}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="text-[10px] uppercase tracking-widest" style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>Example report · Downtown Dubai 2-bed</div>
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full font-semibold"
+                style={{ background: 'var(--g3)', color: 'var(--ink-4)', border: '1px solid var(--gb)' }}>Illustrative sample</span>
+            </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               {[
-                { label: 'Txn data', value: '47 DLD', sub: 'transactions' },
-                { label: 'Comps', value: '5 comps', sub: 'similar sales' },
-                { label: 'AED/sqft', value: 'AED 2,180', sub: 'district avg' },
-                { label: 'Fair value', value: 'AED 1.28M–1.44M', sub: 'range' },
+                { label: 'Txn data', value: DASH, sub: 'feed not connected' },
+                { label: 'Comps', value: DASH, sub: 'needs DLD data' },
+                { label: 'AED/sqft', value: 'AED 2,180', sub: 'sample district avg' },
+                { label: 'Fair value', value: 'AED 1.28M–1.44M', sub: 'sample range' },
               ].map((item, i) => (
                 <div key={i} className="p-3 rounded-[10px]" style={{ background: 'var(--g3)' }}>
                   <div className="text-[9px] uppercase tracking-wider mb-1" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>{item.label}</div>
                   <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{item.value}</div>
+                  <div className="text-[9px]" style={{ color: 'var(--ink-6)' }}>{item.sub}</div>
                 </div>
               ))}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                { label: 'Yield', value: '6.2%', color: 'var(--up)' },
-                { label: 'Trend', value: '▲ 4.1%', color: 'var(--up)' },
-                { label: 'Inv. score', value: '74/100', color: 'var(--b600)' },
-                { label: 'Band', value: 'Above average', color: 'var(--b600)' },
+                { label: 'Yield', value: '6.2%', sub: 'sample', color: 'var(--up)' },
+                { label: 'Trend', value: '▲ 4.1%', sub: 'sample', color: 'var(--up)' },
+                { label: 'Inv. score', value: '74/100', sub: 'sample', color: 'var(--b600)' },
+                { label: 'Band', value: 'Above average', sub: 'sample', color: 'var(--b600)' },
               ].map((item, i) => (
                 <div key={i} className="p-3 rounded-[10px]" style={{ background: 'var(--g3)' }}>
                   <div className="text-[9px] uppercase tracking-wider mb-1" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-5)' }}>{item.label}</div>
                   <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: item.color }}>{item.value}</div>
+                  <div className="text-[9px]" style={{ color: 'var(--ink-6)' }}>{item.sub}</div>
                 </div>
               ))}
             </div>
@@ -394,6 +542,11 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
                 className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--ink-5)]"
                 style={{ fontFamily: 'var(--font-ui)', color: 'var(--ink)' }} />
             </div>
+            <p className="mt-3 text-[10px]" style={{ color: 'var(--ink-5)' }}>
+              Illustrative example of the report layout, not a property on the register. Cells
+              marked “sample” are not measurements, and transaction-derived cells show {DASH}
+              because no DLD/ADREC feed is connected on this deployment.
+            </p>
           </div>
 
           {/* Stats */}
@@ -404,12 +557,25 @@ function Landing({ setPage, setSelectedListing }: { setPage: (p: Page) => void; 
                 <div className="text-sm" style={{ color: 'var(--ink-5)' }}>Communities</div>
               </div>
               <div>
-                <div className="text-3xl font-bold" style={{ color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>{(stats.transactionCount / 1000).toFixed(1)}K</div>
-                <div className="text-sm" style={{ color: 'var(--ink-5)' }}>Transactions</div>
+                {/* "0.0K transactions" asserted a market fact where the truth is that no
+                    DLD/ADREC feed is connected. Show the number only when one is. */}
+                <div className="text-3xl font-bold" style={{ color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>
+                  {stats.transactionSource === 'live' ? `${(stats.transactionCount / 1000).toFixed(1)}K` : '—'}
+                </div>
+                <div className="text-sm" style={{ color: 'var(--ink-5)' }}>
+                  {stats.transactionSource === 'live' ? 'Transactions' : (
+                    <span title="Registering a DLD (Dubai Pulse) or ADREC feed activates transaction data">
+                      Transactions <span style={{ color: 'var(--ink-6)' }}>(feed not connected)</span>
+                    </span>
+                  )}
+                </div>
               </div>
               <div>
                 <div className="text-3xl font-bold" style={{ color: 'var(--ink)', fontFamily: 'var(--font-data)' }}>{stats.listingCount}</div>
-                <div className="text-sm" style={{ color: 'var(--ink-5)' }}>Live Listings</div>
+                {/* Scoped, because Markets reports a different and smaller number
+                    (sale-only). Two unlabelled "listing" counts invite the reader to
+                    think one of them is wrong. */}
+                <div className="text-sm" style={{ color: 'var(--ink-5)' }}>Live listings <span style={{ color: 'var(--ink-6)' }}>(sale + rent)</span></div>
               </div>
             </div>
           )}
@@ -1145,16 +1311,37 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
 
-function Portfolio() {
-  const [data, setData] = useState<{ items: PortfolioItem[]; summary: Record<string, number> } | null>(null)
-  const [loading, setLoading] = useState(true)
+function Portfolio({ setPage }: { setPage: (p: Page) => void }) {
+  const { data, status, loading, reload } = useResource<{ items: PortfolioItem[]; summary: Record<string, number> }>(
+    '/api/sqftlab/portfolio',
+    { items: [], summary: {} },
+  )
   const { format } = useCurrency()
-  useEffect(() => {
-    safeFetch('/api/sqftlab/portfolio', { items: [], summary: { totalValue: 0, totalGainLoss: 0, weightedYield: 0, monthlyCashFlow: 0 } }).then(d => { setData(d); setLoading(false) })
-  }, [])
   if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading portfolio...</div>
-  if (!data) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>No portfolio data</div>
-  const { summary, items } = data
+  // A refusal is not data. Rendering holdings in this spot is exactly what showed a
+  // visitor the demo account's AED 10,941,214 while the API was answering 403.
+  if (status !== 200) {
+    return (
+      <div className="max-w-[1280px] mx-auto px-4 py-6">
+        <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
+        <AccessNotice status={status} feature="Portfolio" setPage={setPage} onRetry={reload} />
+      </div>
+    )
+  }
+  const items = data.items ?? []
+  const summary = data.summary ?? {}
+  if (items.length === 0) {
+    return (
+      <div className="max-w-[1280px] mx-auto px-4 py-6">
+        <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
+        <EmptyState
+          icon={<Briefcase size={40} />}
+          title="No holdings yet"
+          body="This account has no properties recorded, so there is nothing to value yet."
+        />
+      </div>
+    )
+  }
   const pieData = items.map(i => ({ name: i.community.nameEn, value: i.currentValue }))
   const COLORS = ['var(--b800)', 'var(--b500)', 'var(--up)', 'var(--down)', 'var(--ink-4)']
 
@@ -1209,22 +1396,27 @@ function Portfolio() {
 // ─── Watchlist ───────────────────────────────────────────────────────────────
 
 function Watchlist({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
-  const [items, setItems] = useState<{ community: Community; addedAt: string }[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data, status, loading, reload } = useResource<{ items: { community: Community; addedAt: string }[] }>(
+    '/api/sqftlab/watchlist',
+    { items: [] },
+  )
   const { format } = useCurrency()
-  useEffect(() => {
-    safeFetch('/api/sqftlab/watchlist', { items: [] }).then(d => { setItems(d.items || []); setLoading(false) })
-  }, [])
   if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading watchlist...</div>
+  const items = data.items ?? []
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
       <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Watchlist</h2>
-      {items.length === 0 ? (
-        <div className="text-center py-20" style={{ color: 'var(--ink-5)' }}>
-          <Bookmark size={40} className="mx-auto mb-3" style={{ color: 'var(--ink-6)' }} />
-          <p>No communities watched yet — search the heatmap to start tracking.</p>
-        </div>
+      {/* A watchlist is account data: say so when the server refuses it rather than
+          showing whatever the snapshot happens to contain. */}
+      {status !== 200 ? (
+        <AccessNotice status={status} feature="Watchlist" setPage={setPage} onRetry={reload} />
+      ) : items.length === 0 ? (
+        <EmptyState
+          icon={<Bookmark size={40} />}
+          title="No communities watched yet"
+          body="Search the heatmap and bookmark a district to start tracking it."
+        />
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {items.map(w => {
@@ -1257,13 +1449,13 @@ function Watchlist({ setPage, setSelectedCommunity }: { setPage: (p: Page) => vo
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
 function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; setSelectedCommunity: (s: string) => void }) {
-  const [deals, setDeals] = useState<Listing[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data, status, loading, reload } = useResource<{
+    deals: Listing[]
+    message?: string
+    insufficientData?: boolean
+  }>('/api/sqftlab/deals', { deals: [] })
   const { format } = useCurrency()
-  useEffect(() => {
-    safeFetch('/api/sqftlab/deals', { deals: [] } as unknown)
-      .then((d: unknown) => { const data = d as { deals?: Listing[] }; setDeals(data.deals || []); setLoading(false) })
-  }, [])
+  const deals = data.deals ?? []
 
   return (
     <div className="max-w-[1280px] mx-auto px-4 py-6">
@@ -1273,8 +1465,19 @@ function Deals({ setPage, setSelectedCommunity }: { setPage: (p: Page) => void; 
       </div>
       <p className="text-xs mb-6" style={{ color: 'var(--ink-4)' }}>Properties priced below DLD transaction averages. Not compared against other listing prices.</p>
 
+      {/* The API already explains WHY the list is empty — an unconnected DLD feed
+          versus a market that simply has no mispricing. Rendering a bare list threw
+          that explanation away and left a blank page. */}
       {loading ? (
         <div className="text-center py-20" style={{ color: 'var(--ink-5)' }}>Loading deals...</div>
+      ) : status !== 200 ? (
+        <AccessNotice status={status} feature="Deals" onRetry={reload} />
+      ) : deals.length === 0 ? (
+        <EmptyState
+          icon={<Zap size={40} />}
+          title={data.insufficientData ? 'Deals need transaction data' : 'No mispriced listings right now'}
+          body={data.message ?? "Every tracked listing is at or above its area's DLD median."}
+        />
       ) : (
         <div className="space-y-3">
           {deals.map(d => {
@@ -1348,16 +1551,21 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
   const [notice, setNotice] = useState<string | null>(null)
   const [form, setForm] = useState({ district: '', propertyType: 'any', maxPrice: '', minBeds: '' })
   const [tier, setTier] = useState<string | null>(null)
+  const [accessStatus, setAccessStatus] = useState<number | null>(null)
   const { format } = useCurrency()
 
   const load = useCallback(() => {
     setLoading(true)
     Promise.all([
-      safeFetch('/api/sqftlab/alerts', { alerts: [] }),
-      safeFetch('/api/sqftlab/alerts/matches', { matches: [] }),
+      loadResource<{ alerts: DealAlertRow[] }>('/api/sqftlab/alerts', { alerts: [] }),
+      loadResource<{ matches: AlertMatchRow[] }>('/api/sqftlab/alerts/matches', { matches: [] }),
     ]).then(([a, m]) => {
-      setAlerts((a.alerts || []) as DealAlertRow[])
-      setMatches((m.matches || []) as AlertMatchRow[])
+      setAlerts(a.data.alerts || [])
+      setMatches(m.data.matches || [])
+      // Both endpoints are account-scoped. When the server refuses them, an empty
+      // list renders as a working "No alerts yet" state, which is a lie — record the
+      // refusal so the page can say what actually happened.
+      setAccessStatus(a.status === 200 && m.status === 200 ? 200 : a.status ?? m.status)
       setLoading(false)
     })
   }, [])
@@ -1465,6 +1673,9 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
         <div className="mb-4 px-4 py-3 rounded-xl text-sm" style={{ background: 'var(--up-bg)', color: 'var(--up)' }}>{notice}</div>
       )}
 
+      {accessStatus === 401 || accessStatus === 403 ? (
+        <AccessNotice status={accessStatus} feature="Alerts" setPage={setPage} onRetry={load} />
+      ) : (
       <Gate>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Create + list */}
@@ -1587,6 +1798,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
           </div>
         </div>
       </Gate>
+      )}
     </div>
   )
 }
@@ -1670,7 +1882,7 @@ function PricingPage({ setPage }: { setPage: (p: Page) => void }) {
   const tiers = [
     { name: 'Free', price: 0, features: ['Homepage intelligence overview', 'District heatmap (PSF view)', '5 property intelligence reports/day', '3-month price trend', 'Transaction data count', 'Basic neighbourhood score'], cta: 'Get started free', primary: false },
     { name: 'Pro', price: 49, annualPrice: 39, features: ['Everything in Free', 'Unlimited property reports', 'Full comps (up to 20 transactions)', 'Fair value range calculation', 'Rental yield with Ejari data', 'Investment score (0–100)', '12-month price trends', 'Yield calculator with district data', 'CSV export'], cta: 'Coming soon', primary: true },
-    { name: 'Elite', price: 149, annualPrice: 119, features: ['Everything in Pro', 'AI price forecast (6-month LSTM)', 'Deal alerts via email', 'Developer risk tracker', 'Portfolio performance analytics', 'PDF market reports', 'REST API (rate-limited)', 'Priority 60-second data refresh'], cta: 'Coming soon', primary: false },
+    { name: 'Elite', price: 149, annualPrice: 119, features: ['Everything in Pro', 'AI price forecast (6-month LSTM)', 'Deal alerts via email', 'Developer risk tracker', 'Portfolio performance analytics', 'PDF market reports', 'REST API (rate-limited) — keys issued on request', 'Priority 60-second data refresh'], cta: 'Coming soon', primary: false },
   ]
 
   return (
@@ -1678,6 +1890,12 @@ function PricingPage({ setPage }: { setPage: (p: Page) => void }) {
       <div className="text-center mb-8">
         <h2 className="text-3xl font-bold mb-3" style={{ color: 'var(--ink)' }}>Simple, transparent pricing</h2>
         <p className="mb-6" style={{ color: 'var(--ink-5)' }}>Start free. Upgrade when you need more data and power tools.</p>
+        {/* The QA run went looking for a key-management screen and found none, because
+            there isn't one. Saying so beats leaving "REST API" listed with no way in. */}
+        <p className="text-xs -mt-4 mb-6" style={{ color: 'var(--ink-5)' }}>
+          REST API keys are not self-serve yet — they are issued on request, so there is no
+          key-management screen to find. Paid checkout is likewise not enabled on this deployment.
+        </p>
         <div className="inline-flex items-center gap-0.5 p-1 rounded-[14px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)' }}>
           <button onClick={() => setAnnual(false)} className="px-4 py-1.5 rounded-[10px] text-sm font-medium transition-all"
             style={{ background: !annual ? 'var(--b600)' : 'transparent', color: !annual ? '#fff' : 'var(--ink-4)' }}>Monthly</button>
@@ -2049,10 +2267,18 @@ function MarketsPage({ setPage, setSelectedCommunity }: { setPage: (p: Page) => 
         Every district ranked on realised DLD transactions and live sale listings
       </p>
 
+      {totals.volume === 0 && (
+        <div className="mb-5 px-4 py-3 rounded-xl text-xs" style={{ background: 'var(--g3)', borderLeft: '3px solid var(--warn)', color: 'var(--ink-3)' }}>
+          No registered transactions are loaded on this deployment, so every
+          transaction-derived figure shows “{DASH}”. Prices from live listings — avg PSF,
+          listings — are real. Registering a DLD (Dubai Pulse) or ADREC feed activates the rest.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
         {[
           { label: 'Districts', value: String(rows.length), color: 'var(--ink)' },
-          { label: 'Transactions', value: totals.volume.toLocaleString('en-US'), color: 'var(--b600)' },
+          { label: 'Transactions (30d)', value: txns(totals.volume), color: 'var(--b600)' },
           { label: 'Sale listings', value: totals.listings.toLocaleString('en-US'), color: 'var(--ink)' },
         ].map((s) => (
           <div key={s.label} className="p-4 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
@@ -2121,10 +2347,10 @@ function MarketsPage({ setPage, setSelectedCommunity }: { setPage: (p: Page) => 
                     <div className="font-medium" style={{ color: 'var(--ink)' }}>{r.nameEn}</div>
                     <div className="text-[11px] capitalize" style={{ color: 'var(--ink-5)' }}>{r.emirate.replace('_', ' ')}</div>
                   </td>
-                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{format(r.avgPsf)}</td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink)' }}>{r.avgPsf > 0 ? format(r.avgPsf) : DASH}</td>
                   <td className="px-4 py-3 text-right">{pct(r.change3m)}</td>
                   <td className="px-4 py-3 text-right">{pct(r.change12m)}</td>
-                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>{r.volume.toLocaleString('en-US')}</td>
+                  <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>{txns(r.volume)}</td>
                   <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--ink-4)' }}>{r.listings}</td>
                   <td className="px-4 py-3 text-right" style={{ fontFamily: 'var(--font-data)', color: 'var(--b600)' }}>{r.momentum.toFixed(1)}</td>
                 </tr>
@@ -2246,8 +2472,10 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
                 className="flex items-center justify-between w-full py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
                 <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
                 <div className="text-right">
-                  <span className="text-sm font-bold" style={{ color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>{c.transactionCount30d as number} txns</span>
-                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{c.totalTransactions as number} total</span>
+                  <span className="text-sm font-bold" style={{ color: 'var(--b600)', fontFamily: 'var(--font-data)' }}>{txns(c.transactionCount30d as number)}</span>
+                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>
+                    {c.totalTransactions ? `${c.totalTransactions} total` : 'no registered transactions'}
+                  </span>
                 </div>
               </button>
             ))}
@@ -2350,6 +2578,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
           <div className="space-y-3">
             {topMomentum.map((p, i) => (
               <button key={i} onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}
+                aria-label={`Open the district forecast for ${p.community as string}`}
                 className="w-full p-4 rounded-[14px] text-left transition-all hover:translate-y-[-2px]"
                 style={{ background: 'var(--g3)', border: '1px solid var(--gb)' }}>
                 <div className="flex items-start justify-between mb-2">
@@ -2388,6 +2617,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
           <div className="space-y-3">
             {topGrowth.map((p, i) => (
               <button key={i} onClick={() => { setSelectedCommunity(p.slug as string); setPage('community') }}
+                aria-label={`Open the district forecast for ${p.community as string}`}
                 className="w-full p-4 rounded-[14px] text-left transition-all hover:translate-y-[-2px]"
                 style={{ background: 'var(--g3)', border: '1px solid var(--gb)' }}>
                 <div className="flex items-start justify-between mb-2">
@@ -3055,7 +3285,7 @@ function AppInner() {
       {page === 'listings' && <ListingsFeed setPage={setPage} setSelectedListing={setSelectedListing} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'markets' && <MarketsPage setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'property' && <PropertyIntelligence listingId={selectedListing} setPage={setPage} />}
-      {page === 'portfolio' && <Portfolio />}
+      {page === 'portfolio' && <Portfolio setPage={setPage} />}
       {page === 'watchlist' && <Watchlist setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'deals' && <Deals setPage={setPage} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'alerts' && <AlertsPage setPage={setPage} setSelectedListing={setSelectedListing} />}

@@ -17,6 +17,8 @@ import {
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
 import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
+import { dldConfigured } from './src/lib/dld'
+import { adrecConfigured } from './src/lib/adrec'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -265,6 +267,11 @@ const RATE_LIMITS: Record<string, number> = {
   institutional: 5000,
 }
 
+// Shared by every caller we cannot tell apart — see the limiter below. High enough
+// that it can never catch real browsing (a page load is 4 requests; the whole guest
+// allowance is 20/min), low enough that a script is stopped within a minute.
+const ANON_CEILING = 600
+
 // In-process fixed-window counter, process-local for the same no-Redis reason as
 // the tier cache: each instance enforces its own window rather than a shared one.
 const rateWindows = new Map<string, { count: number; expiresAt: number }>()
@@ -280,25 +287,27 @@ app.use('/sqftlab/*', async (c, next) => {
 
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
   const userId = getUserId(c)
-  // KNOWN LIMITATION, deliberately not "fixed" into something worse.
+  // Who gets which bucket.
   //
   // The guest middleware mints an id for any request arriving without one, so
-  // `guestId` is always set. A cookie-less client therefore gets a fresh bucket per
-  // request and is effectively unlimited: measured on the origin,
-  // `X-RateLimit-Remaining` stayed pinned at 19 across four anonymous requests while
-  // the same four sent with a cookie stepped 19 → 18 → 17 → 16. So the guest
-  // allowance bounds nothing except clients that echo the cookie.
+  // `guestId` alone cannot tell a returning visitor from a first-time script: keyed
+  // on it, a cookie-less client gets a fresh bucket per request and is unlimited.
+  // Measured on the origin — `X-RateLimit-Remaining` stayed pinned at 19 across four
+  // anonymous requests while the same four sent with a cookie stepped 19 → 18 → 17 → 16.
   //
-  // Keying on the client address instead is NOT a safe substitute here. Measured
-  // through the deployed edge, every visitor arrives with socket address
-  // ::ffff:127.0.0.1 and no forwarding headers at all — cf-connecting-ip,
-  // x-forwarded-for and x-real-ip are all absent, and the edge also strips Cookie
-  // and Authorization. An address key would collapse the whole internet into ONE
-  // 20/min bucket and 429 the entire site. Per-client throughput control has to come
-  // from the edge (which does impose its own limit) or from the edge forwarding the
-  // real client address; until then, leave this keyed on the minted guest id.
-  const guestId = c.get('guestId') as string | undefined
-  const identity = userId ?? guestId ?? 'anon'
+  // Keying on the client address instead is NOT safe here: measured through the
+  // deployed edge, every visitor arrives with socket address ::ffff:127.0.0.1 and no
+  // forwarding headers at all — cf-connecting-ip, x-forwarded-for and x-real-ip are
+  // all absent — so an address key would collapse the whole internet into ONE bucket
+  // and 429 the entire site.
+  //
+  // So: a client that PRESENTS a guest cookie keeps its own per-visitor bucket, and
+  // everything else shares one ceiling. That ceiling is deliberately generous — far
+  // above any real browsing pattern (the SPA's initial load is 4 requests) — because
+  // its job is to bound a script, not to police visitors. Genuine per-client control
+  // has to come from the edge, which does impose its own limit.
+  const presentedGuestId = readGuestId(c)
+  const identity = userId ?? presentedGuestId ?? 'anon:no-cookie'
 
   const windowStart = Math.floor(Date.now() / 60_000)
   const key = `${identity}:${windowStart}`
@@ -316,7 +325,11 @@ app.use('/sqftlab/*', async (c, next) => {
   // throttling an authenticated account down to the anonymous allowance over a
   // naming mismatch punishes the wrong party — fall back on whether an account is
   // actually present.
-  const limit = RATE_LIMITS[tier] ?? (userId ? RATE_LIMITS.free : RATE_LIMITS.guest)
+  const limit = userId
+    ? RATE_LIMITS[tier] ?? RATE_LIMITS.free
+    : presentedGuestId
+      ? RATE_LIMITS.guest
+      : ANON_CEILING
   c.header('X-RateLimit-Limit', String(limit))
   c.header('X-RateLimit-Remaining', String(Math.max(0, limit - current)))
   c.header('X-RateLimit-Reset', String((windowStart + 1) * 60))
@@ -1571,11 +1584,27 @@ function getUserId(c: Context): string | null {
 
 // The seeded demo account, resolved by email (falling back to the oldest user)
 // so no cuid is baked into the source.
+/**
+ * The demo account this deployment runs as, for the routes that answer without a
+ * session.
+ *
+ * This used to ask for `demo@sqftlab.ae`, which does not exist — the seeded account
+ * is `demo@sqftlab.com` — so it always fell through to "oldest user". That looked
+ * harmless only because the two happened to be the same row: the moment a second
+ * account exists, the fallback would silently bind the site to whichever user was
+ * created first. Look the demo addresses up explicitly and honour the env override.
+ */
 async function seededUserId(): Promise<string | null> {
-  const user =
-    (await prisma.user.findUnique({ where: { email: 'demo@sqftlab.ae' }, select: { id: true } })) ??
-    (await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } }))
-  return user?.id ?? null
+  const candidates = [process.env.DEMO_USER_EMAIL, 'demo@sqftlab.com', 'demo@sqftlab.ae'].filter(
+    (e): e is string => !!e &&
+      e.length > 0
+  )
+  for (const email of candidates) {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } })
+    if (user) return user.id
+  }
+  const oldest = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
+  return oldest?.id ?? null
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
@@ -2134,7 +2163,21 @@ app.get('/sqftlab/stats', async (c) => {
     select: { nameEn: true, slug: true, priceChange30d: true, medianAedSqft: true },
   })
 
-  return c.json({ communityCount, transactionCount, listingCount, dealCount, topCommunities })
+  // `transactionCount: 0` is ambiguous and the UI was rendering it as a market fact
+  // ("Transactions 0") when the real meaning is "no government feed is configured" —
+  // DLD and ADREC both need credentials that this deployment does not have, and every
+  // derived dataset (real price index, supply pipeline, deal detection) is downstream
+  // of them. Say which case it is so the client can label it instead of asserting zero.
+  const sources = { dld: dldConfigured(), adrec: adrecConfigured() }
+  return c.json({
+    communityCount,
+    transactionCount,
+    listingCount,
+    dealCount,
+    topCommunities,
+    transactionSource: sources.dld || sources.adrec ? 'live' : 'unconfigured',
+    sources,
+  })
 })
 
 // ─── Pro Tier Intelligence (spec Part 8.3) ───────────────────────────────────
