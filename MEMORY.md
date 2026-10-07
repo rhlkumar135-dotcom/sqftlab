@@ -1111,3 +1111,88 @@ It 404s today only because `createAllRoutes()` throws on a stale generated impor
 (`getVerificationTokenList` missing from server-functions.ts) and server.tsx's bare
 `catch {}` swallows it — the whole generated CRUD layer is dead. `verify-day16.ts` asserts
 both `/api/deal-briefs` and `/api/deal-expressions` return 404.
+
+---
+
+## Day 18 — bug hunt by driving the real UI (3 bugs fixed)
+
+All 30 suites passed before this and after every earlier change. **The suite was green and
+the app was broken in three places**, because every suite tests routes, not pixels. Found by
+measuring the rendered page and clicking controls a person clicks.
+
+### 1. `/api-keys` was a dead URL in every deployment (fixed → `/keys`)
+
+The edge proxies the **STRING PREFIX** `/api`, not the path segment: `/apix` and `/apiXYZ`
+answer identically (`404`, body `Not Found`, `text/plain`, 9 bytes — the app's own 404 is
+`{"error":"No API route matches …"}` JSON). So `/api-keys` was answered by the gateway
+before the SPA was consulted. **The page worked when reached by clicking** — that is in-app
+state, no request — so only the cold load (bookmark, shared link, reload, the Docs CTA's
+target after a refresh) was dead. Renamed to `/keys`; page id stays `api-keys`.
+
+Why the Day-17 suite missed it: it fetched **`:3101`**, the app's own server, which *does*
+serve the shell for that path. The shadowing only exists at the edge (`:8080` / the public
+origin). → `scripts/verify-urls.ts` now probes every `PAGE_PATHS` entry through the **edge**,
+plus a STATIC rule (`no published path may start with /api`) that holds with no edge running.
+
+### 2. The desktop nav hid two thirds of the app (fixed → wrapping)
+
+One row, `overflow-x-auto`, scrollbar suppressed (`[scrollbar-width:none]`). 1801px of items
+in a **726px** rail: **6 of 19 visible, 13 off-screen** — Watchlist → Deal Network. Measured
+identically at 1180/1280/1440/1680px (last item's right edge 1985–2125px vs a 1440 viewport).
+Prior click-tests passed because **`el.click()` ignores geometry**; a cursor does not. The
+rail is now its own full-width wrapping row (header 60px → 124px; no page overflow).
+
+### 3. The hero headline was truncated mid-word (fixed → wrapping)
+
+`white-space: nowrap` on `.hero-h1`/`.hero-h2`: at 1440px line 2 needed **1698px inside a
+1232px box**, so the section's `overflow-hidden` cut it at "…worth — befor"; at 1680px line 1
+(1489px) went too. Both now wrap; max clamp 66px → 54px so line 1 still sets on one line.
+
+### The lesson, stated once
+
+A passing suite is not evidence the UI works. Three failure modes it could not see:
+**geometry** (off-screen), **cold-load routing** (an edge that the test never traversed), and
+**truncation** (overset text, no error). New permanent suites:
+
+    scripts/verify-urls.ts        27 checks  every published path through the EDGE + static /api guard
+    scripts/verify-ui-flows.ts    68 checks  15 journeys by real click, + nav/hero geometry at 5 widths
+    scripts/_crawl-all.ts         44 checks  all 30 pages, both viewports, dead-button scan
+
+`verify-ui-flows` and `verify-urls` are in `_runall.sh` (the former needs the project DB
+pinned — it asserts against rows the run creates). Each new guard was **verified to FAIL
+against the old code** before being trusted: nav → "13 off-screen", hero → "needs 1698 has
+1232", URL → "HTTP 404 … Not Found".
+
+Dead-button detection without clicking anything: React stores props on the DOM node under a
+`__reactProps$*` key, so a visible `<button>` with no `onClick` is provably inert. 833
+buttons inventoried, **0 with no handler**.
+
+### Two console errors that are NOT bugs (allow-list them by URL)
+
+Console text for a failed resource is just `Failed to load resource: …` — **no URL** — so an
+allow-list keyed on the text cannot distinguish an expected refusal from a real one. Use
+`ConsoleMessage.location().url`. The three expected non-2xx:
+
+- `403 /sqftlab/deal-briefs` — the Enterprise gate refusing the `elite` demo account.
+- `501 /sqftlab/auth/google` — the sign-in page **probes** for OAuth config with that exact
+  request and hides the button when unset.
+- `ERR_CONNECTION_RESET stream/market` — proxy artefact on the SSE stream; the client
+  reconnects and the badge goes `reconnecting`. `curl` holds the stream open indefinitely.
+
+### Identity is identification, NOT authentication (must decide before real users)
+
+`getUserId(c)` trusts `Authorization: Bearer <userId>` at face value, and `/me` falls back to
+the **seeded demo account** when there is no session. Demonstrated: with a throwaway account's
+id as the Bearer token, `GET /api/sqftlab/portfolio` returned that account's holdings
+(`leaked=true`); an anonymous visitor is identified as the seeded `elite` demo account. The
+code documents this as a pre-auth placeholder. It is not a bug I introduced, and changing it
+is an architecture decision (real signed sessions across every route + client + 32 suites),
+so it is **flagged, not silently rewritten**.
+
+### Still true, unchanged
+
+`Transaction` = **0 rows** (no `DUBAI_PULSE_API_KEY`), so `/api/sqftlab/stats` honestly returns
+`transactionCount: 0, transactionSource: "unconfigured"`. Listings ARE live: 7,553 rows,
+newest scraped the same day. Published `www.sqftlab.com` (Railway + Cloudflare) answers
+`429 "rate limited"` at the edge — platform-side, not the app's JSON limiter.
+
