@@ -994,3 +994,47 @@ Both are needed on Day 15; there is no automatic hook.
     verify-day15 39 · verify-day15-mobile (16 pages @390px) · verify-day15-onboarding 11
     all 27 suites · 1144 checks · 0 failed
     tsc --noEmit  0 errors outside src/generated/   ·   routing 8/8
+
+### The shell's DATABASE_URL points at a DIFFERENT database than the server's
+
+`process.env.DATABASE_URL` in the agent shell is `file:/app/workspace/prisma/dev.db` — the
+**workspace-root stub** (0 users, 0 communities). The project's own `.env` says
+`file:/app/workspace/<project>/prisma/dev.db`, and the running server uses THAT (44
+communities, 7553 listings). Bun does not override an already-exported env var, so any
+ad-hoc script inherits the stub and reports "no such table" for tables that plainly exist.
+
+Symptom that fooled me: `prisma db push` created `white_label_configs` and a raw
+`bun:sqlite` read of `prisma/dev.db` found it, while `prisma.whiteLabelConfig.count()` threw
+`SQLITE_ERROR: no such table` — because the two probes were reading different files.
+
+Consequences:
+- Guard scripts with a RESOLVED-PATH comparison, not a substring. `/app/workspace/prisma/dev.db`
+  also ends in `/prisma/dev.db`, so `url.includes('/prisma/dev.db')` passes against the stub.
+  Day 17's suites compare `resolve(path) === resolve('prisma/dev.db')`.
+- Suites that drive the running server over HTTP must be given the project DB explicitly;
+  they cannot use a throwaway copy the way the older suites do. `scripts/_runall.sh` sets
+  `url="file:$(pwd)/prisma/dev.db"` for `verify-day17` and `verify-day17-routing`.
+
+### Two traps that make "did this route work?" unanswerable by status code
+
+1. `custom-routes.ts` ends with a JSON catch-all (`app.all('*')` → 404
+   `{ error: 'No API route matches …' }`). So "404 with a JSON body" does NOT mean a handler
+   ran. A routing audit that only checks content-type reports every path as registered,
+   including the Day 16 routes that were never built. Match the catch-all's body text.
+2. Prisma validates the WHOLE argument to `upsert`, including the branch it will not take.
+   `upsert({ update: partialWithoutRequiredField, create: { name: required } })` throws
+   `Argument name is missing` on a valid UPDATE — so a partial update 500s only once the row
+   already exists. Branch explicitly (`existing ? update : create`) instead.
+
+### Day 17 suite state
+
+    verify-day17 111 · verify-day17-routing 95   (both need the PROJECT db, see above)
+    all 29 suites · 0 failed
+    tsc --noEmit  0 errors outside src/generated/  ·  scripts/verify-server-routing.ts 8/8
+
+### Day 16 (Deal Origination Network) was NEVER implemented
+
+No commits, and 4 of its manifest routes are absent (`/deals/mine`, `POST /deals`,
+`/deals/:id`, `/deals/:id/express`). `/sqftlab/deals` exists but is the older Day-8
+"listings 8% below the area median" endpoint, not the deal network. The Day 17 brief's
+closing summary asserts "Days 1–17 complete" — that is false until Day 16 is built.
