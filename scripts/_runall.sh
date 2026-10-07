@@ -23,6 +23,15 @@ for f in scripts/verify-*.ts; do
     verify-day13) cp prisma/dev.db /tmp/day13-e2e.db; url="file:/tmp/day13-e2e.db" ;;
     verify-day14) cp prisma/dev.db /tmp/day14-e2e.db; url="file:/tmp/day14-e2e.db" ;;
     verify-day15) cp prisma/dev.db /tmp/day15-e2e.db; url="file:/tmp/day15-e2e.db" ;;
+    # Day 17's suites drive the RUNNING SERVER over HTTP, so they must write where the
+    # server reads — a throwaway copy would put the fixtures somewhere the server never
+    # looks, and every assertion would fail for the wrong reason. They scope their own
+    # writes instead (throwaway users, deleted in a finally block) and refuse to run
+    # against any database that is not this project's, which also protects them from the
+    # shell's default DATABASE_URL pointing at the workspace-root stub. Routing is
+    # read-mostly but creates two accounts for the IDOR check, so it gets the same guard.
+    verify-day17) url="file:$(pwd)/prisma/dev.db" ;;
+    verify-day17-routing) url="file:$(pwd)/prisma/dev.db" ;;
     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;

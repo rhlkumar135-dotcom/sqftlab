@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -20,6 +20,8 @@ import AiChatWidget from '@/components/AiChatWidget'
 import MarketPulsePage from '@/components/MarketPulsePage'
 import MortgagePage from '@/components/MortgagePage'
 import PortfolioPage from '@/components/PortfolioPage'
+import DocsPage from '@/components/DocsPage'
+import ApiKeysPage from '@/components/ApiKeysPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { EmptyState } from '@/components/EmptyState'
@@ -281,7 +283,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -299,6 +301,10 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   // Public SEO surface — it publishes a real URL because crawlers and shared links
   // need one, and because it is the only page here that works without a session.
   'market-pulse': '/market-pulse',
+  // Day 17: both publish real URLs. `/docs` is public (a link to it is the CTA from the
+  // API-key page); `/api-keys` is Pro-gated server-side, so the URL is safe to share.
+  docs: '/docs',
+  'api-keys': '/api-keys',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -318,11 +324,18 @@ const NAV = [
   { id: 'deals' as Page, label: 'Deals', icon: Zap },
   { id: 'alerts' as Page, label: 'Alerts', icon: Bell },
   { id: 'yield' as Page, label: 'Yield Calc', icon: Calculator },
+  // Day 17 routing audit (Task E4): the mortgage calculator shipped on Day 14 with a page
+  // id, a `/mortgage` URL and a render branch, but NOTHING navigated to it — every entry
+  // point was missing, so the only way in was typing the path. It is a free public tool
+  // and the brief lists it in the sidebar, so it now has one.
+  { id: 'mortgage' as Page, label: 'Mortgage', icon: Calculator },
   { id: 'cma' as Page, label: 'CMA', icon: Scale },
   { id: 'buildings' as Page, label: 'Buildings', icon: Building2 },
   { id: 'capital-flow' as Page, label: 'Capital Flow', icon: Globe },
   { id: 'export' as Page, label: 'Export', icon: Download },
   { id: 'market-pulse' as Page, label: 'Pulse', icon: Activity },
+  { id: 'api-keys' as Page, label: 'API', icon: KeyRound },
+  { id: 'docs' as Page, label: 'Docs', icon: FileCode2 },
 ]
 
 // Day 15 Task A — where the getting-started tour may appear. Excluded: the marketing and
@@ -3318,6 +3331,8 @@ function AppInner() {
       {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
       {page === 'export' && <ExportPage onNavigate={navigate} />}
       {page === 'market-pulse' && <MarketPulsePage onBack={() => navigate('landing')} />}
+      {page === 'docs' && <DocsPage onNavigate={navigate} />}
+      {page === 'api-keys' && <ApiKeysPage onNavigate={navigate} />}
       {page === 'building' && (
         <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
       )}

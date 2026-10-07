@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { randomBytes, createHash } from 'node:crypto'
+import { resolveCname } from 'node:dns/promises'
 import { prisma } from './src/lib/db'
 import { notifyPendingMatches, recentMatches, scanDealAlerts } from './src/lib/alerts'
 import { publish, subscribe, streamStatus, recentMessages } from './src/lib/events'
@@ -24,6 +25,7 @@ import {
 } from './src/lib/stripe'
 import { dldConfigured } from './src/lib/dld'
 import { adrecConfigured } from './src/lib/adrec'
+import { auditEnv } from './src/lib/env-audit'
 import {
   computeCma, MIN_COMPS, COMP_WINDOW_DAYS, SIZE_TOLERANCE, CMA_CONDITIONS,
   type CmaCondition, type CmaSubject,
@@ -58,10 +60,42 @@ import {
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
 // request by the tier middleware (Day 4 Task A). `apiKeyUserId`/`apiKeyTier` are
 // set by the /v1 API-key middleware (Day 11 Task A) and identify a caller that
-// authenticated with a key instead of a session.
-type AppVariables = { guestId: string; tier: CallerTier; apiKeyUserId?: string; apiKeyTier?: string }
+// authenticated with a key instead of a session. `whiteLabelConfig` is set by the
+// host middleware (Day 17 Task B) when the request arrived on a verified
+// white-label domain.
+//
+// Declared structurally rather than imported from the generated Prisma client so
+// this file does not break when the client is regenerated mid-edit.
+type WhiteLabelRow = {
+  id: string
+  userId: string
+  clientName: string
+  brandColor: string
+  logoUrl: string | null
+  customDomain: string | null
+  customDomainVerified: boolean
+  attributionText: string | null
+  hideSqftLabBrand: boolean
+  dailyLimit: number
+  monthlyLimit: number
+  active: boolean
+}
+
+type AppVariables = {
+  guestId: string
+  tier: CallerTier
+  apiKeyUserId?: string
+  apiKeyTier?: string
+  whiteLabelConfig?: WhiteLabelRow
+}
 
 const app = new Hono<{ Variables: AppVariables }>()
+
+// ─── Environment audit (Day 17 Task E3) ──────────────────────────────────────
+//
+// Runs once at import. See src/lib/env-audit.ts for why the variable list is derived from
+// what the code reads rather than copied from the brief.
+auditEnv()
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 //
@@ -92,6 +126,38 @@ function originAllowed(origin: string): boolean {
   if (process.env.NODE_ENV !== 'production' && DEV_ORIGIN.test(origin)) return true
   return false
 }
+
+// ─── Security headers (Day 17 Task E2) ───────────────────────────────────────
+//
+// Registered FIRST so it wraps every other middleware and handler, including the
+// CORS pre-flight below (which answers OPTIONS without calling next()) and the
+// JSON error responses produced by the tier and API-key guards.
+//
+// Written after `await next()` rather than before it: setting a header before next()
+// writes to a Response object that the handler then replaces, so the header is lost.
+// The CORS block below documents the same trap.
+app.use('*', async (c, next) => {
+  await next()
+  try {
+    c.res.headers.set('X-Content-Type-Options', 'nosniff')
+    // DENY rather than SAMEORIGIN: this API is never framed, and the SPA it shares a
+    // host with renders no iframes.
+    c.res.headers.set('X-Frame-Options', 'DENY')
+    // Deprecated by every current browser in favour of CSP, and ignored when a CSP is
+    // present — kept because the launch checklist asks for it and it is harmless.
+    c.res.headers.set('X-XSS-Protection', '1; mode=block')
+    c.res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+    c.res.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    // HSTS only under production. Enabling it in dev would pin localhost to https for
+    // a year in the developer's browser and is not reversible from here.
+    if (process.env.NODE_ENV === 'production') {
+      c.res.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    }
+  } catch {
+    // Response already committed (streaming) — headers are best-effort, as with the
+    // guest cookie below.
+  }
+})
 
 app.use('*', async (c, next) => {
   const origin = c.req.header('Origin') ?? ''
@@ -466,6 +532,61 @@ function redactDbUrl(raw?: string) {
     return `malformed:${raw.slice(0, 16)}`
   }
 }
+
+// Deep health check (Day 17 Task E1).
+//
+// `/health/db` below is a database-only readiness probe. This is the full system
+// status the launch checklist asks for, and it is deliberately able to FAIL: the
+// checklist item is "GET /health → status healthy", which is worthless if the
+// endpoint cannot return anything else.
+//
+// Two deviations from the brief, both because it assumes infrastructure this
+// deployment does not have:
+//
+//  · It pings Redis. There is no Redis here — the stack is SQLite behind one Bun
+//    process, and the cache is an in-process Map (src/lib/cache.ts). The cache is
+//    still checked for real (a write/read round-trip), and `redis` is reported as
+//    `not_configured` so the checklist's expectation is visibly addressed rather
+//    than silently dropped.
+//  · It reads `npm_package_version`, which is unset under `bun run`. Falls back to
+//    package.json's version through an env var that IS set at runtime.
+const HEALTH_VERSION = process.env.APP_VERSION ?? process.env.npm_package_version ?? '1.0.0'
+
+app.get('/health', async (c) => {
+  const checks: Record<string, 'ok' | 'error' | 'not_configured'> = {}
+
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    checks.database = 'ok'
+  } catch {
+    checks.database = 'error'
+  }
+
+  // A real round-trip, not an assertion that the module loaded: write then read
+  // the same key, and require the value to come back.
+  try {
+    const probe = `health:${Date.now()}`
+    cacheWrite(probe, 1, 5_000)
+    checks.cache = cacheRead<number>(probe) === 1 ? 'ok' : 'error'
+  } catch {
+    checks.cache = 'error'
+  }
+
+  checks.redis = 'not_configured'
+
+  const failing = Object.entries(checks).filter(([, v]) => v === 'error').map(([k]) => k)
+  const allOk = failing.length === 0
+  return c.json(
+    {
+      status: allOk ? 'healthy' : 'degraded',
+      checks,
+      failing,
+      version: HEALTH_VERSION,
+      ts: new Date().toISOString(),
+    },
+    allOk ? 200 : 503,
+  )
+})
 
 // Readiness probe — reports real DB connectivity plus the resolved error, so a
 // misconfigured database surfaces as readable JSON instead of an empty site.
@@ -3523,6 +3644,42 @@ app.get('/sqftlab/alerts/matches', async (c) => {
   return c.json({ matches })
 })
 
+/**
+ * GET /sqftlab/alerts/:id/matches — the matches for ONE watch.
+ *
+ * Distinct from `/alerts/matches` above, which returns every recent match across all of the
+ * caller's watches. The Day 17 manifest lists this path and it did not exist; three
+ * path segments cannot collide with the two-segment route above.
+ *
+ * `where: { id, userId }` — not `where: { id }` followed by a comparison. Scoping the
+ * lookup itself means another account's watch id is indistinguishable from a
+ * non-existent one, so this cannot be used to enumerate or read someone else's alerts.
+ */
+app.get('/sqftlab/alerts/:id/matches', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Watchlist alerts')
+  if (blocked) return blocked
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const id = c.req.param('id')
+  const alert = await prisma.dealAlert.findFirst({
+    where: { id, userId },
+    select: { id: true, name: true, district: true, active: true, lastCheckedAt: true },
+  })
+  if (!alert) return c.json({ error: 'Alert not found' }, 404)
+
+  const matches = await prisma.alertMatch.findMany({
+    where: { alertId: id },
+    orderBy: { detectedAt: 'desc' },
+    take: 50,
+    select: {
+      id: true, listingId: true, detectedAt: true, psfDiscount: true,
+      notified: true, notifiedAt: true,
+    },
+  })
+  return c.json({ alert, matches })
+})
+
 // POST /sqftlab/alerts — create a watch. Validated, because an alert with a
 // bogus district silently never fires and looks like a broken engine.
 app.post('/sqftlab/alerts', async (c) => {
@@ -5046,17 +5203,98 @@ app.post('/sqftlab/auth/onboard', async (c) => {
 
 // ─── Developer API keys (Task A: ApiKey model) ───────────────────────────────
 
+/**
+ * Maximum ACTIVE keys for a tier.
+ *
+ * Shared by GET and POST: the POST body of this route hardcoded the ladder, so the
+ * usage summary and the enforcement could drift apart and the UI would promise a
+ * limit the API did not apply (or refuse at one the UI never showed).
+ */
+function apiKeyLimitFor(tier: CallerTier | undefined): number {
+  return tier === 'institutional' ? 20 : tier === 'enterprise' ? 10 : tier === 'elite' ? 5 : 3
+}
+
+/** Daily call allowance for one key. Mirrors the limiter in the /v1 middleware. */
+function apiKeyDailyLimitFor(tier: string | undefined): number {
+  return API_DAILY_LIMITS[tier ?? 'pro'] ?? API_DAILY_LIMITS.pro
+}
+
 app.get('/sqftlab/api-keys', async (c) => {
   const blocked = requireTier(c, 'pro', 'API keys')
   if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'pro'
+
   const keys = await prisma.apiKey.findMany({
     where: { userId, revokedAt: null },
-    select: { id: true, prefix: true, name: true, tier: true, callsToday: true, callsMonth: true, lastUsedAt: true, createdAt: true },
+    select: {
+      id: true, prefix: true, name: true, tier: true,
+      callsToday: true, callsMonth: true, callsResetAt: true, monthResetAt: true,
+      lastUsedAt: true, createdAt: true,
+    },
     orderBy: { createdAt: 'desc' },
   })
-  return c.json({ keys })
+
+  // Day and month counters are reset LAZILY, on first use (see the callsResetAt note in
+  // schema.prisma). A stored `callsToday` is therefore STALE until the key is next used,
+  // and reporting it raw would show a key that exhausted its allowance yesterday as still
+  // exhausted today. The same rollover the limiter applies is applied here, or the page
+  // contradicts the API it describes.
+  const now = new Date()
+  const day = now.toISOString().slice(0, 10)
+  const month = day.slice(0, 7)
+
+  const keysWithUsage = keys.map((k) => {
+    const dayFresh = !k.callsResetAt || k.callsResetAt.toISOString().slice(0, 10) === day
+    const monthFresh = !k.monthResetAt || k.monthResetAt.toISOString().slice(0, 7) === month
+    const dailyLimit = apiKeyDailyLimitFor(k.tier)
+    const usedToday = dayFresh ? k.callsToday : 0
+    return {
+      id: k.id,
+      prefix: k.prefix,
+      name: k.name,
+      tier: k.tier,
+      callsToday: usedToday,
+      callsMonth: monthFresh ? k.callsMonth : 0,
+      dailyLimit,
+      remainingToday: Math.max(0, dailyLimit - usedToday),
+      lastUsedAt: k.lastUsedAt,
+      createdAt: k.createdAt,
+    }
+  })
+
+  // Limits are PER KEY. Two keys do not share one 500/day pool, so the headline figure
+  // reports the BUSIEST key against the per-key ceiling. Summing calls across keys and
+  // comparing them to a single limit would invent a shared quota that is not enforced
+  // anywhere, and would show a two-key account at "900/500".
+  const busiest = keysWithUsage.reduce<(typeof keysWithUsage)[number] | null>(
+    (acc, k) => (acc === null || k.callsToday > acc.callsToday ? k : acc),
+    null,
+  )
+  const dailyLimitPerKey = apiKeyDailyLimitFor(tier)
+
+  const midnightUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+  const monthStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+
+  return c.json({
+    keys: keysWithUsage,
+    usage: {
+      tier,
+      keyCount: keysWithUsage.length,
+      maxKeys: apiKeyLimitFor(tier),
+      dailyLimitPerKey,
+      monthlyLimitPerKey: 2_000_000,
+      // Where the limiter actually is: the single most-used key.
+      busiestKeyName: busiest?.name ?? null,
+      busiestKeyCallsToday: busiest?.callsToday ?? 0,
+      // Summed for the customer's own interest, explicitly not compared to a limit.
+      totalCallsToday: keysWithUsage.reduce((a, k) => a + k.callsToday, 0),
+      totalCallsMonth: keysWithUsage.reduce((a, k) => a + k.callsMonth, 0),
+      resetsAtUtc: midnightUtc.toISOString(),
+      monthResetsAtUtc: monthStartUtc.toISOString(),
+    },
+  })
 })
 
 app.post('/sqftlab/api-keys', async (c) => {
@@ -5077,7 +5315,7 @@ app.post('/sqftlab/api-keys', async (c) => {
   // meant an institutional customer's key carried a pro tier and their allowance
   // was enforced at 500/day instead of 100,000 — paying for 200x and receiving 1x.
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'pro'
-  const maxKeys = tier === 'institutional' ? 20 : tier === 'enterprise' ? 10 : tier === 'elite' ? 5 : 3
+  const maxKeys = apiKeyLimitFor(tier)
   const existingCount = await prisma.apiKey.count({ where: { userId, revokedAt: null } })
   if (existingCount >= maxKeys) {
     return c.json(
@@ -5125,6 +5363,363 @@ app.delete('/sqftlab/api-keys/:id', async (c) => {
   await prisma.apiKey.update({ where: { id }, data: { revokedAt: new Date() } })
   return c.json({ ok: true, revoked: id })
 })
+
+// ─── White-label API (Day 17 Tasks A + B) ────────────────────────────────────
+//
+// An institutional client points their own domain at this API and their branding is
+// injected into the responses (and, via `brandColor`/`logoUrl`/`attributionText`, into
+// PDF reports).
+//
+// The brief's route bodies spread the raw request body straight into a Prisma upsert:
+//
+//     prisma.whiteLabelConfig.upsert({ where: { userId }, update: body, create: { userId, ...body } })
+//
+// `body` is whatever the caller posted, which makes this a mass-assignment hole on a
+// model that controls branding and rate limits. An institutional caller could POST:
+//
+//   · `customDomainVerified: true` — skipping the DNS proof entirely, and (via the
+//     host middleware below) serving their branding for a domain they never owned.
+//   · `dailyLimit: 999999999` — granting itself an allowance it was not sold.
+//   · `userId: "<someone else>"` — creating a config row against another account,
+//     because the spread lands *after* the explicit `userId`.
+//
+// Every writable field is whitelisted below and nothing else is reachable.
+
+const WHITE_LABEL_CNAME_TARGET = process.env.WHITE_LABEL_CNAME_TARGET ?? 'sqftlab-api.railway.app'
+
+/**
+ * A bare hostname: no scheme, no port, no path, no trailing dot, lowercased.
+ *
+ * Stored normalised because it is compared against the `Host` header. If `https://x.com`
+ * or `x.com:8443` could be persisted, the comparison in the host middleware would never
+ * match and the client would silently get un-branded responses with no error to explain it.
+ */
+function normalizeDomain(raw: string): string | null {
+  const trimmed = raw.trim().toLowerCase().replace(/\.$/, '')
+  if (!trimmed) return null
+  if (!/^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/.test(trimmed)) return null
+  return trimmed
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+
+type WhiteLabelPatch = {
+  clientName?: string
+  brandColor?: string
+  logoUrl?: string | null
+  customDomain?: string | null
+  attributionText?: string | null
+  hideSqftLabBrand?: boolean
+}
+
+/**
+ * Build the whitelisted write payload. Unknown keys are dropped rather than rejected —
+ * a client sending `customDomainVerified` is ignored, not trusted and not told which
+ * field name would have worked.
+ */
+function whiteLabelPatchFrom(body: Record<string, unknown>): { patch: WhiteLabelPatch; errors: string[] } {
+  const patch: WhiteLabelPatch = {}
+  const errors: string[] = []
+
+  if (body.clientName !== undefined) {
+    const v = typeof body.clientName === 'string' ? body.clientName.trim() : ''
+    if (!v) errors.push('clientName must be a non-empty string')
+    else if (v.length > 120) errors.push('clientName must be 120 characters or fewer')
+    else patch.clientName = v
+  }
+
+  if (body.brandColor !== undefined) {
+    const v = typeof body.brandColor === 'string' ? body.brandColor.trim() : ''
+    if (!HEX_COLOR.test(v)) errors.push('brandColor must be a 6-digit hex colour, e.g. #2563EB')
+    else patch.brandColor = v.toUpperCase()
+  }
+
+  if (body.logoUrl !== undefined) {
+    const v = typeof body.logoUrl === 'string' ? body.logoUrl.trim() : ''
+    if (!v) patch.logoUrl = null
+    else if (v.length > 2048) errors.push('logoUrl must be 2048 characters or fewer')
+    // http(s) only: this URL is rendered into reports, so `javascript:`/`data:` must not
+    // be storable even though nothing here interpolates it into HTML.
+    else if (!/^https?:\/\/[^\s]+$/i.test(v)) errors.push('logoUrl must be an http(s) URL')
+    else patch.logoUrl = v
+  }
+
+  if (body.customDomain !== undefined) {
+    const v = typeof body.customDomain === 'string' ? body.customDomain.trim() : ''
+    if (!v) patch.customDomain = null
+    else {
+      const normalized = normalizeDomain(v)
+      if (!normalized) errors.push('customDomain must be a bare hostname, e.g. data.example.com')
+      else patch.customDomain = normalized
+    }
+  }
+
+  if (body.attributionText !== undefined) {
+    const v = typeof body.attributionText === 'string' ? body.attributionText.trim() : ''
+    if (!v) patch.attributionText = null
+    else if (v.length > 300) errors.push('attributionText must be 300 characters or fewer')
+    else patch.attributionText = v
+  }
+
+  if (body.hideSqftLabBrand !== undefined) {
+    if (typeof body.hideSqftLabBrand !== 'boolean') errors.push('hideSqftLabBrand must be a boolean')
+    else patch.hideSqftLabBrand = body.hideSqftLabBrand
+  }
+
+  return { patch, errors }
+}
+
+/** The response fields a client is allowed to see. Never the relation or the flags. */
+function whiteLabelView(config: WhiteLabelRow) {
+  return {
+    clientName: config.clientName,
+    brandColor: config.brandColor,
+    logoUrl: config.logoUrl,
+    customDomain: config.customDomain,
+    customDomainVerified: config.customDomainVerified,
+    attributionText: config.attributionText,
+    hideSqftLabBrand: config.hideSqftLabBrand,
+    dailyLimit: config.dailyLimit,
+    monthlyLimit: config.monthlyLimit,
+    active: config.active,
+  }
+}
+
+app.post('/sqftlab/white-label/config', async (c) => {
+  const blocked = requireTier(c, 'institutional', 'White-Label API')
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const body = await readJsonBody(c)
+  const { patch, errors } = whiteLabelPatchFrom(body)
+  if (errors.length > 0) {
+    return c.json({ error: 'Invalid input', fields: errors }, 400)
+  }
+
+  const existing = await prisma.whiteLabelConfig.findUnique({ where: { userId } })
+  if (!existing && patch.clientName === undefined) {
+    return c.json({ error: 'clientName is required when creating a white-label config' }, 400)
+  }
+  if (Object.keys(patch).length === 0) {
+    return c.json({ error: 'No recognised fields to update', fields: Object.keys(body) }, 400)
+  }
+
+  // The domain is globally unique. Without this check the unique index raises P2002 and
+  // the client gets an unhandled 500 for a conflict that is theirs to resolve.
+  if (patch.customDomain) {
+    const clash = await prisma.whiteLabelConfig.findUnique({ where: { customDomain: patch.customDomain } })
+    if (clash && clash.userId !== userId) {
+      return c.json(
+        { error: 'That domain is already claimed by another white-label account', customDomain: patch.customDomain },
+        409,
+      )
+    }
+  }
+
+  // Changing the domain invalidates any previous proof. Otherwise a client could verify
+  // a domain they own and then repoint `customDomain` at a domain they do not, keeping
+  // the verified flag — which is exactly the thing verification exists to prevent.
+  const domainChanged = patch.customDomain !== undefined && patch.customDomain !== existing?.customDomain
+  const data = {
+    ...patch,
+    ...(domainChanged
+      ? { customDomainVerified: false, verifiedDomain: null, verifiedAt: null, lastVerifyError: null }
+      : {}),
+  }
+
+  // `upsert` is deliberately NOT used here.
+  //
+  // Prisma validates the whole argument object, including the branch it will not take, so
+  // an UPSERT whose `create` names a required field throws `Argument clientName is
+  // missing` on a partial UPDATE that legitimately omits it — a 500 for a valid request
+  // (repointing the domain, or setting just the attribution). The brief uses `update: body`
+  // with `create: { userId, ...body }`, which has the same defect in the other direction:
+  // its first call always carries clientName, so the bug only appears on the second request.
+  //
+  // Branching explicitly avoids the trap and removes the `as string` cast the upsert form
+  // needed to satisfy the compiler.
+  let config: WhiteLabelRow
+  if (existing) {
+    config = await prisma.whiteLabelConfig.update({ where: { userId }, data })
+  } else {
+    if (patch.clientName === undefined) {
+      // Unreachable — rejected above. Present so the create branch cannot compile without
+      // a client name, rather than casting one in.
+      return c.json({ error: 'clientName is required when creating a white-label config' }, 400)
+    }
+    config = await prisma.whiteLabelConfig.create({
+      data: { ...data, userId, clientName: patch.clientName },
+    })
+  }
+
+  await trackEvent(c, 'white_label_configured', {
+    domain: config.customDomain,
+    domainChanged,
+    created: !existing,
+  })
+
+  return c.json({ config: whiteLabelView(config) })
+})
+
+app.get('/sqftlab/white-label/config', async (c) => {
+  const blocked = requireTier(c, 'institutional', 'White-Label API')
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const config = await prisma.whiteLabelConfig.findUnique({ where: { userId } })
+  return c.json({ config: config ? whiteLabelView(config) : null })
+})
+
+/**
+ * Verify the custom domain actually points at this API.
+ *
+ * The brief's version never verifies anything: it returns the CNAME instructions with
+ * `verified: config.customDomainVerified`, which nothing else in the codebase ever sets.
+ * The host middleware requires `customDomainVerified`, so as specified the whole feature
+ * could never activate — the client would add the record, poll this endpoint, and watch
+ * `verified` stay false forever.
+ *
+ * So it performs a real CNAME lookup, with a timeout, and only sets the flag when a
+ * record actually matches. A lookup that cannot run (no DNS, sandboxed network) reports
+ * why and leaves the config unverified rather than assuming success.
+ */
+app.post('/sqftlab/white-label/verify-domain', async (c) => {
+  const blocked = requireTier(c, 'institutional', 'White-Label API')
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const config = await prisma.whiteLabelConfig.findUnique({ where: { userId } })
+  if (!config?.customDomain) return c.json({ error: 'No custom domain configured' }, 400)
+
+  const instructions = {
+    type: 'CNAME',
+    name: config.customDomain,
+    value: WHITE_LABEL_CNAME_TARGET,
+    ttl: 300,
+  }
+
+  let records: string[] = []
+  let lookupError: string | null = null
+  try {
+    records = await Promise.race([
+      resolveCname(config.customDomain),
+      new Promise<string[]>((_, reject) =>
+        setTimeout(() => reject(new Error('DNS lookup timed out after 5s')), 5_000),
+      ),
+    ])
+    records = records.map((r) => r.toLowerCase().replace(/\.$/, ''))
+  } catch (e) {
+    lookupError = e instanceof Error ? e.message : String(e)
+  }
+
+  const matched = records.includes(WHITE_LABEL_CNAME_TARGET.toLowerCase())
+
+  await prisma.whiteLabelConfig.update({
+    where: { userId },
+    data: matched
+      ? { customDomainVerified: true, verifiedDomain: config.customDomain, verifiedAt: new Date(), lastVerifyError: null }
+      : { customDomainVerified: false, verifiedDomain: null, lastVerifyError: lookupError ?? `No CNAME record points at ${WHITE_LABEL_CNAME_TARGET}` },
+  })
+
+  // "Could not check" is not the same answer as "checked and it is wrong", and the client
+  // needs to tell them apart — one is a DNS change to make, the other is a network problem
+  // on our side that they cannot fix.
+  const outcome: 'verified' | 'mismatch' | 'unavailable' =
+    matched ? 'verified' : lookupError ? 'unavailable' : 'mismatch'
+
+  return c.json({
+    domain: config.customDomain,
+    verified: matched,
+    outcome,
+    observedCnames: records,
+    expectedCname: WHITE_LABEL_CNAME_TARGET,
+    instructions,
+    note:
+      outcome === 'verified'
+        ? 'Domain verified. Requests arriving on this host are now branded.'
+        : outcome === 'unavailable'
+          ? `Could not reach DNS to check the record (${lookupError}). The domain remains unverified.`
+          : 'Add the CNAME record at your DNS provider, then call this endpoint again to verify.',
+  })
+})
+
+/**
+ * Host middleware (Day 17 Task B).
+ *
+ * Registered immediately before the /v1 API-key middleware so the branding is on the
+ * context before any route that answers under /v1 runs.
+ *
+ * Path note: the brief writes `app.use('/api/v1/*', …)`. This app is mounted with
+ * `app.route('/api', customRoutes)`, so that would match `/api/api/v1/...` — the same
+ * mount-point trap the v1 section below documents at length. The correct pattern here is
+ * `/v1/*`, which serves `/api/v1/...`.
+ */
+const WHITE_LABEL_HOST_ALLOWLIST = new Set([
+  'sqftlab.com',
+  'www.sqftlab.com',
+  'api.sqftlab.com',
+  'app.sqftlab.com',
+])
+
+app.use('/v1/*', async (c, next) => {
+  // `Host` carries the port when it is non-default (`localhost:8080`), and comparing the
+  // raw header would let `sqftlab.com:443` miss the allowlist and be looked up as a
+  // white-label domain on every request.
+  const host = (c.req.header('Host') ?? '').toLowerCase().replace(/:\d+$/, '')
+  const isOwnHost = host === '' || WHITE_LABEL_HOST_ALLOWLIST.has(host) || host.endsWith('.shogo.ai') || host === 'localhost'
+
+  if (!isOwnHost) {
+    const config = await prisma.whiteLabelConfig.findFirst({
+      where: { customDomain: host, active: true, customDomainVerified: true },
+    })
+    if (config) {
+      c.set('whiteLabelConfig', config as WhiteLabelRow)
+      c.header('X-White-Label', config.clientName)
+    }
+  }
+
+  await next()
+})
+
+/**
+ * Fold the caller's branding into an API payload's `meta`.
+ *
+ * Constrained to `Record<string, unknown>` rather than `{ meta?: … }`: with the narrower
+ * constraint TypeScript contextually types the argument as the constraint and then
+ * rejects every real field as an excess property (`'community' does not exist in type
+ * '{ meta?: … }'`), even though those payloads are the whole point.
+ *
+ * Applied inside each /v1 handler rather than by re-wrapping the response in the
+ * middleware: rewriting `c.res` would mean reading and re-emitting the body (breaking on
+ * any streaming response) and rebuilding the headers, which are where `X-API-Limit` and
+ * `X-API-Remaining` live. The brief names this same approach.
+ */
+function withWhiteLabel<T extends Record<string, unknown>>(c: Context, payload: T): T {
+  const wl = c.get('whiteLabelConfig')
+  if (!wl) return payload
+  const attribution =
+    wl.attributionText ?? (wl.hideSqftLabBrand ? wl.clientName : `Powered by ${wl.clientName} · data from sqftLab`)
+  const existingMeta = (payload.meta ?? {}) as Record<string, unknown>
+  return {
+    ...payload,
+    meta: {
+      ...existingMeta,
+      whiteLabel: {
+        clientName: wl.clientName,
+        brandColor: wl.brandColor,
+        logoUrl: wl.logoUrl,
+        attribution,
+        hideSqftLabBrand: wl.hideSqftLabBrand,
+      },
+    },
+  }
+}
 
 // ─── Public Data API v1 (Day 11 Tasks A + B) ─────────────────────────────────
 //
@@ -5243,13 +5838,13 @@ app.get('/v1/transactions', async (c) => {
 
   if (!built.ok) {
     return c.json(
-      {
+      withWhiteLabel(c, {
         error: `No community matches "${built.area}"`,
         code: 'area_not_found',
         hint: 'GET /api/v1/communities to list valid names',
         data: [],
         meta: { total: 0, limit, offset, returned: 0, source: 'DLD official records' },
-      },
+      }),
       404,
     )
   }
@@ -5269,28 +5864,30 @@ app.get('/v1/transactions', async (c) => {
     prisma.transaction.count({ where: built.where }),
   ])
 
-  return c.json({
-    data: rows.map((r) => ({
-      date: r.transactionDate.toISOString().slice(0, 10),
-      community: r.community?.nameEn ?? null,
-      communitySlug: r.community?.slug ?? null,
-      emirate: r.community?.emirate ?? null,
-      building: r.buildingName,
-      bedrooms: r.beds,
-      sizeSqft: Number(r.areaSqft.toFixed(0)),
-      psfAed: Number(r.pricePerSqft.toFixed(0)),
-      priceAed: Number(r.priceAed.toFixed(0)),
-      propertyType: r.propertyType,
-      transactionType: r.transactionType,
-    })),
-    meta: {
-      total, limit, offset, returned: rows.length,
-      source: 'DLD official records',
-      // With no registry source connected this is the honest shape of the
-      // answer, not an error: the query is valid, the dataset is empty.
-      empty: total === 0,
-    },
-  })
+  return c.json(
+    withWhiteLabel(c, {
+      data: rows.map((r) => ({
+        date: r.transactionDate.toISOString().slice(0, 10),
+        community: r.community?.nameEn ?? null,
+        communitySlug: r.community?.slug ?? null,
+        emirate: r.community?.emirate ?? null,
+        building: r.buildingName,
+        bedrooms: r.beds,
+        sizeSqft: Number(r.areaSqft.toFixed(0)),
+        psfAed: Number(r.pricePerSqft.toFixed(0)),
+        priceAed: Number(r.priceAed.toFixed(0)),
+        propertyType: r.propertyType,
+        transactionType: r.transactionType,
+      })),
+      meta: {
+        total, limit, offset, returned: rows.length,
+        source: 'DLD official records',
+        // With no registry source connected this is the honest shape of the
+        // answer, not an error: the query is valid, the dataset is empty.
+        empty: total === 0,
+      },
+    }),
+  )
 })
 
 app.get('/v1/communities', async (c) => {
@@ -5299,7 +5896,9 @@ app.get('/v1/communities', async (c) => {
     orderBy: { nameEn: 'asc' },
     take: 200,
   })
-  return c.json({ data: communities, meta: { total: communities.length, source: 'sqftLab community registry' } })
+  return c.json(
+    withWhiteLabel(c, { data: communities, meta: { total: communities.length, source: 'sqftLab community registry' } }),
+  )
 })
 
 app.get('/v1/communities/:slug/stats', async (c) => {
@@ -5325,22 +5924,24 @@ app.get('/v1/communities/:slug/stats', async (c) => {
   })
 
   const n = stats._count._all
-  return c.json({
-    community: community.nameEn,
-    slug: community.slug,
-    emirate: community.emirate,
-    period: '90 days',
-    transactions: n,
-    avgPsfAed: n ? Number((stats._avg.pricePerSqft ?? 0).toFixed(0)) : null,
-    minPsfAed: n ? Number((stats._min.pricePerSqft ?? 0).toFixed(0)) : null,
-    maxPsfAed: n ? Number((stats._max.pricePerSqft ?? 0).toFixed(0)) : null,
-    // The registry median is a separate figure with its own provenance; it is
-    // reported alongside rather than substituted when the 90-day window is empty.
-    registryMedianPsfAed: community.medianAedSqft,
-    registryMedianSource: community.psfSource,
-    source: 'DLD official records',
-    empty: n === 0,
-  })
+  return c.json(
+    withWhiteLabel(c, {
+      community: community.nameEn,
+      slug: community.slug,
+      emirate: community.emirate,
+      period: '90 days',
+      transactions: n,
+      avgPsfAed: n ? Number((stats._avg.pricePerSqft ?? 0).toFixed(0)) : null,
+      minPsfAed: n ? Number((stats._min.pricePerSqft ?? 0).toFixed(0)) : null,
+      maxPsfAed: n ? Number((stats._max.pricePerSqft ?? 0).toFixed(0)) : null,
+      // The registry median is a separate figure with its own provenance; it is
+      // reported alongside rather than substituted when the 90-day window is empty.
+      registryMedianPsfAed: community.medianAedSqft,
+      registryMedianSource: community.psfSource,
+      source: 'DLD official records',
+      empty: n === 0,
+    }),
+  )
 })
 
 // ─── Export Centre (Day 11 Task C) ───────────────────────────────────────────

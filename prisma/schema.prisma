@@ -90,6 +90,7 @@ model User {
   dealAlerts   DealAlert[]
   subscription Subscription?
   apiKeys      ApiKey[]
+  whiteLabelConfig WhiteLabelConfig?
   events       UserEvent[]
   sessions     Session[]
   accounts     Account[]
@@ -867,4 +868,55 @@ model AiChatMessage {
   @@index([userId, createdAt])
   @@index([sessionId, createdAt])
   @@map("ai_chat_messages")
+}
+
+/// White-label API branding for institutional clients (Day 17 Task A).
+///
+/// An institutional client proxies their own domain at our API and their branding is
+/// injected into API responses and PDF reports.
+///
+/// Two things here are deliberately NOT shaped the way the brief sketches them:
+///
+///  1. `customDomainVerified` cannot be set by the client. The brief's route spreads the
+///     raw request body straight into `upsert({ update: body })`, so a client could POST
+///     `{ customDomainVerified: true, dailyLimit: 999999999 }` and grant itself a verified
+///     domain and an unlimited allowance. Every writable field is whitelisted in the route
+///     instead, and this flag is only ever set by a real DNS check.
+///  2. `verifiedDomain` records WHICH domain passed verification. Without it, a client
+///     could verify `data.theirbrand.com` and then change `customDomain` to
+///     `data.anotherbank.com` and keep the verified flag — minting branding for a domain
+///     they never proved they own. The route clears both on any domain change.
+model WhiteLabelConfig {
+  id     String @id @default(cuid())
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// e.g. "Emirates NBD Research"
+  clientName String  @map("client_name")
+  brandColor String  @default("#2563EB") @map("brand_color")
+  logoUrl    String? @map("logo_url")
+
+  /// e.g. "data.emiratesnbd.com" — stored lowercased, hostname only, no scheme/port.
+  customDomain         String?   @unique @map("custom_domain")
+  customDomainVerified Boolean   @default(false) @map("custom_domain_verified")
+  /// The domain that actually passed the DNS check; see note 2 above.
+  verifiedDomain       String?   @map("verified_domain")
+  verifiedAt           DateTime? @map("verified_at")
+  /// Why the last verification attempt failed, so the UI can explain it.
+  lastVerifyError      String?   @map("last_verify_error")
+
+  /// "Powered by Emirates NBD Research, data from sqftLab"
+  attributionText String? @map("attribution_text")
+  /// Corrected from the brief's `hideSquftLabBrand` — `squftLab` is a misspelling of the
+  /// brand, and an API field is a contract that outlives the typo.
+  hideSqftLabBrand Boolean @default(false) @map("hide_sqftlab_brand")
+
+  dailyLimit   Int @default(100000) @map("daily_limit")
+  monthlyLimit Int @default(2000000) @map("monthly_limit")
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("white_label_configs")
 }
