@@ -27572,3 +27572,159 @@ index 0000000..1ef8683
 -- 
 2.47.3
 
+From 027cf856c20c01a911fdb3bd831e713e2ac3452f Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 15:43:53 +0000
+Subject: [PATCH] =?UTF-8?q?docs:=20ship=20day17=5Fsqftlab.patch=20?=
+ =?UTF-8?q?=E2=80=94=20days=203-17=20as=2020=20code=20commits,=20plus=20th?=
+ =?UTF-8?q?e=20DB-path=20and=20catch-all=20findings?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-authored-by: Shogo Agent <agent@shogo.ai>
+---
+ MEMORY.md | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/MEMORY.md b/MEMORY.md
+index 12ae3d8..aba66c5 100644
+--- a/MEMORY.md
++++ b/MEMORY.md
+@@ -994,3 +994,47 @@ Both are needed on Day 15; there is no automatic hook.
+     verify-day15 39 · verify-day15-mobile (16 pages @390px) · verify-day15-onboarding 11
+     all 27 suites · 1144 checks · 0 failed
+     tsc --noEmit  0 errors outside src/generated/   ·   routing 8/8
++
++### The shell's DATABASE_URL points at a DIFFERENT database than the server's
++
++`process.env.DATABASE_URL` in the agent shell is `file:/app/workspace/prisma/dev.db` — the
++**workspace-root stub** (0 users, 0 communities). The project's own `.env` says
++`file:/app/workspace/<project>/prisma/dev.db`, and the running server uses THAT (44
++communities, 7553 listings). Bun does not override an already-exported env var, so any
++ad-hoc script inherits the stub and reports "no such table" for tables that plainly exist.
++
++Symptom that fooled me: `prisma db push` created `white_label_configs` and a raw
++`bun:sqlite` read of `prisma/dev.db` found it, while `prisma.whiteLabelConfig.count()` threw
++`SQLITE_ERROR: no such table` — because the two probes were reading different files.
++
++Consequences:
++- Guard scripts with a RESOLVED-PATH comparison, not a substring. `/app/workspace/prisma/dev.db`
++  also ends in `/prisma/dev.db`, so `url.includes('/prisma/dev.db')` passes against the stub.
++  Day 17's suites compare `resolve(path) === resolve('prisma/dev.db')`.
++- Suites that drive the running server over HTTP must be given the project DB explicitly;
++  they cannot use a throwaway copy the way the older suites do. `scripts/_runall.sh` sets
++  `url="file:$(pwd)/prisma/dev.db"` for `verify-day17` and `verify-day17-routing`.
++
++### Two traps that make "did this route work?" unanswerable by status code
++
++1. `custom-routes.ts` ends with a JSON catch-all (`app.all('*')` → 404
++   `{ error: 'No API route matches …' }`). So "404 with a JSON body" does NOT mean a handler
++   ran. A routing audit that only checks content-type reports every path as registered,
++   including the Day 16 routes that were never built. Match the catch-all's body text.
++2. Prisma validates the WHOLE argument to `upsert`, including the branch it will not take.
++   `upsert({ update: partialWithoutRequiredField, create: { name: required } })` throws
++   `Argument name is missing` on a valid UPDATE — so a partial update 500s only once the row
++   already exists. Branch explicitly (`existing ? update : create`) instead.
++
++### Day 17 suite state
++
++    verify-day17 111 · verify-day17-routing 95   (both need the PROJECT db, see above)
++    all 29 suites · 0 failed
++    tsc --noEmit  0 errors outside src/generated/  ·  scripts/verify-server-routing.ts 8/8
++
++### Day 16 (Deal Origination Network) was NEVER implemented
++
++No commits, and 4 of its manifest routes are absent (`/deals/mine`, `POST /deals`,
++`/deals/:id`, `/deals/:id/express`). `/sqftlab/deals` exists but is the older Day-8
++"listings 8% below the area median" endpoint, not the deal network. The Day 17 brief's
++closing summary asserts "Days 1–17 complete" — that is false until Day 16 is built.
+-- 
+2.47.3
+
+From 1f9eb2f6ba78f46154e1773dc8d89f4973f92952 Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 15:46:26 +0000
+Subject: [PATCH] Day 17 (follow-up): security headers on the SPA shell, not
+ just /api
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Custom-routes is mounted at /api, so its security-header middleware never saw the
+responses that most need the headers. X-Frame-Options is what prevents this app being
+framed by another site, and the thing that gets framed is the HTML shell, not the JSON
+API — which was left with no X-Frame-Options, no nosniff and no referrer policy.
+
+Measured: `curl -D - /docs` returned none of them. Now the shell and the SPA root carry
+all five. The /api branch keeps its own copy in custom-routes; this one returns early for
+/api so the two cannot both write the same header.
+
+Guarded by the existing ordering check: this block lives in the SHOGO:CUSTOM region of
+server.tsx, which `shogo generate` relocates below the SPA catch-all on a schema change —
+`scripts/verify-server-routing.ts` detects that (8/8 → 1/8) and `scripts/fix-server-order.ts`
+repairs it. Both were exercised in this session.
+
+verify-day17 now asserts the headers on the shell at three paths (117 checks).
+
+Co-authored-by: Shogo Agent <agent@shogo.ai>
+---
+ scripts/verify-day17.ts | 10 ++++++++++
+ server.tsx              | 19 +++++++++++++++++++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/scripts/verify-day17.ts b/scripts/verify-day17.ts
+index c320e2b..4ef3870 100644
+--- a/scripts/verify-day17.ts
++++ b/scripts/verify-day17.ts
+@@ -151,6 +151,16 @@ async function main() {
+       pre.headers.get('access-control-allow-origin') === 'https://sqftlab.com',
+       String(pre.headers.get('access-control-allow-origin')),
+     )
++
++    // The SPA shell is served by server.tsx, outside the /api mount where custom-routes
++    // lives — so the API middleware never sees it. It is the response that most needs
++    // X-Frame-Options, and setting the headers only on /api left every rendered page
++    // without them.
++    for (const path of ['/', '/docs', '/api-keys']) {
++      const r = await req(path)
++      check(`SPA shell ${path}: X-Frame-Options`, r.headers.get('x-frame-options') === 'DENY', String(r.headers.get('x-frame-options')))
++      check(`SPA shell ${path}: X-Content-Type-Options`, r.headers.get('x-content-type-options') === 'nosniff')
++    }
+   }
+ 
+   // ── E3: environment audit ──────────────────────────────────────────────────
+diff --git a/server.tsx b/server.tsx
+index 5fd0540..1b68bae 100644
+--- a/server.tsx
++++ b/server.tsx
+@@ -78,7 +78,26 @@ app.use('*', async (c, next) => {
+ //    previous build's asset names from cache.
+ app.use('*', async (c, next) => {
+   await next()
++  // The /api mount answers through custom-routes, which sets the security headers itself
++  // (see the "Security headers (Day 17 Task E2)" block there). This branch is for the
++  // responses that mount never sees — the SPA shell and its assets.
++  //
++  // It matters more here than on the API: X-Frame-Options is what stops this app being
++  // framed by another site, and a JSON API is not what gets framed. Setting them only in
++  // custom-routes left every rendered page without them.
+   if (c.req.path.startsWith('/api/')) return
++  try {
++    c.header('X-Content-Type-Options', 'nosniff')
++    c.header('X-Frame-Options', 'DENY')
++    c.header('X-XSS-Protection', '1; mode=block')
++    c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
++    c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
++    if (process.env.NODE_ENV === 'production') {
++      c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
++    }
++  } catch {
++    // Response already committed (streaming) — best-effort, as elsewhere.
++  }
+   if (/\.(js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(c.req.path)) {
+     c.header('Cache-Control', 'public, max-age=31536000, immutable')
+   } else {
+-- 
+2.47.3
+
