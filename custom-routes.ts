@@ -34,6 +34,14 @@ import { computeDeveloperPositioning, getBuildingScorecard, searchBuildings, typ
 import { propertyLimitFor, deriveHolding, summariseHoldings, valuateHolding } from './src/lib/portfolio'
 import { fetchHoldingsComparables } from './src/lib/portfolio-jobs'
 import {
+  buildConfirmation,
+  buildDigest,
+  isStopKeyword,
+  isWhatsappConfigured,
+  normaliseE164,
+  sendWhatsapp,
+} from './src/lib/whatsapp'
+import {
   buildTransactionWhere, fetchExportRows, toCsv, toExcelBuffer,
   rowLimitFor, EXCEL_MIN_RANK, SAFETY_CEILING,
   type ExportFilters, type ExportFormat,
@@ -5692,6 +5700,253 @@ app.get('/sqftlab/public/market-pulse', async (c) => {
   c.header('X-Market-Pulse-Cache', 'miss')
   c.header('Cache-Control', 'public, max-age=3600')
   return c.json(body)
+})
+
+// ─── Day 14 — WhatsApp digest ────────────────────────────────────────────────
+//
+// The subscription lives on `User` (whatsapp_enabled / whatsapp_phone /
+// whatsapp_areas / digest_frequency), which already existed with richer meaning than
+// the brief's proposed `WhatsAppSubscription` model: it carries `digestFrequency: none`
+// and per-user areas, and the onboarding flow already writes it. Adding the brief's
+// table would have created two competing opt-ins for one concept — and its
+// `communities String[]` column cannot exist here anyway, because the datasource is
+// SQLite, which has no array or Json type (the schema already notes this and stores the
+// array as JSON text).
+
+const WHATSAPP_COMMUNITY_LIMIT = 10
+
+function parseAreasJson(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function whatsappSubscriptionPayload(user: {
+  whatsappEnabled: boolean
+  whatsappPhone: string | null
+  whatsappAreas: string
+  digestFrequency: string
+  whatsappLastSentAt: Date | null
+} | null) {
+  return {
+    subscription: user
+      ? {
+          active: user.whatsappEnabled,
+          phone: user.whatsappPhone,
+          communities: parseAreasJson(user.whatsappAreas),
+          frequency: user.digestFrequency,
+          lastSentAt: user.whatsappLastSentAt,
+        }
+      : null,
+    // Whether the digest can actually be delivered. A subscription that silently cannot
+    // send is worse than no subscription: the user believes they are covered.
+    delivery: isWhatsappConfigured() ? 'configured' : 'unconfigured',
+  }
+}
+
+app.get('/sqftlab/whatsapp/subscribe', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      whatsappEnabled: true,
+      whatsappPhone: true,
+      whatsappAreas: true,
+      digestFrequency: true,
+      whatsappLastSentAt: true,
+    },
+  })
+  return c.json(whatsappSubscriptionPayload(user))
+})
+
+app.post('/sqftlab/whatsapp/subscribe', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  // Identity before tier: a 403 to an anonymous caller implies a login alone unlocks an
+  // Enterprise feature. (The brief gates first, which makes the two indistinguishable.)
+  const blocked = requireTier(c, 'enterprise', 'WhatsApp Digest')
+  if (blocked) return blocked
+
+  const body = await readJsonBody(c)
+  const phone = normaliseE164(body.phone)
+  if (!phone) {
+    return c.json({ error: 'Invalid phone number. Use E.164 format: +971501234567' }, 400)
+  }
+
+  const rawAreas = Array.isArray(body.communities) ? body.communities : []
+  const communities = rawAreas.filter((a): a is string => typeof a === 'string' && a.trim() !== '').map((a) => a.trim())
+  if (communities.length === 0) {
+    return c.json({ error: 'Select at least one community to track.' }, 400)
+  }
+  if (communities.length > WHATSAPP_COMMUNITY_LIMIT) {
+    return c.json(
+      { error: `Track at most ${WHATSAPP_COMMUNITY_LIMIT} communities per digest.`, limit: WHATSAPP_COMMUNITY_LIMIT },
+      400,
+    )
+  }
+
+  const frequency = body.frequency === 'weekly' ? 'weekly' : 'daily'
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      whatsappEnabled: true,
+      whatsappPhone: phone,
+      whatsappAreas: JSON.stringify(communities),
+      digestFrequency: frequency,
+    },
+  })
+
+  // The confirmation is sent, but a failure is REPORTED rather than swallowed: the brief
+  // `.catch(() => {})`s it, so a subscriber whose number is wrong — or a deployment with
+  // no Twilio credentials — is told "subscribed" with no way to learn nothing was sent.
+  const confirmation = await sendWhatsapp(phone, buildConfirmation(communities, frequency))
+
+  await trackEvent(c, 'whatsapp_subscribe', { communities, frequency, delivered: confirmation.ok })
+
+  return c.json(
+    {
+      subscribed: true,
+      phone,
+      communities,
+      frequency,
+      confirmationSent: confirmation.ok,
+      ...(confirmation.reason === 'unconfigured'
+        ? { delivery: 'unconfigured', note: 'Saved. WhatsApp delivery is not connected on this deployment, so no message has been sent yet.' }
+        : {}),
+      ...(confirmation.error ? { deliveryError: confirmation.error } : {}),
+    },
+    201,
+  )
+})
+
+app.delete('/sqftlab/whatsapp/subscribe', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  // Soft opt-out: the phone number is kept so a STOP can still be attributed, and so the
+  // digest step can prove this address was deliberately excluded rather than lost.
+  await prisma.user.update({
+    where: { id: userId },
+    data: { whatsappEnabled: false, digestFrequency: 'none' },
+  })
+  await trackEvent(c, 'whatsapp_unsubscribe', {})
+
+  return c.json({ unsubscribed: true })
+})
+
+// Twilio posts form-encoded STOP/UNSUBSCRIBE replies here. This route is deliberately
+// PUBLIC: Twilio cannot present a session, so an authenticated webhook would never fire
+// and a STOP would be silently ignored — the one message a carrier expects to be honoured.
+app.post('/sqftlab/whatsapp/webhook', async (c) => {
+  let body: Record<string, unknown>
+  try {
+    body = (await c.req.parseBody()) as Record<string, unknown>
+  } catch {
+    return c.text('', 200)
+  }
+
+  const from = typeof body['From'] === 'string' ? body['From'].replace(/^whatsapp:/i, '') : ''
+  const incoming = body['Body']
+
+  if (from && isStopKeyword(incoming)) {
+    const phone = normaliseE164(from)
+    if (phone) {
+      await prisma.user.updateMany({
+        where: { whatsappPhone: phone },
+        data: { whatsappEnabled: false, digestFrequency: 'none' },
+      })
+    }
+  }
+
+  // Empty 200: Twilio retries anything it reads as a failure, and a retry storm on a STOP
+  // is worse than a lost acknowledgement.
+  return c.text('', 200)
+})
+
+// ─── Day 14 — Mortgage estimate (pre-fills the calculator from the DLD register) ──
+
+app.get('/sqftlab/mortgage/estimate', async (c) => {
+  const communityQuery = (c.req.query('community') ?? '').trim()
+  if (communityQuery === '') return c.json({ error: 'community required' }, 400)
+
+  const bedroomsRaw = c.req.query('bedrooms')
+  const sizeRaw = c.req.query('sizeSqft')
+  const bedrooms = bedroomsRaw ? Number.parseInt(bedroomsRaw, 10) : null
+  const sizeSqft = sizeRaw ? Number.parseFloat(sizeRaw) : null
+
+  const bad: string[] = []
+  if (bedroomsRaw && (!Number.isFinite(bedrooms) || (bedrooms as number) < 0 || (bedrooms as number) > 20))
+    bad.push('bedrooms')
+  if (sizeRaw && (!Number.isFinite(sizeSqft) || (sizeSqft as number) <= 0)) bad.push('sizeSqft')
+  if (bad.length) return badInput(c, bad, { bedrooms: 'integer 0-20', sizeSqft: 'positive number' })
+
+  // Resolved through the shared matcher: Transaction keys off communityId, and the brief's
+  // `area: { contains: …, mode: 'insensitive' }` would not run on this datasource.
+  const community = await findCommunityByName(communityQuery)
+  if (!community) {
+    return c.json({ error: `Unknown community: ${communityQuery}`, community: communityQuery }, 404)
+  }
+
+  const since90 = new Date()
+  since90.setDate(since90.getDate() - 90)
+
+  const where = {
+    communityId: community.id,
+    transactionType: { in: SALE_TXN_TYPES },
+    pricePerSqft: { gt: 100 },
+    transactionDate: { gte: since90 },
+    ...(bedrooms !== null && bedrooms >= 0 ? { beds: bedrooms } : {}),
+  }
+
+  const stats = await prisma.transaction.aggregate({
+    where,
+    _avg: { pricePerSqft: true },
+    _count: { _all: true },
+  })
+
+  const count = stats._count._all
+  const avgPsf = stats._avg.pricePerSqft
+
+  // Zero comparables is reported as "no figure", not as AED 0/sqft — a mortgage sized on
+  // a synthetic zero would look like a valid calculator result.
+  if (count === 0 || avgPsf === null) {
+    return c.json({
+      community: community.slug,
+      communityName: community.nameEn,
+      bedrooms,
+      sizeSqft,
+      avgPsfAed: null,
+      estimatedPriceAed: null,
+      basedOnTx: 0,
+      period: '90 days',
+      source: dldConfigured() ? 'DLD register (no matching sales)' : 'DLD register not connected',
+      note: dldConfigured()
+        ? 'No registered sales match this community and bedroom count in the last 90 days.'
+        : 'The DLD transaction feed is not connected on this deployment, so there is no market price to pre-fill.',
+    })
+  }
+
+  const estimated = sizeSqft && sizeSqft > 0 ? avgPsf * sizeSqft : null
+
+  return c.json({
+    community: community.slug,
+    communityName: community.nameEn,
+    bedrooms,
+    sizeSqft,
+    avgPsfAed: Math.round(avgPsf),
+    estimatedPriceAed: estimated === null ? null : Math.round(estimated),
+    basedOnTx: count,
+    period: '90 days',
+    source: dldConfigured() ? 'DLD register' : 'DLD register not connected',
+    note: null,
+  })
 })
 
 // Catch-all — must be registered LAST so every real route wins.

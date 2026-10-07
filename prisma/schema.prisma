@@ -46,6 +46,10 @@ model User {
   // JSON array stored as TEXT — SQLite has no Json column type (see the port note below).
   whatsappAreas   String  @default("[]") @map("whatsapp_areas")
   digestFrequency String  @default("daily") @map("digest_frequency") // daily | weekly | none
+  // Day 14: when the last digest actually reached this number. Distinguishes "nobody is
+  // subscribed" from "the sender has not run" — without it a digest that never fires
+  // looks identical to one with no recipients.
+  whatsappLastSentAt DateTime? @map("whatsapp_last_sent_at")
 
   // Onboarding
   onboardingCompleted Boolean @default(false) @map("onboarding_completed")

@@ -8,6 +8,7 @@ import { computeAllInvestmentScores } from './score-engine'
 import { dldConfigured, syncDLDTransactions } from './dld'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
 import { revalueAllHoldings } from './portfolio-jobs'
+import { sendWhatsappDigests } from './whatsapp-jobs'
 
 export const HOURLY_JOB = 'hourly-refresh'
 
@@ -216,6 +217,7 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
 
   await step('investmentScores', investmentScoresStep)
   await step('portfolioRevalue', portfolioRevalueStep)
+  await step('whatsappDigest', whatsappDigestStep)
 
   await step('intelligence', async () => {
     const r = await runIntelligencePipeline()
@@ -310,6 +312,27 @@ async function investmentScoresStep(): Promise<string | { skipped: string }> {
  * A holding with too few comparables keeps its previous valuation rather than being
  * zeroed — `revalueAllHoldings` counts those as skipped and leaves the row alone.
  */
+/**
+ * Send the WhatsApp digest once a day, in the 08:00 UAE window.
+ *
+ * Hour-guarded like the other daily work carried by the hourly refresh, so a retried run
+ * inside the same hour cannot message a subscriber twice — and `lastSentAt` gating inside
+ * the job is the second line of defence if the process is restarted mid-hour.
+ */
+async function whatsappDigestStep(): Promise<string | { skipped: string }> {
+  if (uaeHour() !== 8) return { skipped: `outside the 08:00 UAE window (now ${uaeHour()}:00 UAE)` }
+
+  const r = await sendWhatsappDigests()
+  if (r.considered === 0) return { skipped: 'no WhatsApp subscribers' }
+  if (r.skipped.unconfigured > 0 && r.sent === 0 && r.failed === 0) {
+    return { skipped: `${r.considered} subscriber(s), but WhatsApp delivery is not configured` }
+  }
+  return (
+    `${r.sent} sent, ${r.failed} failed of ${r.considered} subscriber(s)` +
+    (r.errorMsg ? ` — first error: ${r.errorMsg}` : '')
+  )
+}
+
 async function portfolioRevalueStep(): Promise<string | { skipped: string }> {
   if (uaeHour() !== 4) return { skipped: `outside the 04:00 UAE window (now ${uaeHour()}:00 UAE)` }
 

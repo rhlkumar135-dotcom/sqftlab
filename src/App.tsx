@@ -18,6 +18,7 @@ import BuildingPage from '@/components/BuildingPage'
 import ExportPage from '@/components/ExportPage'
 import AiChatWidget from '@/components/AiChatWidget'
 import MarketPulsePage from '@/components/MarketPulsePage'
+import MortgagePage from '@/components/MortgagePage'
 import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
@@ -307,6 +308,9 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   'capital-flow': '/capital-flow',
   buildings: '/buildings',
   export: '/export',
+  // Day 14: the brief specifies the calculator lives at /mortgage, and it is a free
+  // public tool — so it needs a shareable URL like the other published pages.
+  mortgage: '/mortgage',
   // Public SEO surface — it publishes a real URL because crawlers and shared links
   // need one, and because it is the only page here that works without a session.
   'market-pulse': '/market-pulse',
@@ -1954,63 +1958,7 @@ function AboutPage() {
   )
 }
 
-// ─── Mortgage Simulator (hidden from nav but accessible) ────────────────────
-
-function MortgageSimulator() {
-  const [form, setForm] = useState({ price: 2000000, downPaymentPct: 20, ratePct: 4.5, termYears: 25 })
-  const [result, setResult] = useState<Record<string, unknown> | null>(null)
-  const { format } = useCurrency()
-  const simulate = useCallback(() => {
-    // bare-fetch-ok: a public calculator — it reads no account data.
-    fetch('/api/sqftlab/mortgage/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
-      .then(r => r.json()).then(setResult).catch(() => {})
-  }, [form])
-  useEffect(() => { simulate() }, [])
-  const r = result as Record<string, number> | null
-
-  return (
-    <div className="max-w-[800px] mx-auto px-4 py-6">
-      <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--ink)' }}>Mortgage Simulator</h2>
-      <p className="text-sm mb-6" style={{ color: 'var(--ink-5)' }}>Estimate EMI, total cost, and compare indicative bank rates.</p>
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="p-5 rounded-[18px] space-y-4" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-          <div>
-            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--ink-5)' }}>Property Price (AED)</label>
-            <input type="number" value={form.price} onChange={e => setForm({ ...form, price: +e.target.value })}
-              className="w-full px-3 py-2.5 rounded-[14px] text-sm outline-none" style={{ border: '1px solid var(--gb)', background: 'var(--g3)', fontFamily: 'var(--font-data)' }} />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Down %</label><input type="number" value={form.downPaymentPct} onChange={e => setForm({ ...form, downPaymentPct: +e.target.value })} className="w-full px-3 py-2 rounded-[14px] text-sm" style={{ border: '1px solid var(--gb)', background: 'var(--g3)', fontFamily: 'var(--font-data)' }} /></div>
-            <div><label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Rate %</label><input type="number" step="0.1" value={form.ratePct} onChange={e => setForm({ ...form, ratePct: +e.target.value })} className="w-full px-3 py-2 rounded-[14px] text-sm" style={{ border: '1px solid var(--gb)', background: 'var(--g3)', fontFamily: 'var(--font-data)' }} /></div>
-            <div><label className="text-xs block mb-1" style={{ color: 'var(--ink-5)' }}>Term (yrs)</label><input type="number" value={form.termYears} onChange={e => setForm({ ...form, termYears: +e.target.value })} className="w-full px-3 py-2 rounded-[14px] text-sm" style={{ border: '1px solid var(--gb)', background: 'var(--g3)', fontFamily: 'var(--font-data)' }} /></div>
-          </div>
-          <button onClick={simulate} className="w-full py-2.5 rounded-[14px] font-semibold transition-colors" style={{ background: 'var(--b600)', color: '#fff', boxShadow: 'var(--sh-btn)' }}>Simulate</button>
-        </div>
-        {r && (
-          <div className="rounded-[18px] p-5" style={{ background: 'linear-gradient(135deg, var(--b800), var(--b900))', color: '#fff' }}>
-            <div className="text-center mb-4">
-              <div className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>Monthly EMI</div>
-              <div className="text-3xl font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--b300)' }}>{format(r.emi)}</div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              {[
-                { label: 'Down Payment', value: format(r.downPayment) },
-                { label: 'Loan Amount', value: format(r.loanAmount) },
-                { label: 'Total Interest', value: format(r.totalInterest), color: '#FCA5A5' },
-                { label: 'Total Payment', value: format(r.totalPayment) },
-              ].map((item, i) => (
-                <div key={i} className="rounded-xl p-3" style={{ background: 'rgba(255,255,255,0.1)' }}>
-                  <div className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>{item.label}</div>
-                  <div className="font-semibold" style={{ fontFamily: 'var(--font-data)', color: item.color || '#fff' }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+// ─── Mortgage calculator (Day 14 — now src/components/MortgagePage.tsx) ─────
 
 // ─── Market Analytics ────────────────────────────────────────────────────────
 
@@ -3322,7 +3270,7 @@ function AppInner() {
       {page === 'alerts' && <AlertsPage setPage={navigate} setSelectedListing={setSelectedListing} />}
       {page === 'pricing' && <PricingPage onNavigate={navigate} />}
       {page === 'yield' && <YieldCalculator />}
-      {page === 'mortgage' && <MortgageSimulator />}
+      {page === 'mortgage' && <MortgagePage onNavigate={navigate} />}
       {page === 'cma' && <CmaPage onNavigate={navigate} />}
       {page === 'capital-flow' && <CapitalFlowPage onNavigate={navigate} />}
       {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
