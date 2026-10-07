@@ -3,6 +3,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Globe, Lock, TrendingUp, Info } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { authedFetch } from '@/lib/session'
+import { EmptyState } from '@/components/EmptyState'
+import { Skeleton, SkeletonText } from '@/components/Skeleton'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 /**
  * Cross-Border Capital Flow (Day 9 Task C).
@@ -141,8 +144,9 @@ export default function CapitalFlowPage({ onNavigate }: { onNavigate: (p: 'prici
       </div>
 
       {loading && (
-        <div className="g2 p-5 text-[13px]" style={{ color: 'var(--ink-4)' }}>
-          Loading capital-flow data…
+        <div className="g2 p-5">
+          <Skeleton width="38%" height={14} />
+          <SkeletonText lines={2} style={{ marginTop: 14 }} />
         </div>
       )}
 
@@ -184,24 +188,26 @@ export default function CapitalFlowPage({ onNavigate }: { onNavigate: (p: 'prici
               Share of all registered DLD sales in the window
             </p>
 
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 4, right: 8, left: -18, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.06)" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} interval={0} angle={-30} textAnchor="end" height={70} />
-                  <YAxis tick={{ fontSize: 11, fill: 'var(--ink-4)' }} unit="%" />
-                  <Tooltip
-                    formatter={(v: number) => [`${v}%`, 'Share of sales']}
-                    contentStyle={{ borderRadius: 12, border: '1px solid rgba(15,23,42,0.08)', fontSize: 12 }}
-                  />
-                  <Bar dataKey="pct" radius={[6, 6, 0, 0]}>
-                    {chartData.map((_, i) => (
-                      <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ErrorBoundary label="the capital-flow chart" resetKeys={[chartData]}>
+              <div style={{ height: 260 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 4, right: 8, left: -18, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.06)" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} interval={0} angle={-30} textAnchor="end" height={70} />
+                    <YAxis tick={{ fontSize: 11, fill: 'var(--ink-4)' }} unit="%" />
+                    <Tooltip
+                      formatter={(v: number) => [`${v}%`, 'Share of sales']}
+                      contentStyle={{ borderRadius: 12, border: '1px solid rgba(15,23,42,0.08)', fontSize: 12 }}
+                    />
+                    <Bar dataKey="pct" radius={[6, 6, 0, 0]}>
+                      {chartData.map((_, i) => (
+                        <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </ErrorBoundary>
 
             <p className="text-[11px] mt-3" style={{ color: 'var(--ink-5)' }}>
               {overview.sourceNote}
@@ -234,9 +240,21 @@ export default function CapitalFlowPage({ onNavigate }: { onNavigate: (p: 'prici
             <div className="relative">
               <div style={!unlocked ? { filter: 'blur(6px)', pointerEvents: 'none', userSelect: 'none' } : undefined}>
                 {rows.length === 0 ? (
-                  <p className="text-[13px] py-6 text-center" style={{ color: 'var(--ink-4)' }}>
-                    {areaError ?? (active?.insufficientData ? active.reason : `No nationality breakdown available for this selection.`)}
-                  </p>
+                  // Two different reasons, and they must not be conflated. A per-area
+                  // selection with no rows is the "try a wider area" case the brief
+                  // describes; a request error or an empty register is not, and the
+                  // server's own explanation has to win there.
+                  areaError || active?.insufficientData ? (
+                    <p className="text-[13px] py-6 text-center" style={{ color: 'var(--ink-4)' }}>
+                      {areaError ?? active?.reason}
+                    </p>
+                  ) : (
+                    <EmptyState
+                      icon={<Globe size={40} />}
+                      title="No data for this area"
+                      body="Try a larger area like Downtown Dubai or JLT."
+                    />
+                  )
                 ) : (
                   <div className="space-y-1">
                     {rows.map((n) => (

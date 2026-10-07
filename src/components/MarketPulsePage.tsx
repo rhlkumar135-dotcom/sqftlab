@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Activity, ArrowLeft, Building2, TrendingUp, Trophy } from 'lucide-react'
+import { usePageMeta } from '@/lib/seo'
 
 /**
  * Public Market Pulse (Day 13 Task D).
@@ -87,27 +88,14 @@ export default function MarketPulsePage({ onBack }: { onBack?: () => void }) {
   }, [load])
 
   // Page-level SEO, applied imperatively because this is a single-page app: without it a
-  // deep link to this page would carry whatever title the last view set.
-  useEffect(() => {
-    const prevTitle = document.title
-    const prevDesc = document.querySelector('meta[name="description"]')?.getAttribute('content') ?? ''
-    document.title = 'Dubai Property Market Pulse — sqftLab'
-    let meta = document.querySelector('meta[name="description"]')
-    if (!meta) {
-      meta = document.createElement('meta')
-      meta.setAttribute('name', 'description')
-      document.head.appendChild(meta)
-    }
-    meta.setAttribute(
-      'content',
+  // deep link to this page would carry whatever title the last view set. (Day 15 E1 moved
+  // this onto the shared `usePageMeta`, so the other published pages cannot drift from it.)
+  usePageMeta({
+    title: 'Dubai Property Market Pulse',
+    description:
       'Dubai transaction register summary: volumes, average price per square foot, the most active communities and the highest-value sales in the last 30 days.',
-    )
-    return () => {
-      document.title = prevTitle
-      const m = document.querySelector('meta[name="description"]')
-      if (m) m.setAttribute('content', prevDesc)
-    }
-  }, [])
+    canonicalPath: '/market-pulse',
+  })
 
   const market = data?.market
   const areas = data?.topAreas ?? []

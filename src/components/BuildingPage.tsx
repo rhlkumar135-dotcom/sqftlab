@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Building2, Layers, Lock, Info, TrendingUp, TrendingDown } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { authedFetch } from '@/lib/session'
+import { usePageMeta } from '@/lib/seo'
 
 /**
  * Building scorecard (Day 10 Task C).
@@ -111,6 +112,16 @@ export default function BuildingPage({
   const [data, setData] = useState<Scorecard | null>(null)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
+
+  // Day 15 E1 — title/description for the building deep link. Falls back to the slug
+  // while loading, so a cold load is titled before the payload lands rather than
+  // inheriting the previous page's title.
+  const buildingLabel = data?.buildingName || slug?.replace(/-/g, ' ') || 'Building'
+  usePageMeta({
+    title: `${buildingLabel} Transactions`,
+    description: `${buildingLabel} price history, PSF by floor, and recent DLD transactions.`,
+    canonicalPath: slug ? `/buildings/${slug}` : undefined,
+  })
 
   useEffect(() => {
     if (!slug) {

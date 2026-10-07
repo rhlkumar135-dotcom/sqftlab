@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Search, Building2, ArrowRight, Info } from 'lucide-react'
 import { authedFetch } from '@/lib/session'
+import { EmptyState } from '@/components/EmptyState'
+import { SkeletonRows } from '@/components/Skeleton'
 
 /**
  * Building search (Day 10 Task C).
@@ -80,11 +82,7 @@ export default function BuildingSearchPage({ onOpenBuilding }: { onOpenBuilding:
         </div>
 
         <div className="mt-4">
-          {busy && (
-            <p className="text-[13px] py-3" style={{ color: 'var(--ink-4)' }}>
-              Searching…
-            </p>
-          )}
+          {busy && <SkeletonRows rows={3} />}
 
           {!busy && hits.length > 0 && (
             <div className="space-y-1">
@@ -125,9 +123,11 @@ export default function BuildingSearchPage({ onOpenBuilding }: { onOpenBuilding:
           )}
 
           {!searched && !busy && (
-            <p className="text-[13px] py-2" style={{ color: 'var(--ink-5)' }}>
-              Type at least two characters to search.
-            </p>
+            <EmptyState
+              icon={<Search size={40} />}
+              title="Search buildings"
+              body="Type a building name to find its transaction history."
+            />
           )}
         </div>
       </div>

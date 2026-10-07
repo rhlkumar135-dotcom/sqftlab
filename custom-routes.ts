@@ -16,6 +16,7 @@ import {
 } from './src/lib/intelligence'
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
+import { cacheRead, cacheWrite, CACHE_TTL } from './src/lib/cache'
 import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
 import {
   getStripe, priceIdFor, missingStripeEnv, isPaidPlan, isBillingPeriod,
@@ -545,15 +546,32 @@ function redactCommunityForGuest<T extends Record<string, unknown>>(community: T
   return out
 }
 
-app.get('/sqftlab/communities/:slug', async (c) => {
-  const slug = c.req.param('slug')
-  const community = await prisma.community.findUnique({
+// Day 15 D2 — the detail ROW is cached, not the response. Both alternatives a response
+// cache would break: the guest tier gets a redacted payload from this same URL (so a
+// response cache needs per-tier keys and could serve the paid one to a guest), and
+// `trackEvent` must still fire on every view. Caching only the database read keeps both
+// behaviours intact while removing the two queries per request.
+async function loadCommunityDetail(slug: string) {
+  return prisma.community.findUnique({
     where: { slug },
     include: {
       listings: { where: { purpose: 'sale' }, orderBy: { listedAt: 'desc' }, take: 10 },
       _count: { select: { transactions: true, listings: true } },
     },
   })
+}
+type CommunityDetail = NonNullable<Awaited<ReturnType<typeof loadCommunityDetail>>>
+
+app.get('/sqftlab/communities/:slug', async (c) => {
+  const slug = c.req.param('slug')
+  const detailKey = `sqftlab:community:detail:${slug}`
+  let community = cacheRead<CommunityDetail>(detailKey)
+  if (!community) {
+    community = await loadCommunityDetail(slug)
+    // A miss is deliberately NOT cached: a community added later would otherwise stay a
+    // 404 for the whole TTL, the same reasoning as the uncached empty capital-flow result.
+    if (community) cacheWrite(detailKey, community, CACHE_TTL.communities)
+  }
   if (!community) return c.json({ error: 'Community not found' }, 404)
 
   // Task B3 — guests see headline metrics but not the score breakdown, and no
@@ -749,6 +767,19 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
 
 // ─── Investment Score (FEATURE-01) ───────────────────────────────────────────
 
+// Day 15 D2 — the newest score row is cached (brief: 6h). `investment_scores` is
+// append-only, so "current" is the most recent `calculatedAt`; a cache read must therefore
+// be invalidated whenever a batch writes a newer row, which is why `src/lib/cron.ts` calls
+// `cacheInvalidate('sqftlab:score:')` after its daily recompute. Without that, a paid
+// customer would see yesterday's number for the rest of the TTL.
+async function loadLatestScore(communityId: string) {
+  return prisma.investmentScore.findFirst({
+    where: { communityId },
+    orderBy: { calculatedAt: 'desc' },
+  })
+}
+type ScoreRow = Awaited<ReturnType<typeof loadLatestScore>>
+
 app.get('/sqftlab/communities/:slug/score', async (c) => {
   const slug = c.req.param('slug')
   const community = await prisma.community.findUnique({
@@ -760,21 +791,18 @@ app.get('/sqftlab/communities/:slug/score', async (c) => {
   const tier = c.get('tier') as CallerTier
   await trackEvent(c, 'score_view', { slug, tier })
 
-  // The newest cached row. `investment_scores` is append-only, so "current" is
-  // the most recent `calculatedAt` — not a unique row.
-  let latest = await prisma.investmentScore.findFirst({
-    where: { communityId: community.id },
-    orderBy: { calculatedAt: 'desc' },
-  })
+  const scoreKey = `sqftlab:score:${community.id}`
+  let latest = cacheRead<ScoreRow>(scoreKey)
 
   // Never scored before → compute once on demand so the endpoint is never empty
   // just because the nightly batch has not run yet.
   if (!latest) {
-    await computeInvestmentScore(community.id)
-    latest = await prisma.investmentScore.findFirst({
-      where: { communityId: community.id },
-      orderBy: { calculatedAt: 'desc' },
-    })
+    latest = await loadLatestScore(community.id)
+    if (!latest) {
+      await computeInvestmentScore(community.id)
+      latest = await loadLatestScore(community.id)
+    }
+    if (latest) cacheWrite(scoreKey, latest, CACHE_TTL.scores)
   }
   if (!latest) return c.json({ error: 'Score unavailable' }, 500)
 
@@ -2194,9 +2222,20 @@ async function seededUserId(): Promise<string | null> {
     (e): e is string => !!e &&
       e.length > 0
   )
-  for (const email of candidates) {
-    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } })
-    if (user) return user.id
+  // One query rather than one per candidate (Day 15 D3). This runs on the identity
+  // bootstrap, so it is on the path of every first request from a fresh browser. The
+  // candidate ORDER still decides the winner when several rows exist, because that is
+  // the precedence this always had — `in` does not preserve order, so it is reapplied
+  // here instead of trusting whatever the database returns first.
+  if (candidates.length > 0) {
+    const found = await prisma.user.findMany({
+      where: { email: { in: candidates } },
+      select: { id: true, email: true },
+    })
+    for (const email of candidates) {
+      const hit = found.find((u) => u.email === email)
+      if (hit) return hit.id
+    }
   }
   const oldest = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
   return oldest?.id ?? null
@@ -3403,6 +3442,9 @@ app.get('/sqftlab/me', async (c) => {
     select: {
       id: true, email: true, name: true, image: true, role: true,
       subscriptionTier: true, subscriptionStatus: true, onboardingCompleted: true, guestId: true,
+      // Day 15 — the onboarding banner reads the TOUR flag, not `onboardingCompleted`.
+      // Both are returned so the client can tell the sign-up wizard apart from the tour.
+      tourCompleted: true, tourSteps: true,
     },
   })
   if (!user) return c.json({ error: 'No user account configured' }, 404)
@@ -4002,36 +4044,11 @@ app.get('/sqftlab/building/:slug', async (c) => {
 
 // ─── Day 9A/9B: response cache ───────────────────────────────────────────────
 //
-// The brief specifies Redis (6h for capital flow, 12h for yield). This stack has
-// no Redis — SQLite behind a single Bun process — so this is an in-process Map
-// with the same TTLs, exactly like the tier cache above and with the same
-// caveat: it is PROCESS-LOCAL, so with more than one instance each keeps its own
-// copy and a write is not visible to the others until their entry expires. Swap
-// in Redis before scaling past one process.
-const FLOW_TTL_MS = 6 * 3600 * 1000
-const YIELD_TTL_MS = 12 * 3600 * 1000
-const flowCache = new Map<string, { body: unknown; expiresAt: number }>()
-
-function readFlowCache<T>(key: string): T | null {
-  const hit = flowCache.get(key)
-  if (!hit) return null
-  if (hit.expiresAt <= Date.now()) {
-    flowCache.delete(key)
-    return null
-  }
-  return hit.body as T
-}
-
-function writeFlowCache(key: string, body: unknown, ttlMs: number): void {
-  flowCache.set(key, { body, expiresAt: Date.now() + ttlMs })
-  // The key space is bounded by the community count, so this is a safety valve
-  // rather than a real eviction policy — it stops a pathological caller with
-  // arbitrary area strings from pinning memory in a long-lived process.
-  if (flowCache.size > 500) {
-    const now = Date.now()
-    for (const [k, v] of flowCache) if (v.expiresAt <= now) flowCache.delete(k)
-  }
-}
+// The brief specifies Redis. This stack has no Redis, so the cache lives in-process —
+// see `src/lib/cache.ts`, which carries the full note and the TTLs. It was moved out of
+// this file on Day 15 so `src/lib/cron.ts` can invalidate a score it has just recomputed
+// without importing back from here (this file already imports cron, so the reverse
+// would be a cycle).
 
 // ─── Day 9A Capital Flow Tracker ─────────────────────────────────────────────
 //
@@ -4044,7 +4061,7 @@ app.get('/sqftlab/capital-flow/overview', async (c) => {
   if (blocked) return blocked
 
   const cacheKey = 'sqftlab:capital-flow:overview'
-  const cached = readFlowCache<CapitalFlowResult>(cacheKey)
+  const cached = cacheRead<CapitalFlowResult>(cacheKey)
   if (cached) return c.json({ ...cached, cached: true })
 
   const rawMonths = Number(c.req.query('months') ?? 3)
@@ -4055,7 +4072,7 @@ app.get('/sqftlab/capital-flow/overview', async (c) => {
   // An empty result is deliberately NOT cached. "No nationality data yet" is the
   // state a fresh deploy is in until the DLD sync runs, and pinning it for six
   // hours would keep the feature dark for six hours after the data lands.
-  if (!result.insufficientData) writeFlowCache(cacheKey, result, FLOW_TTL_MS)
+  if (!result.insufficientData) cacheWrite(cacheKey, result, CACHE_TTL.capitalFlow)
 
   await trackEvent(c, 'capital_flow_view', { type: 'overview', source: result.source })
   return c.json({ ...result, cached: false })
@@ -4074,7 +4091,7 @@ app.get('/sqftlab/capital-flow/:area', async (c) => {
   if (!community) return c.json({ error: `Unknown area: ${area}` }, 404)
 
   const cacheKey = `sqftlab:capital-flow:area:${community.slug}`
-  const cached = readFlowCache<CapitalFlowResult>(cacheKey)
+  const cached = cacheRead<CapitalFlowResult>(cacheKey)
   if (cached) return c.json({ ...cached, cached: true })
 
   const result = await computeCapitalFlow({
@@ -4084,7 +4101,7 @@ app.get('/sqftlab/capital-flow/:area', async (c) => {
     months: 3,
     limit: 20,
   })
-  if (!result.insufficientData) writeFlowCache(cacheKey, result, FLOW_TTL_MS)
+  if (!result.insufficientData) cacheWrite(cacheKey, result, CACHE_TTL.capitalFlow)
 
   await trackEvent(c, 'capital_flow_view', { type: 'area', area: community.slug, source: result.source })
   return c.json({ ...result, cached: false })
@@ -4105,7 +4122,7 @@ app.get('/sqftlab/communities/:slug/yield', async (c) => {
   if (!community) return c.json({ error: 'Community not found' }, 404)
 
   const cacheKey = `sqftlab:yield:${community.slug}`
-  const cached = readFlowCache<RentalYieldResult>(cacheKey)
+  const cached = cacheRead<RentalYieldResult>(cacheKey)
   if (cached) return c.json({ ...cached, cached: true })
 
   const result = await computeRentalYield(community.slug)
@@ -4116,7 +4133,7 @@ app.get('/sqftlab/communities/:slug/yield', async (c) => {
   // landed — the exact substitution this feature exists to prevent. `insufficientData`
   // is never cached either, for the same reason: it pins "no data".
   if (!result.insufficientData && result.rentSource === 'ejari') {
-    writeFlowCache(cacheKey, result, YIELD_TTL_MS)
+    cacheWrite(cacheKey, result, CACHE_TTL.yield)
   }
 
   await trackEvent(c, 'yield_view', { slug: community.slug, rentSource: result.rentSource })
@@ -4210,14 +4227,14 @@ app.get('/sqftlab/buildings/:slug', async (c) => {
   // Tier is part of the key: without it an Enterprise payload would be served to
   // a Free caller from cache, which is exactly the field being gated.
   const cacheKey = `sqftlab:building:${slug}:${tier}`
-  const cached = readFlowCache<BuildingScorecard>(cacheKey)
+  const cached = cacheRead<BuildingScorecard>(cacheKey)
   if (cached) return c.json({ ...cached, cached: true })
 
   const result = await getBuildingScorecard(slug, { includeFloorBreakdown })
 
   // 30 minutes, as the brief specifies. An empty result is not cached: it is the
   // state before the DLD ingest and would keep the page dark for the full TTL.
-  if (!result.insufficientData) writeFlowCache(cacheKey, result, 30 * 60 * 1000)
+  if (!result.insufficientData) cacheWrite(cacheKey, result, CACHE_TTL.buildings)
 
   await trackEvent(c, 'building_view', { slug, matched: result.matched })
   return c.json({ ...result, cached: false })
@@ -5946,6 +5963,122 @@ app.get('/sqftlab/mortgage/estimate', async (c) => {
     period: '90 days',
     source: dldConfigured() ? 'DLD register' : 'DLD register not connected',
     note: null,
+  })
+})
+
+// ─── Day 15 Task A — product-tour progress ───────────────────────────────────
+//
+// The brief's route shapes are kept (`/sqftlab/onboarding/step`,
+// `/sqftlab/onboarding/complete`) because the Day 15 checklist tests them, but the
+// storage is the tour's own `tourStep` / `tourCompleted` — NOT `onboardingCompleted`,
+// which the sign-up wizard already owns (see the schema comment). Writing the wizard's
+// flag here would mark a user as having finished sign-up the moment they dismissed a
+// tooltip.
+//
+// Corrected from the brief:
+//  · `{ onboardingStep: { set: n } }` is a MongoDB update operator. Prisma takes a
+//    plain value, so that payload is a validation error rather than the no-op it looks
+//    like — the route would have 500'd on every call.
+//  · `step` is validated as an integer inside the step range. The brief forwarded
+//    `Math.max(body.step, 0)` untouched, so a missing/string field became NaN and a
+//    caller could park the marker at 999.
+//  · Progress is MONOTONIC. Storing the reported value verbatim let a late or replayed
+//    request move the user backwards and re-tick finished steps.
+//  · Reaching the last step completes the tour server-side, so the guarantee does not
+//    depend on the client remembering to send a second request.
+//
+// `getUserId` only — no `seededUserId()` fallback. Identity comes from the same bearer
+// token `/me` issued, so an unauthenticated caller genuinely has no tour to record.
+
+// 0 = signed in, 1 = browse a community, 2 = run a CMA, 3 = save an alert,
+// 4 = add a portfolio property. Kept in one place because the client renders a badge
+// and a link per step and must not disagree with the server about how many exist.
+const TOUR_LAST_STEP = 4
+/** Every step ticked — used to complete the tour without a second client request. */
+const TOUR_ALL_STEPS = (1 << (TOUR_LAST_STEP + 1)) - 1
+
+/** Bitmask → the step numbers that are done, ascending. */
+function stepsFromMask(mask: number): number[] {
+  const out: number[] = []
+  for (let i = 0; i <= TOUR_LAST_STEP; i++) if (mask & (1 << i)) out.push(i)
+  return out
+}
+
+app.get('/sqftlab/onboarding', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { tourSteps: true, tourCompleted: true },
+  })
+  if (!user) return upgradeRequired(c)
+
+  return c.json({
+    steps: stepsFromMask(user.tourSteps),
+    completed: user.tourCompleted,
+    lastStep: TOUR_LAST_STEP,
+  })
+})
+
+app.post('/sqftlab/onboarding/step', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Request body must be JSON.' }, 400)
+  }
+
+  const raw = body.step
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > TOUR_LAST_STEP) {
+    return c.json({ error: `step must be an integer between 0 and ${TOUR_LAST_STEP}` }, 400)
+  }
+
+  const current = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { tourSteps: true, tourCompleted: true },
+  })
+  if (!current) return upgradeRequired(c)
+
+  // OR the bit in, never assign: steps are independent, so a replayed or out-of-order
+  // call cannot un-tick one, and marking a later step does not claim the earlier ones.
+  const mask = current.tourSteps | (1 << raw)
+  const completed = current.tourCompleted || mask === TOUR_ALL_STEPS
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { tourSteps: mask, ...(completed ? { tourCompleted: true } : {}) },
+    select: { tourSteps: true, tourCompleted: true },
+  })
+
+  await trackEvent(c, 'onboarding_step', { step: raw, completed: user.tourCompleted })
+  return c.json({
+    steps: stepsFromMask(user.tourSteps),
+    completed: user.tourCompleted,
+    lastStep: TOUR_LAST_STEP,
+  })
+})
+
+app.post('/sqftlab/onboarding/complete', async (c) => {
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  // Doubles as "dismiss": the only exit from the banner, so one flag governs both.
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { tourCompleted: true },
+    select: { tourSteps: true, tourCompleted: true },
+  })
+
+  await trackEvent(c, 'onboarding_complete', { steps: stepsFromMask(user.tourSteps) })
+  return c.json({
+    steps: stepsFromMask(user.tourSteps),
+    completed: user.tourCompleted,
+    complete: true,
+    lastStep: TOUR_LAST_STEP,
   })
 })
 

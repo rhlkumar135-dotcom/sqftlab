@@ -299,7 +299,16 @@ console.log('\n── client wiring ──')
   check('the widget surfaces a register-less answer as general guidance', /dataBacked/.test(widget) && /not quoting the register/i.test(widget))
 
   check('the pulse page states why its call is unauthenticated', page.includes('bare-fetch-ok'))
-  check('the pulse page sets its own document title for SEO', /document\.title\s*=/.test(page))
+  // Day 15 E1 replaced this page's hand-rolled `document.title = …` effect with the shared
+  // `usePageMeta`. The guarantee that matters is unchanged — the page publishes a title and
+  // description — so assert the route through the hook AND that the hook does the writing,
+  // rather than the implementation detail that was removed.
+  const seo = readFileSync('src/lib/seo.ts', 'utf8')
+  check(
+    'the pulse page sets its own document title for SEO',
+    /usePageMeta\(/.test(page) && /'Dubai Property Market Pulse/.test(page),
+  )
+  check('the shared SEO hook writes document.title', /document\.title\s*=/.test(seo))
 
   check("'market-pulse' is a page id", /'market-pulse'/.test(appSrc))
   check('the pulse page publishes a URL', /'market-pulse':\s*'\/market-pulse'/.test(appSrc))

@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { authedFetch } from '@/lib/session'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import { EmptyState } from '@/components/EmptyState'
+import { Skeleton, SkeletonText } from '@/components/Skeleton'
 
 // ─── CMA tool page (Day 6 Task B) ────────────────────────────────────────────
 //
@@ -442,16 +444,23 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
 
           {/* ── Results ────────────────────────────────────────────────── */}
           <div className="flex flex-col gap-5 lg:w-[60%] min-w-0">
-            {!result && !failure && (
-              <Card className="flex flex-col items-center justify-center gap-2 py-14 text-center">
-                <Calculator size={26} style={{ color: 'var(--ink-5)' }} />
-                <div className="text-sm font-semibold" style={{ color: 'var(--ink-2)' }}>
-                  No analysis yet
-                </div>
-                <p className="max-w-sm text-xs" style={{ color: 'var(--ink-4)' }}>
-                  Enter the subject property and run the CMA. The estimated value, the market range
-                  and the comparable sales it was built from will appear here.
-                </p>
+            {/* Day 15 D1 — the results panel shows a skeleton while the CMA request is
+                in flight, so the panel does not read as "no analysis" mid-run. */}
+            {busy && (
+              <Card className="flex flex-col gap-4 py-6">
+                <Skeleton width="42%" height={14} />
+                <Skeleton height={46} radius={10} />
+                <SkeletonText lines={3} />
+              </Card>
+            )}
+
+            {!busy && !result && !failure && (
+              <Card>
+                <EmptyState
+                  icon={<Calculator size={40} />}
+                  title="Run a comparison"
+                  body="Enter the subject property and run the CMA. The estimated value, the market range and the comparable sales behind it will appear here."
+                />
               </Card>
             )}
 

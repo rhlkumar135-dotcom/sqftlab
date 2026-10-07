@@ -22,8 +22,13 @@ import MortgagePage from '@/components/MortgagePage'
 import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
+import { EmptyState } from '@/components/EmptyState'
+import { SkeletonRows } from '@/components/Skeleton'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import OnboardingBanner, { type OnboardingTarget } from '@/components/OnboardingBanner'
 import { getRiskFlags } from '@/lib/verdict'
 import { ensureSession } from '@/lib/session'
+import { usePageMeta } from '@/lib/seo'
 import SNAPSHOT from '@/data/snapshot.json'
 // Leaflet's stylesheet, bundled rather than pulled from unpkg. The map controls,
 // zoom buttons and tooltip chrome all depend on it, so an unreachable CDN left the
@@ -208,26 +213,6 @@ function useResource<T>(url: string, initial: T) {
   return { ...state, reload: () => setNonce((n) => n + 1) }
 }
 
-/** One empty/denied state for every screen, so they cannot drift apart. */
-function EmptyState({ icon, title, body, action }: {
-  icon: ReactNode
-  title: string
-  body: string
-  action?: { label: string; onClick: () => void }
-}) {
-  return (
-    <div className="text-center py-16 px-6 max-w-[560px] mx-auto">
-      <div className="mx-auto mb-3 flex justify-center" style={{ color: 'var(--ink-6)' }}>{icon}</div>
-      <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--ink)' }}>{title}</h3>
-      <p className="text-sm mb-5" style={{ color: 'var(--ink-4)' }}>{body}</p>
-      {action && (
-        <button onClick={action.onClick} className="px-5 py-2.5 rounded-xl text-sm font-semibold"
-          style={{ background: 'var(--b700)', color: '#fff' }}>{action.label}</button>
-      )}
-    </div>
-  )
-}
-
 /**
  * What a screen shows when the API refuses it. A denial is never dressed up as data:
  * the previous build rendered the demo account's holdings in exactly this spot,
@@ -340,6 +325,14 @@ const NAV = [
   { id: 'market-pulse' as Page, label: 'Pulse', icon: Activity },
 ]
 
+// Day 15 Task A — where the getting-started tour may appear. Excluded: the marketing and
+// legal pages (a checklist of in-app steps is noise there), and `signin` itself.
+const TOUR_SURFACES = new Set<Page>([
+  'dashboard', 'community', 'listings', 'markets', 'analytics', 'predictions',
+  'property', 'portfolio', 'watchlist', 'deals', 'alerts', 'yield', 'cma',
+  'buildings', 'building', 'capital-flow', 'export', 'intelligence',
+])
+
 function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { currency, setCurrency } = useCurrency()
@@ -414,7 +407,13 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
           </button>
         </div>
 
-        <button className="md:hidden" onClick={() => setMobileOpen(!mobileOpen)} style={{ color: 'var(--ink)' }}>
+        <button
+          className="md:hidden"
+          onClick={() => setMobileOpen(!mobileOpen)}
+          aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={mobileOpen}
+          style={{ color: 'var(--ink)' }}
+        >
           {mobileOpen ? <X size={24} /> : <Menu size={24} />}
         </button>
       </div>
@@ -866,6 +865,16 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
   const [loading, setLoading] = useState(true)
   const { format } = useCurrency()
 
+  // Day 15 E1 — the community deep link gets its own title/description. Must sit above
+  // the early returns below: a hook cannot be called conditionally, and both "loading"
+  // and "not found" return before the body. Falls back to the slug so a cold load is
+  // titled immediately rather than inheriting the previous page's title.
+  const communityLabel = community?.nameEn || slug.replace(/-/g, ' ')
+  usePageMeta({
+    title: `${communityLabel} Property Prices — DLD Data`,
+    description: `${communityLabel} average PSF, transaction history and investment score from DLD official data.`,
+  })
+
   useEffect(() => {
     setLoading(true)
     Promise.all([
@@ -1027,7 +1036,12 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
               sees the five weighted inputs; below that the card shows the
               composite plus an upgrade prompt, because the server withholds the
               breakdown rather than the client deciding to hide it. */}
-          <CommunityScoreCard slug={slug} onUpgrade={() => setPage('pricing')} />
+          {/* Day 15 D5 — containment for a section that fetches and charts: if it throws,
+              the rest of the community page still renders. Keyed on the slug so switching
+              community retries instead of showing the fallback for the whole session. */}
+          <ErrorBoundary label="the investment score card" resetKeys={[slug]}>
+            <CommunityScoreCard slug={slug} onUpgrade={() => setPage('pricing')} />
+          </ErrorBoundary>
         </div>
       </div>
 
@@ -1538,6 +1552,10 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
   const [tier, setTier] = useState<string | null>(null)
   const [caps, setCaps] = useState<{ limit: number; atLimit: boolean } | null>(null)
   const [accessStatus, setAccessStatus] = useState<number | null>(null)
+  // Day 15 Task B — the empty state's CTA brings the create form into view. The form
+  // shares this screen, so an `href="#create"` (as the brief had) would be a dead anchor
+  // — there is no element with that id.
+  const formRef = useRef<HTMLFormElement>(null)
   const { format } = useCurrency()
 
   const load = useCallback(() => {
@@ -1682,7 +1700,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Create + list */}
           <div className="space-y-5">
-            <form onSubmit={createAlert} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
+            <form ref={formRef} onSubmit={createAlert} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
               <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>New alert</h3>
               <div className="space-y-3">
                 <div>
@@ -1732,9 +1750,17 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
             <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
               <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Active alerts</h3>
               {loading ? (
-                <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>Loading…</div>
+                <SkeletonRows rows={3} />
               ) : alerts.length === 0 ? (
-                <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>No alerts yet.</div>
+                <EmptyState
+                  icon={<Bell size={40} />}
+                  title="No price alerts"
+                  body="Create an alert to get notified when DLD transactions match your criteria."
+                  action={{
+                    label: 'Create Alert',
+                    onClick: () => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+                  }}
+                />
               ) : (
                 <div className="space-y-2">
                   {alerts.map((a) => (
@@ -1760,7 +1786,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
                       <span className="text-[11px] px-2 py-1 rounded-full" style={{ background: 'var(--b100)', color: 'var(--b600)' }}>
                         {a._count?.matches ?? 0} match{(a._count?.matches ?? 0) === 1 ? '' : 'es'}
                       </span>
-                      <button onClick={() => removeAlert(a.id)} aria-label="Delete alert" className="p-1.5 rounded-lg transition-colors hover:bg-red-50">
+                      <button onClick={() => removeAlert(a.id)} aria-label={`Delete alert: ${a.name || a.district.replace(/-/g, ' ')}`} className="p-1.5 rounded-lg transition-colors hover:bg-red-50">
                         <X size={14} style={{ color: 'var(--down)' }} />
                       </button>
                     </div>
@@ -1774,7 +1800,7 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
           <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
             <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Recent matches</h3>
             {loading ? (
-              <div className="text-sm py-4" style={{ color: 'var(--ink-5)' }}>Loading…</div>
+              <SkeletonRows rows={3} />
             ) : matches.length === 0 ? (
               <div className="text-center py-10" style={{ color: 'var(--ink-5)' }}>
                 <Bell size={32} className="mx-auto mb-2" style={{ color: 'var(--ink-6)' }} />
@@ -2549,7 +2575,7 @@ function PricePredictions({ setPage, setSelectedCommunity }: { setPage: (p: Page
       <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
         <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>All Community Predictions</h3>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm" style={{ minWidth: 720 }}>
             <thead>
               <tr className="border-b" style={{ borderColor: 'var(--ink-6)' }}>
                 <th className="pb-2 text-left font-medium" style={{ color: 'var(--ink-5)' }}>Community</th>
@@ -3248,6 +3274,22 @@ function AppInner() {
   return (
     <div className="min-h-screen" style={{ background: 'var(--page)', fontFamily: 'var(--font-ui)' }}>
       <Nav page={page} setPage={navigate} live={live} />
+      {/* Day 15 Task A — the getting-started tour. Shown on the product surfaces, not on
+          the marketing/legal pages, where a checklist of in-app steps is just noise. The
+          banner hides itself once the tour is complete, so this is not a second gate. */}
+      {TOUR_SURFACES.has(page) && (
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 pt-4">
+          <OnboardingBanner
+            page={page}
+            onNavigate={(target: OnboardingTarget) => {
+              // The community page reads `selectedCommunity`; the tour must land on a
+              // community that exists rather than whatever was last viewed.
+              if (target === 'community') setSelectedCommunity('downtown-dubai')
+              navigate(target)
+            }}
+          />
+        </div>
+      )}
       {page === 'landing' && <Landing setPage={navigate} setSelectedListing={setSelectedListing} />}
       {page === 'dashboard' && <HeatmapDashboard setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'community' && <CommunityDetail slug={selectedCommunity} setPage={navigate} />}
@@ -3289,7 +3331,9 @@ function AppInner() {
       {/* Day 13 Task C — the assistant is mounted once at the shell level, not per page,
           so the conversation survives navigation instead of resetting on every route
           change. */}
-      <AiChatWidget onNavigate={navigate} />
+      <ErrorBoundary label="the AI market assistant">
+        <AiChatWidget onNavigate={navigate} />
+      </ErrorBoundary>
       <footer className="text-center py-6 text-xs" style={{ background: 'var(--ink)', color: 'rgba(255,255,255,0.4)' }}>
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 mb-2">
           <button onClick={() => navigate('analytics')} className="transition-colors hover:text-white">Market Analytics</button>

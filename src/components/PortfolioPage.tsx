@@ -23,6 +23,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/cn'
 import { authedFetch } from '@/lib/session'
+import { EmptyState } from '@/components/EmptyState'
+import { SkeletonCardGrid } from '@/components/Skeleton'
 
 interface PortfolioItem {
   id: string
@@ -242,8 +244,9 @@ export default function PortfolioPage({ setPage, renderDenied, formatMoney }: Po
 
   if (loading) {
     return (
-      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>
-        Loading portfolio…
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
+        <SkeletonCardGrid count={4} label="Loading portfolio" />
       </div>
     )
   }
@@ -406,15 +409,12 @@ export default function PortfolioPage({ setPage, renderDenied, formatMoney }: Po
       )}
 
       {items.length === 0 ? (
-        <div className="text-center py-16 px-6 max-w-[560px] mx-auto">
-          <div className="mx-auto mb-3 flex justify-center" style={{ color: 'var(--ink-5)' }}><Briefcase size={40} /></div>
-          <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--ink)' }}>No holdings yet</h3>
-          <p className="text-sm mb-5" style={{ color: 'var(--ink-4)' }}>
-            Add a property to track what it is worth against what you paid for it.
-          </p>
-          <button onClick={() => setFormOpen(true)} className="px-5 py-2.5 rounded-xl text-sm font-semibold"
-            style={{ background: 'var(--b600)', color: '#fff' }}>Add your first property</button>
-        </div>
+        <EmptyState
+          icon={<Briefcase size={40} />}
+          title="No properties tracked"
+          body="Add your first property to see its current DLD market value against what you paid."
+          action={{ label: '+ Add Property', onClick: () => setFormOpen(true) }}
+        />
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

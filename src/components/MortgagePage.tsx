@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { computeMortgage, minDownPaymentPct, upfrontCosts } from '@/lib/mortgage'
+import { usePageMeta } from '@/lib/seo'
 
 /**
  * UAE Mortgage Calculator (Day 14 Task D).
@@ -49,6 +50,13 @@ const CARD_STYLE = { background: 'var(--g2)', border: '1px solid var(--gb)', box
 const aed = (n: number): string => `AED ${Math.round(n).toLocaleString('en-AE')}`
 
 export default function MortgagePage({ onNavigate }: { onNavigate?: (page: 'cma') => void }) {
+  usePageMeta({
+    title: 'UAE Mortgage Calculator — Pre-filled from DLD Data',
+    description:
+      'Calculate your UAE mortgage with real DLD property prices. Includes transfer fee and registration cost estimates.',
+    canonicalPath: '/mortgage',
+  })
+
   const [communities, setCommunities] = useState<Community[]>([])
   const [community, setCommunity] = useState('')
   const [bedrooms, setBedrooms] = useState('2')

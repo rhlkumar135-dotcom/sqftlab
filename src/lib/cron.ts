@@ -5,6 +5,7 @@ import { scanDealAlerts, notifyPendingMatches } from './alerts'
 import { publish } from './events'
 import { detectDeals, SALE_TXN_TYPES } from './deals'
 import { computeAllInvestmentScores } from './score-engine'
+import { cacheInvalidate } from './cache'
 import { dldConfigured, syncDLDTransactions } from './dld'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
 import { revalueAllHoldings } from './portfolio-jobs'
@@ -299,6 +300,10 @@ async function investmentScoresStep(): Promise<string | { skipped: string }> {
   if (ageHours < 20) return { skipped: `already scored ${Math.round(ageHours)}h ago` }
 
   const r = await computeAllInvestmentScores()
+  // Day 15 D2 — the score route caches the newest row for 6h. This batch has just written
+  // newer ones, so drop them: otherwise a paid customer keeps seeing the previous score
+  // for the rest of the window even though the recompute they are paying for already ran.
+  cacheInvalidate('sqftlab:score:')
   return `${r.written} scores (avg ${r.avgScore ?? 'n/a'}, coverage ${r.avgCoverage ?? 'n/a'})`
 }
 

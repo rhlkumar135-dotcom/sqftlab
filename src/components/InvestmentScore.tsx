@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { authedFetch } from '@/lib/session'
 
 /**
@@ -185,20 +186,22 @@ function ScoreBreakdownPanel({
   return (
     <div className="w-full mt-4">
       {showRadar && (
-        <div style={{ width: '100%', height: 190 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <RadarChart data={radarData} outerRadius="72%">
-              <PolarGrid stroke="var(--ink-6)" />
-              <PolarAngleAxis dataKey="factor" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} />
-              <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-              <Radar dataKey="value" stroke="var(--b600)" fill="var(--b600)" fillOpacity={0.2} />
-              <Tooltip
-                formatter={(v: number) => [`${v}/100`, 'Score']}
-                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--gb)' }}
-              />
-            </RadarChart>
-          </ResponsiveContainer>
-        </div>
+        <ErrorBoundary label="the score breakdown chart" resetKeys={[radarData]}>
+          <div style={{ width: '100%', height: 190 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={radarData} outerRadius="72%">
+                <PolarGrid stroke="var(--ink-6)" />
+                <PolarAngleAxis dataKey="factor" tick={{ fontSize: 10, fill: 'var(--ink-4)' }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                <Radar dataKey="value" stroke="var(--b600)" fill="var(--b600)" fillOpacity={0.2} />
+                <Tooltip
+                  formatter={(v: number) => [`${v}/100`, 'Score']}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--gb)' }}
+                />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </ErrorBoundary>
       )}
 
       <div className="w-full space-y-2 mt-2">

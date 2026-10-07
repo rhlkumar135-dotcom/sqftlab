@@ -51,9 +51,24 @@ model User {
   // looks identical to one with no recipients.
   whatsappLastSentAt DateTime? @map("whatsapp_last_sent_at")
 
-  // Onboarding
+  // Onboarding — two distinct things, and they must not share a flag.
+  //
+  // `onboardingCompleted` is the SIGN-UP WIZARD (role + tracked areas + WhatsApp
+  // preference), and `POST /sqftlab/auth/onboard` already writes it. The Day 15 brief
+  // proposed reusing it as the product-tour flag; that would mean anyone who finished
+  // sign-up never sees the tour — dead on arrival for exactly the users most likely to
+  // need it — and the tour's own `/complete` would falsely mark the wizard done.
+  //
+  // So the tour gets its own pair. `tourCompleted` already existed and nothing
+  // writes it; `tourSteps` is a BITMASK of the steps actually visited.
+  //
+  // A high-water mark ("reached step N") was wrong here and was replaced before shipping:
+  // the checklist shows a tick per step, so a single deep link to `/portfolio` would have
+  // ticked all five — including CMA, which the user never opened. `@map` keeps the column
+  // name the first push created, so this is a rename, not a destructive migration.
   onboardingCompleted Boolean @default(false) @map("onboarding_completed")
   tourCompleted       Boolean @default(false) @map("tour_completed")
+  tourSteps           Int     @default(0) @map("tour_step")
 
   // Guest → registered attribution
   guestId String? @map("guest_id")
