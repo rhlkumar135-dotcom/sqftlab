@@ -21,6 +21,8 @@ export function ensureSession(): Promise<string | null> {
   if (!inflight) {
     // Raw fetch on purpose: safeFetch() awaits this, so routing it back through
     // safeFetch would recurse.
+    // bare-fetch-ok: this IS the identity bootstrap. It has no identity to present yet,
+    // and routing it through authedFetch would await itself.
     inflight = fetch('/api/sqftlab/me')
       .then((r) => (r.ok ? r.json() : null))
       .then((body: unknown) => {
@@ -31,4 +33,23 @@ export function ensureSession(): Promise<string | null> {
       .catch(() => null)
   }
   return inflight
+}
+
+/**
+ * `fetch` with the caller's identity attached.
+ *
+ * Account-scoped routes resolve the caller FROM THE REQUEST, so a browser sending a
+ * plain `fetch` arrives as a guest and is answered 401/403 no matter who is looking at
+ * the screen. That is how the portfolio page came to show a "needs a Pro plan" paywall
+ * to the very account that owns the holdings, and how an Enterprise user would have been
+ * refused by the PDF export button.
+ *
+ * `ensureSession()` caches after its first call, so presenting the identity costs no
+ * extra round-trip. Use this for anything under `/api/sqftlab/*` that is not public.
+ */
+export async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const userId = await ensureSession()
+  const headers = new Headers(init.headers)
+  if (userId) headers.set('Authorization', `Bearer ${userId}`)
+  return fetch(url, { ...init, headers })
 }

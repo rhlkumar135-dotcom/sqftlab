@@ -208,6 +208,16 @@ model Portfolio {
   mortgageBalance Float    @default(0) @map("mortgage_balance")
   mortgageRate    Float    @default(0) @map("mortgage_rate")
   mortgageTerm    Int      @default(0) @map("mortgage_term")
+
+  // Day 8. `buildingName`/`floor`/`unitNumber` identify the unit; `valuedAt` is the
+  // provenance marker that matters most — see the note above the portfolio routes.
+  buildingName    String?  @map("building_name")
+  floor           Int?
+  unitNumber      String?  @map("unit_number")
+  valuedAt        DateTime? @map("valued_at")
+  valuationSource String?  @map("valuation_source")
+  valuationComps  Int?     @map("valuation_comps")
+
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

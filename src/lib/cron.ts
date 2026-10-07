@@ -7,6 +7,7 @@ import { detectDeals, SALE_TXN_TYPES } from './deals'
 import { computeAllInvestmentScores } from './score-engine'
 import { dldConfigured, syncDLDTransactions } from './dld'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
+import { revalueAllHoldings } from './portfolio-jobs'
 
 export const HOURLY_JOB = 'hourly-refresh'
 
@@ -214,6 +215,7 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
   })
 
   await step('investmentScores', investmentScoresStep)
+  await step('portfolioRevalue', portfolioRevalueStep)
 
   await step('intelligence', async () => {
     const r = await runIntelligencePipeline()
@@ -296,6 +298,27 @@ async function investmentScoresStep(): Promise<string | { skipped: string }> {
 
   const r = await computeAllInvestmentScores()
   return `${r.written} scores (avg ${r.avgScore ?? 'n/a'}, coverage ${r.avgCoverage ?? 'n/a'})`
+}
+
+/**
+ * Revalue every portfolio holding once a day, in the 04:00 UAE window.
+ *
+ * Carried by the hourly refresh and guarded on the hour, the same way the score
+ * recompute is: the guard is what makes an hourly job safe to run daily work from, and
+ * it keeps a retried run inside the same hour from valuing twice.
+ *
+ * A holding with too few comparables keeps its previous valuation rather than being
+ * zeroed — `revalueAllHoldings` counts those as skipped and leaves the row alone.
+ */
+async function portfolioRevalueStep(): Promise<string | { skipped: string }> {
+  if (uaeHour() !== 4) return { skipped: `outside the 04:00 UAE window (now ${uaeHour()}:00 UAE)` }
+
+  const r = await revalueAllHoldings()
+  if (r.considered === 0) return { skipped: 'no holdings to revalue' }
+  return (
+    `${r.valued} of ${r.considered} holdings valued in ${r.queries} queries` +
+    (r.skipped > 0 ? ` (${r.skipped} without enough comparable sales, left unchanged)` : '')
+  )
 }
 
 /** Most recent runs, newest first — powers /sqftlab/cron/status. */

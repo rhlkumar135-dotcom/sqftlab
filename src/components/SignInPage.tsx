@@ -53,6 +53,7 @@ export default function SignInPage({
   // Probe Google availability so the button tells the truth instead of bouncing
   // the visitor to a 501.
   useEffect(() => {
+    // bare-fetch-ok: a capability probe — it only asks whether Google sign-in is configured.
     fetch('/api/sqftlab/auth/google', { redirect: 'manual' })
       .then((r) => setGoogleConfigured(r.status !== 501))
       .catch(() => setGoogleConfigured(false))
@@ -71,6 +72,8 @@ export default function SignInPage({
     setError('')
     setNotice('')
     try {
+      // bare-fetch-ok: this IS the sign-in request. Presenting an existing identity here
+      // would be asking the server to sign the visitor in as that other account.
       const res = await fetch('/api/sqftlab/auth/magic-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -97,6 +100,7 @@ export default function SignInPage({
     setBusy(true)
     setError('')
     try {
+      // bare-fetch-ok: runs on the session the magic link just established, server-side.
       const res = await fetch('/api/sqftlab/auth/onboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

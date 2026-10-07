@@ -4,6 +4,7 @@ import { cn } from '@/lib/cn'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { authedFetch } from '@/lib/session'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 
 // ─── CMA tool page (Day 6 Task B) ────────────────────────────────────────────
@@ -145,13 +146,13 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
 
   useEffect(() => {
     let alive = true
-    fetch('/api/sqftlab/me')
+    authedFetch('/api/sqftlab/me')
       .then((r) => r.json())
       .catch(() => ({}))
       .then((d: { user?: { tier?: string } | null }) => {
         if (alive) setTier(d?.user?.tier ?? 'guest')
       })
-    fetch('/api/sqftlab/communities')
+    authedFetch('/api/sqftlab/communities')
       .then((r) => r.json())
       .catch(() => ({}))
       .then((d: { communities?: Community[] }) => {
@@ -184,7 +185,7 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
     if (listingPrice.trim() !== '') payload.listingPrice = Number(listingPrice)
 
     try {
-      const res = await fetch('/api/sqftlab/cma', {
+      const res = await authedFetch('/api/sqftlab/cma', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -231,7 +232,7 @@ export default function CmaPage({ onNavigate }: { onNavigate?: (page: 'pricing')
     if (listingPrice.trim() !== '') payload.listingPriceAed = Number(listingPrice)
 
     try {
-      const res = await fetch('/api/sqftlab/report/property', {
+      const res = await authedFetch('/api/sqftlab/report/property', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -197,6 +197,7 @@ export default function PricingPage({ onNavigate }: { onNavigate: (page: 'signin
 
   useEffect(() => {
     let alive = true
+    // bare-fetch-ok: a public capability probe — which data sources are connected.
     fetch('/api/sqftlab/sources')
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { available?: { name: string; connected: boolean }[] } | null) => {
@@ -222,6 +223,7 @@ export default function PricingPage({ onNavigate }: { onNavigate: (page: 'signin
     setNotice(null)
     setBusy(plan)
     try {
+      // bare-fetch-ok: checkout runs on the cookie session (credentials: 'include').
       const res = await fetch('/api/sqftlab/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

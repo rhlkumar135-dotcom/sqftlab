@@ -12,6 +12,7 @@ import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
 import PricingPage from '@/components/PricingPage'
 import CmaPage from '@/components/CmaPage'
+import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { getRiskFlags } from '@/lib/verdict'
@@ -50,12 +51,9 @@ interface Transaction {
   transactionDate: string
 }
 
-interface PortfolioItem {
-  id: string; title: string; propertyType: string; beds: number; areaSqft: number
-  purchasePrice: number; purchaseDate: string; currentValue: number; annualRent: number
-  serviceCharge: number; mortgageBalance: number
-  community: { nameEn: string; slug: string; medianAedSqft: number; grossYieldPct: number }
-}
+// Holding shape for the portfolio API lives with the screen that consumes it.
+// (The old inline shape declared `currentValue: number`; the API now reports a valued
+// holding's figure and `null` for an unvalued one, so it could not stay accurate here.)
 
 interface Alert {
   id: string; alertType: string; thresholdPct: number; yieldTargetPct?: number
@@ -299,6 +297,7 @@ type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'po
 const PAGE_PATHS: Partial<Record<Page, string>> = {
   pricing: '/pricing',
   cma: '/cma',
+  portfolio: '/portfolio',
 }
 
 const NAV = [
@@ -1321,88 +1320,15 @@ function ListingsFeed({ setPage, setSelectedListing, setSelectedCommunity }: {
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
+// Moved to src/components/PortfolioPage.tsx (Day 8): it gained the add/remove form and
+// the plan-limit banner, and it takes the money formatter and the denial state as props
+// so this file keeps owning exactly one AccessNotice implementation.
+//
+// The screen it replaced printed `format(item.currentValue)` and
+// `item.currentValue - item.purchasePrice` directly. With the API now reporting `null`
+// for an unvalued holding that arithmetic would render as a £0 / NaN gain, which is
+// precisely the figure the old version invented for the seeded rows.
 
-function Portfolio({ setPage }: { setPage: (p: Page) => void }) {
-  const { data, status, loading, reload } = useResource<{ items: PortfolioItem[]; summary: Record<string, number> }>(
-    '/api/sqftlab/portfolio',
-    { items: [], summary: {} },
-  )
-  const { format } = useCurrency()
-  if (loading) return <div className="max-w-[1280px] mx-auto px-6 py-20 text-center" style={{ color: 'var(--ink-5)' }}>Loading portfolio...</div>
-  // A refusal is not data. Rendering holdings in this spot is exactly what showed a
-  // visitor the demo account's AED 10,941,214 while the API was answering 403.
-  if (status !== 200) {
-    return (
-      <div className="max-w-[1280px] mx-auto px-4 py-6">
-        <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
-        <AccessNotice status={status} feature="Portfolio" setPage={setPage} onRetry={reload} />
-      </div>
-    )
-  }
-  const items = data.items ?? []
-  const summary = data.summary ?? {}
-  if (items.length === 0) {
-    return (
-      <div className="max-w-[1280px] mx-auto px-4 py-6">
-        <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
-        <EmptyState
-          icon={<Briefcase size={40} />}
-          title="No holdings yet"
-          body="This account has no properties recorded, so there is nothing to value yet."
-        />
-      </div>
-    )
-  }
-  const pieData = items.map(i => ({ name: i.community.nameEn, value: i.currentValue }))
-  const COLORS = ['var(--b800)', 'var(--b500)', 'var(--up)', 'var(--down)', 'var(--ink-4)']
-
-  return (
-    <div className="max-w-[1280px] mx-auto px-4 py-6">
-      <h2 className="text-2xl font-bold mb-6" style={{ color: 'var(--ink)' }}>Portfolio</h2>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        {[
-          { label: 'Total Value', value: format(summary.totalValue), color: 'var(--ink)' },
-          { label: 'Total Gain/Loss', value: `${summary.totalGainLoss >= 0 ? '+' : ''}${format(summary.totalGainLoss)}`, color: summary.totalGainLoss >= 0 ? 'var(--up)' : 'var(--down)' },
-          { label: 'Weighted Yield', value: `${summary.weightedYield}%`, color: 'var(--up)' },
-          { label: 'Monthly Cash Flow', value: format(summary.monthlyCashFlow), color: 'var(--up)' },
-        ].map((s, i) => (
-          <div key={i} className="p-4 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-            <div className="text-xs mb-1" style={{ color: 'var(--ink-5)' }}>{s.label}</div>
-            <div className="text-xl font-bold" style={{ fontFamily: 'var(--font-data)', color: s.color }}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-      <div className="grid lg:grid-cols-2 gap-6">
-        <div className="space-y-4">
-          {items.map(item => (
-            <div key={item.id} className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="font-semibold" style={{ color: 'var(--ink)' }}>{item.title}</div>
-                  <div className="text-xs" style={{ color: 'var(--b600)' }}>{item.community.nameEn}</div>
-                </div>
-                <div className="text-right">
-                  <div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(item.currentValue)}</div>
-                  <div className="text-xs font-medium" style={{ color: item.currentValue >= item.purchasePrice ? 'var(--up)' : 'var(--down)', fontFamily: 'var(--font-data)' }}>
-                    {item.currentValue >= item.purchasePrice ? '+' : ''}{format(item.currentValue - item.purchasePrice)} ({((item.currentValue - item.purchasePrice) / item.purchasePrice * 100).toFixed(1)}%)
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
-          <h3 className="font-semibold mb-4" style={{ color: 'var(--ink)' }}>Portfolio Diversification</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart><Pie data={pieData} cx="50%" cy="50%" outerRadius={90} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-              {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-            </Pie><Tooltip formatter={(v: number) => format(v)} /></PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 // ─── Watchlist ───────────────────────────────────────────────────────────────
 
@@ -1821,6 +1747,7 @@ function YieldCalculator() {
   const [result, setResult] = useState<Record<string, number> | null>(null)
   const { format } = useCurrency()
   const calculate = useCallback(() => {
+    // bare-fetch-ok: a public calculator — it reads no account data.
     fetch('/api/sqftlab/yield/calculate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       .then(r => r.json()).then(setResult).catch(() => {})
   }, [form])
@@ -1959,6 +1886,7 @@ function MortgageSimulator() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const { format } = useCurrency()
   const simulate = useCallback(() => {
+    // bare-fetch-ok: a public calculator — it reads no account data.
     fetch('/api/sqftlab/mortgage/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       .then(r => r.json()).then(setResult).catch(() => {})
   }, [form])
@@ -3077,6 +3005,7 @@ function WaitlistPage({ setPage }: { setPage: (p: Page) => void }) {
   const [count, setCount] = useState<number | null>(null)
 
   useEffect(() => {
+    // bare-fetch-ok: the public waitlist — no account is involved.
     fetch('/api/sqftlab/waitlist')
       .then((r) => (r.ok ? r.json() : { count: null }))
       .then((b) => { if (typeof b.count === 'number') setCount(b.count) })
@@ -3086,6 +3015,7 @@ function WaitlistPage({ setPage }: { setPage: (p: Page) => void }) {
   const submit = async () => {
     setState({ status: 'sending', message: '' })
     try {
+      // bare-fetch-ok: joining the public waitlist needs no account.
       const res = await fetch('/api/sqftlab/waitlist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3203,6 +3133,9 @@ function AppInner() {
 
   // Spec Part 16 — one SSE connection for the whole app.
   const live = useLiveMarket()
+  // Handed to PortfolioPage as a prop rather than having it reach for the context, so
+  // the app's currency switcher keeps working inside the new screen.
+  const { format: formatMoney } = useCurrency()
 
   // Deep-link bridge: DataLabel ⓘ tooltips link to #glossary-<slug>, which must
   // open the glossary page before the anchor can be scrolled to. `#signin` and
@@ -3220,6 +3153,8 @@ function AppInner() {
     if (path === '/pricing') setPage('pricing')
     // Day 6: same reasoning — a shared /cma link must open the CMA tool, not the landing page.
     if (path === '/cma') setPage('cma')
+    // Day 8: a shared /portfolio link opens the dashboard rather than the landing page.
+    if (path === '/portfolio') setPage('portfolio')
     if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
     window.addEventListener('hashchange', onHash)
@@ -3269,7 +3204,17 @@ function AppInner() {
       {page === 'listings' && <ListingsFeed setPage={navigate} setSelectedListing={setSelectedListing} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'markets' && <MarketsPage setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'property' && <PropertyIntelligence listingId={selectedListing} setPage={navigate} />}
-      {page === 'portfolio' && <Portfolio setPage={navigate} />}
+      {page === 'portfolio' && (
+        <PortfolioPage
+          setPage={navigate}
+          formatMoney={formatMoney}
+          // Refusals render through this file's single AccessNotice, so the portfolio
+          // screen cannot drift into showing holdings when the API declined.
+          renderDenied={(status, onRetry) => (
+            <AccessNotice status={status} feature="Portfolio" setPage={navigate} onRetry={onRetry} />
+          )}
+        />
+      )}
       {page === 'watchlist' && <Watchlist setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'deals' && <Deals setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'alerts' && <AlertsPage setPage={navigate} setSelectedListing={setSelectedListing} />}

@@ -28,6 +28,8 @@ import {
   type CmaCondition, type CmaSubject,
 } from './src/lib/cma'
 import { generatePropertyReport, PdfUnavailableError } from './src/lib/pdf-generator'
+import { propertyLimitFor, deriveHolding, summariseHoldings, valuateHolding } from './src/lib/portfolio'
+import { fetchHoldingsComparables } from './src/lib/portfolio-jobs'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -2101,6 +2103,77 @@ async function seededUserId(): Promise<string | null> {
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
+//
+// A holding's current value is only ever what a valuation produced. `valuedAt` is the
+// marker: written by the valuation paths in `src/lib/portfolio-jobs.ts` and by nothing
+// else, so a non-null `valuedAt` is evidence a valuation ran, and a null one means "not
+// valued yet".
+//
+// The previous version of this route summed `currentValue` across every row. The three
+// seeded holdings were written by a seeder using `price * (1 + random*0.2)` and are
+// backed by zero transactions, so the screen presented AED 10,941,214 of invented
+// market value as DLD valuations. Unvalued holdings are now excluded from the totals
+// and the gain is `null` — unknown — rather than a reassuring 0.0%.
+
+/** The columns the serialised holding needs. Structural, so a Prisma row satisfies it. */
+interface PortfolioRowLike {
+  id: string
+  title: string
+  buildingName: string | null
+  propertyType: string
+  beds: number
+  areaSqft: number
+  floor: number | null
+  unitNumber: string | null
+  purchasePrice: number
+  purchaseDate: Date
+  annualRent: number
+  serviceCharge: number
+  mortgageBalance: number
+  currentValue: number
+  valuedAt: Date | null
+  valuationSource: string | null
+  valuationComps: number | null
+  community: { nameEn: string; slug: string; medianAedSqft: number; grossYieldPct: number }
+}
+
+/**
+ * One serialiser for the list AND the add response.
+ *
+ * They previously disagreed: the list reported `currentValue: null` for an unvalued
+ * holding, while the add response spread the raw row and so reported `currentValue: 0`.
+ * The same holding therefore looked "valued at nothing" to one caller and "not valued"
+ * to another, and a client reading `currentValue` could not tell which it was getting.
+ */
+function serialiseHolding(p: PortfolioRowLike) {
+  const d = deriveHolding(p)
+  return {
+    id: p.id,
+    title: p.title,
+    buildingName: p.buildingName,
+    propertyType: p.propertyType,
+    beds: p.beds,
+    areaSqft: p.areaSqft,
+    floor: p.floor,
+    unitNumber: p.unitNumber,
+    purchasePrice: p.purchasePrice,
+    purchaseDate: p.purchaseDate,
+    purchasePsf: d.purchasePsf,
+    annualRent: p.annualRent,
+    serviceCharge: p.serviceCharge,
+    mortgageBalance: p.mortgageBalance,
+    // `null`, never the purchase price and never 0: an unvalued holding has no value.
+    currentValue: d.currentValueAed,
+    currentPsf: d.currentPsf,
+    valuedAt: p.valuedAt,
+    valuationSource: p.valuationSource,
+    valuationComps: p.valuationComps,
+    isValued: d.isValued,
+    gainAed: d.gainAed,
+    gainPct: d.gainPct,
+    community: p.community,
+  }
+}
 
 app.get('/sqftlab/portfolio', async (c) => {
   const blocked = requireTier(c, 'pro', 'Portfolio')
@@ -2108,92 +2181,240 @@ app.get('/sqftlab/portfolio', async (c) => {
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
-  const items = await prisma.portfolio.findMany({
+  const rows = await prisma.portfolio.findMany({
     where: { userId },
+    orderBy: { purchaseDate: 'desc' },
     include: { community: { select: { nameEn: true, slug: true, medianAedSqft: true, grossYieldPct: true } } },
   })
 
-  const totalValue = items.reduce((s, i) => s + i.currentValue, 0)
-  const totalCost = items.reduce((s, i) => s + i.purchasePrice, 0)
-  const totalGainLoss = totalValue - totalCost
-  const totalAnnualRent = items.reduce((s, i) => s + i.annualRent, 0)
-  const weightedYield = totalValue > 0 ? (totalAnnualRent / totalValue) * 100 : 0
-  const monthlyCashFlow = items.reduce((s, i) => s + (i.annualRent - i.serviceCharge) / 12 - i.mortgageBalance * (i.mortgageRate / 100 / 12), 0)
+  // The cap limits what is returned, but the counts describe the user's real portfolio.
+  // A capped list that looks complete would make "5 of 5" indistinguishable from "5 of 9".
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const limit = propertyLimitFor(tier)
+  const visible = limit === null ? rows : rows.slice(0, limit)
+
+  const items = visible.map(serialiseHolding)
+
+  const summary = summariseHoldings(visible)
+  const totalAnnualRent = visible.reduce((s, i) => s + i.annualRent, 0)
+  const monthlyCashFlow = visible.reduce(
+    (s, i) => s + (i.annualRent - i.serviceCharge) / 12 - i.mortgageBalance * (i.mortgageRate / 100 / 12),
+    0,
+  )
+
+  await trackEvent(c, 'portfolio_view', { propertyCount: visible.length, valuedCount: summary.valuedCount })
 
   return c.json({
     items,
     summary: {
-      totalValue: Math.round(totalValue),
-      totalCost: Math.round(totalCost),
-      totalGainLoss: Math.round(totalGainLoss),
-      gainLossPct: Math.round((totalGainLoss / totalCost) * 10000) / 100,
+      // Legacy keys, kept for their existing callers. They now mean "across valued
+      // holdings"; `valuedCount`/`unvaluedCount` say how much of the portfolio that is,
+      // and the gain is null rather than 0 when nothing has been valued.
+      totalValue: summary.currentAed,
+      totalCost: summary.purchaseAed,
+      totalGainLoss: summary.gainAed,
+      gainLossPct: summary.gainPct,
       totalAnnualRent: Math.round(totalAnnualRent),
-      weightedYield: Math.round(weightedYield * 100) / 100,
+      weightedYield: summary.currentAed > 0 ? Math.round((totalAnnualRent / summary.currentAed) * 10000) / 100 : 0,
       monthlyCashFlow: Math.round(monthlyCashFlow),
-      propertyCount: items.length,
+      propertyCount: visible.length,
+      // The Day 8 contract.
+      count: summary.count,
+      totalPurchaseAed: summary.purchaseAed,
+      totalCurrentAed: summary.currentAed,
+      totalGainAed: summary.gainAed,
+      totalGainPct: summary.gainPct,
+      valuedCount: summary.valuedCount,
+      unvaluedCount: summary.unvaluedCount,
+      valuedPurchaseAed: summary.valuedPurchaseAed,
+      totalPropertyCount: rows.length,
     },
+    ...(limit !== null
+      ? {
+          limit,
+          // Reported at the limit as well as over it: "5 of 5" has to be visible to the
+          // user who is about to be refused, not only to the one who already is.
+          atLimit: rows.length >= limit,
+          totalCount: rows.length,
+          ...(rows.length > limit
+            ? {
+                limited: true,
+                message: `Pro tracks up to ${limit} properties. Upgrade to Enterprise to track all ${rows.length}.`,
+              }
+            : {}),
+        }
+      : {}),
   })
 })
 
-// Add a holding. The spec showed `data: { userId, ...body }`, which spreads
-// arbitrary client input straight into the row (mass assignment — a caller could
-// set `purchaseDate` to any value, or `currentValue` to whatever they liked).
-// Fields are validated instead.
+// Add a holding. The spec showed `data: { userId, ...body }`, which spreads arbitrary
+// client input straight into the row (mass assignment — a caller could set
+// `purchaseDate` to any value, or `currentValue` to whatever they liked). Field
+// validation was added then, but the row still wrote
+// `currentValue: num(body.currentValue, purchasePrice)` — so a caller could still
+// lodge an arbitrary figure as the market value, and with no client value the purchase
+// price was stored as one, reporting a flat 0.0% return as a market outcome. Client
+// input can no longer reach the valuation columns at all; they are written only by a
+// valuation that actually ran.
+
+const PORTFOLIO_EXPECTED: Record<string, string> = {
+  communitySlug: 'non-empty string — the district slug, e.g. "dubai-marina"',
+  title: 'optional string — the holding name; defaults to the building name',
+  buildingName: 'optional string — defaults to title',
+  propertyType: 'optional string — defaults to "apartment"',
+  beds: 'integer >= 0 (0 = studio)',
+  areaSqft: 'a positive number — the unit size in sqft',
+  purchasePrice: 'a positive number (AED)',
+  purchaseDate: 'optional ISO date — defaults to today; cannot be in the future',
+  floor: 'optional integer',
+  unitNumber: 'optional string',
+  annualRent: 'optional non-negative number (AED)',
+  serviceCharge: 'optional non-negative number (AED)',
+}
+
 app.post('/sqftlab/portfolio', async (c) => {
   const blocked = requireTier(c, 'pro', 'Portfolio')
   if (blocked) return blocked
   const userId = getUserId(c)
   if (!userId) return upgradeRequired(c)
 
-  let body: Record<string, unknown>
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: 'Request body must be JSON.' }, 400)
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  const limit = propertyLimitFor(tier)
+  const count = await prisma.portfolio.count({ where: { userId } })
+  if (limit !== null && count >= limit) {
+    return c.json({
+      error: 'Portfolio limit reached',
+      message: `Pro tracks up to ${limit} properties. Upgrade to Enterprise for unlimited.`,
+      limit,
+      count,
+      upgradeUrl: '/pricing',
+      limited: true,
+    }, 403)
   }
 
-  const communitySlug = typeof body.communitySlug === 'string' ? body.communitySlug.trim() : ''
-  if (!communitySlug) return c.json({ error: 'communitySlug is required' }, 400)
+  const body = await readJsonBody(c)
+
+  const communitySlug = strField(body, 'communitySlug') ?? strField(body, 'community')
+  const title = strField(body, 'title')
+  const buildingName = strField(body, 'buildingName')
+  const propertyType = strField(body, 'propertyType')
+  const unitNumber = strField(body, 'unitNumber')
+  const beds = numField(body, 'beds')
+  const areaSqft = numField(body, 'areaSqft')
+  const purchasePrice = numField(body, 'purchasePrice')
+  const floor = numField(body, 'floor')
+  const annualRent = numField(body, 'annualRent') ?? 0
+  const serviceCharge = numField(body, 'serviceCharge') ?? 0
+  const rawDate = strField(body, 'purchaseDate')
+
+  const bad: string[] = []
+  if (!communitySlug) bad.push('communitySlug')
+  if (beds === null || beds < 0 || !Number.isInteger(beds)) bad.push('beds')
+  if (areaSqft === null || areaSqft <= 0) bad.push('areaSqft')
+  if (purchasePrice === null || purchasePrice <= 0) bad.push('purchasePrice')
+  if (floor !== null && !Number.isInteger(floor)) bad.push('floor')
+  if (annualRent < 0) bad.push('annualRent')
+  if (serviceCharge < 0) bad.push('serviceCharge')
+  if (bad.length) return badInput(c, bad, PORTFOLIO_EXPECTED)
+  // Restated so TypeScript narrows each value; an empty `bad` does not tie the array's
+  // emptiness to the individual checks above.
+  if (!communitySlug || beds === null || areaSqft === null || purchasePrice === null) {
+    return badInput(c, ['communitySlug', 'beds', 'areaSqft', 'purchasePrice'], PORTFOLIO_EXPECTED)
+  }
+
+  const purchaseDate = rawDate ? new Date(rawDate) : new Date()
+  if (Number.isNaN(purchaseDate.getTime())) {
+    return c.json({ error: 'purchaseDate must be a valid date', expected: PORTFOLIO_EXPECTED.purchaseDate }, 400)
+  }
+  // A purchase in the future is a typo, not a holding; it would also park the row
+  // outside every "since purchase" window the analytics use.
+  if (purchaseDate.getTime() > Date.now() + 86_400_000) {
+    return c.json({ error: 'purchaseDate cannot be in the future' }, 400)
+  }
 
   const community = await prisma.community.findUnique({
     where: { slug: communitySlug },
-    select: { id: true },
+    select: { id: true, nameEn: true },
   })
   if (!community) return c.json({ error: `Unknown district "${communitySlug}"` }, 400)
 
-  const purchasePrice = Number(body.purchasePrice)
-  if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
-    return c.json({ error: 'purchasePrice must be a positive number' }, 400)
-  }
-  const areaSqft = Number(body.areaSqft)
-  if (!Number.isFinite(areaSqft) || areaSqft <= 0) {
-    return c.json({ error: 'areaSqft must be a positive number' }, 400)
-  }
-
-  const num = (v: unknown, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback)
-  const purchaseDate = body.purchaseDate ? new Date(String(body.purchaseDate)) : new Date()
-  if (Number.isNaN(purchaseDate.getTime())) {
-    return c.json({ error: 'purchaseDate must be a valid date' }, 400)
-  }
+  const comps = await fetchHoldingsComparables(community.id, beds, areaSqft)
+  const valuation = valuateHolding(
+    {
+      buildingName: buildingName ?? title ?? '',
+      community: community.nameEn,
+      bedrooms: beds,
+      sizeSqft: areaSqft,
+      floor,
+      condition: null,
+      listingPrice: null,
+    },
+    comps,
+  )
 
   const item = await prisma.portfolio.create({
     data: {
       userId,
       communityId: community.id,
-      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled holding',
-      propertyType:
-        typeof body.propertyType === 'string' && body.propertyType.trim() ? body.propertyType.trim() : 'apartment',
-      beds: Number.isInteger(Number(body.beds)) ? Number(body.beds) : 0,
+      title: title ?? buildingName ?? 'Untitled holding',
+      propertyType: propertyType ?? 'apartment',
+      beds,
       areaSqft,
       purchasePrice,
       purchaseDate,
-      currentValue: num(body.currentValue, purchasePrice),
-      annualRent: num(body.annualRent),
-      serviceCharge: num(body.serviceCharge),
+      buildingName: buildingName ?? null,
+      floor,
+      unitNumber: unitNumber ?? null,
+      annualRent,
+      serviceCharge,
+      // Only a valuation that ran writes these. With no comparables the columns keep
+      // their defaults and `valuedAt` stays null, which is what tells the UI this
+      // holding has not been valued — as opposed to being worth what was paid for it.
+      currentValue: valuation?.valueAed ?? 0,
+      valuedAt: valuation?.asOf ?? null,
+      valuationSource: valuation?.source ?? null,
+      valuationComps: valuation?.compsUsed ?? null,
     },
+    // Included so the add response carries the same community shape the list returns;
+    // one serialiser for both keeps them from drifting apart again.
+    include: { community: { select: { nameEn: true, slug: true, medianAedSqft: true, grossYieldPct: true } } },
   })
 
-  return c.json({ item }, 201)
+  await trackEvent(c, 'portfolio_add', { community: communitySlug, bedrooms: beds, valued: Boolean(valuation) })
+
+  return c.json({
+    item: serialiseHolding(item),
+    valued: Boolean(valuation),
+    comparableSalesFound: comps.length,
+    ...(valuation
+      ? {}
+      : {
+          message:
+            `Added, but not yet valued: only ${comps.length} comparable sale` +
+            `${comps.length === 1 ? '' : 's'} matched this unit in ${community.nameEn} (at least ` +
+            `${MIN_COMPS} are needed). ` +
+            (dldConfigured()
+              ? 'The nightly job will value it once more sales are recorded.'
+              : 'The DLD transaction feed is not connected on this deployment — set DUBAI_PULSE_API_KEY to enable it.'),
+        }),
+  }, 201)
+})
+
+// Remove a holding.
+app.delete('/sqftlab/portfolio/:id', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Portfolio')
+  if (blocked) return blocked
+  const userId = getUserId(c)
+  if (!userId) return upgradeRequired(c)
+
+  // Scoped by userId inside the DELETE rather than fetched first and authorised after:
+  // authorise-after-read is one refactor away from deleting another account's row, and
+  // reading first still leaks whether an id exists.
+  const result = await prisma.portfolio.deleteMany({ where: { id: c.req.param('id'), userId } })
+  if (result.count === 0) return c.json({ error: 'Not found' }, 404)
+
+  await trackEvent(c, 'portfolio_remove', { id: c.req.param('id') })
+  return c.json({ deleted: true })
 })
 
 // ─── Watchlist ───────────────────────────────────────────────────────────────

@@ -292,8 +292,10 @@ console.log('\n── PART C: the page is wired, and says what it does ──')
   const pageSrc = await Bun.file('src/components/CmaPage.tsx').text()
   const appSrc = await Bun.file('src/App.tsx').text()
 
-  check('CMA page posts to the API route', pageSrc.includes("fetch('/api/sqftlab/cma'"))
-  check('CMA page reads the caller tier', pageSrc.includes("fetch('/api/sqftlab/me')"))
+  // `authedFetch` rather than a plain fetch: the route resolves the caller from the
+  // request, so a bare call arrives as a guest. See src/lib/session.ts.
+  check('CMA page posts to the API route with its identity', pageSrc.includes("authedFetch('/api/sqftlab/cma'"))
+  check('CMA page reads the caller tier with its identity', pageSrc.includes("authedFetch('/api/sqftlab/me')"))
   check('CMA page offers the Run CMA action', pageSrc.includes('Run CMA'))
   check('CMA page renders the estimated value in AED', pageSrc.includes('AED {aed.format(result.estimatedValueAed)}'))
   check('CMA page renders the market range (P25/Median/P75/Avg)', ['P25', 'Median', 'P75', 'Average'].every((k) => pageSrc.includes(k)))
@@ -304,7 +306,8 @@ console.log('\n── PART C: the page is wired, and says what it does ──')
   // verify-day7-e2e.ts, which renders a real PDF.
   check('CMA page offers the PDF report download', pageSrc.includes('Download PDF report'))
   check('the PDF button no longer claims to be coming soon', !pageSrc.includes('Coming soon'))
-  check('the PDF button posts to the report route', pageSrc.includes("fetch('/api/sqftlab/report/property'"))
+  check('the PDF button posts to the report route with its identity',
+    pageSrc.includes("authedFetch('/api/sqftlab/report/property'"))
   check('the PDF button is enabled only once a valuation exists', pageSrc.includes('disabled={pdfBusy || !result}'))
   check('a PDF failure shows the server message, never a browser alert',
     pageSrc.includes('body.message ?? body.error') && !pageSrc.includes('alert('))

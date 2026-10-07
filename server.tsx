@@ -41,10 +41,13 @@ app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 // unreachable: that catch-all resolves *every* unmatched path to index.html and
 // answers before a later middleware ever runs.
 //
-// `shogo generate` rewrites this file and strips this region (despite the header
-// claiming otherwise). Re-add it after every schema change; if the canvas preview
-// goes blank or a deploy serves a stale shell, look here first.
-// `scripts/verify-server-routing.ts` asserts both behaviours below.
+// `shogo generate` rewrites this file and RELOCATES this region to the bottom,
+// below the SPA catch-all, where it silently stops working — the markers survive
+// but the ordering does not. Editing prisma/schema.prisma is enough to trigger it.
+// So after every schema change, check that this block still sits above the static
+// handlers; if the canvas preview goes blank or a deploy serves a stale shell,
+// look here first. `scripts/verify-server-routing.ts` asserts both behaviours
+// below, and drops to 1/8 when this block has been moved.
 //
 // 1. The canvas preview mounts the app under /p/<projectId>/ and the client is
 //    built with that base, so asset requests arrive with the prefix on the path.
@@ -85,17 +88,11 @@ app.use('*', async (c, next) => {
 })
 // SHOGO:CUSTOM-END
 
-// ─── Static files + SPA fallback ─────────────────────────────────────────────
-// Deliberately LAST. Hono dispatches in registration order, so the SPA catch-all
-// below answers every unmatched path with index.html — anything registered after
-// it never runs. `shogo generate` moves these back above the custom region on
-// every schema change, which silently turns the asset-routing middleware above
-// into dead code and blanks the preview. `scripts/fix-server-order.ts` repairs
-// the ordering; `scripts/verify-server-routing.ts` detects the regression.
+// Serve static files in production
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 
 const port = Number(process.env.PORT) || 3001
 console.log(`🚀 Server running on http://localhost:${port}`)
-Bun.serve({ port, fetch: app.fetch })
 
+Bun.serve({ port, fetch: app.fetch })
