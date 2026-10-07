@@ -522,6 +522,13 @@ model ExchangeRate {
   inr       Float?
   pkr       Float?
   cny       Float?
+  // AED → GCC crosses, added for the `/sqftlab/exchange-rates` contract. They sit
+  // alongside the five majors rather than in a separate table so one row still
+  // carries a single, consistent fetchedAt for every currency in the payload.
+  sar       Float?
+  qar       Float?
+  bhd       Float?
+  kwd       Float?
   fetchedAt DateTime @default(now()) @map("fetched_at")
 
   @@index([fetchedAt])

@@ -875,3 +875,88 @@ contained this turn's heatmap fix but not its property-page fix, plus the remove
 `rhlkumar135-dotcom/sqftlab` — `private: false` as of this session. The user asked how to make
 it private but has not done it. `sqftlab-cron-2026` remains in git history and must be
 rotated regardless.
+
+---
+
+## Session — Day 2 (`sqftlab_day02.md`): brand, CORS, exchange rates
+
+The brief was written against a Next.js 14 tree (`src/app/layout.tsx`,
+`public/manifest.json`). This app is Vite + React + Hono, so the three FIXes were
+implemented behaviourally. Harness: `scripts/verify-day2.ts` — **30/30**.
+
+### FIX-04 was already done in the product — the residual hits are NOT product
+
+The nav renders `<span>sqft</span><span>Lab</span>` + a `BETA` badge, and the
+built bundle contains **0** `sqrtLab` / `khashn`. Over *tracked* files the wrong
+brand survives in exactly four places, none of which ships:
+
+- `files/Pasted_markdown.md`, `files/Pasted_text.txt`, `files/Pasted_text__2_.txt`
+  — the user's own uploaded specs, i.e. the *input* record
+- `MEMORY.md:16` — a real filename (`Khashn_UAE_PropTech_Documentation_v1.docx`)
+
+`sqftlab-next/` holds 30 more, but it is a **gitlink** (mode 160000, its own
+`.git`, origin = this same repo, HEAD `7a43bfc`) with **no `.gitmodules`** — a
+stale Next.js checkout that is empty on a fresh clone and not built by the
+Dockerfile. Editing it would dirty the parent tree with an un-committable change,
+so it was deliberately left alone. **Decide: delete it, or make it a real
+submodule.** Do not rewrite `files/` or `memory/` to satisfy a grep.
+
+### FIX-05 — CORS: origins reflected, never `*`
+
+`ALLOWED_ORIGINS` = `sqftlab.com`, `www.sqftlab.com`, **`app.sqftlab.com`** (the
+brief's third origin). The old code sent `*` in dev; now the origin is always
+*reflected*, and a disallowed one gets ACAO/ACAM/ACAH **deleted** rather than
+unset (a regenerated `server.tsx` can re-add the wildcard). `Origin` absent ⇒ no
+CORS headers at all, which is correct for same-origin/server-to-server.
+Dev-only extras are a regex (localhost/127.0.0.1 any port, `*.shogo.ai`) so the
+canvas preview keeps working; `NODE_ENV=production` in the pod means they cannot
+reach production.
+
+⚠️ `server.tsx` **lost its hand-added OPTIONS/CORS block** to this session's
+regeneration (15 deletions). That is fine — `cors: false` in `shogo.config.json`
+means the generator emits none, and `custom-routes.ts` answers OPTIONS itself
+(preflight re-verified). `scripts/fix-server-order.ts` was needed **again** (the
+custom region came back below the SPA catch-all); routing re-verified 8/8.
+
+### FIX-06 — `/sqftlab/exchange-rates` (new), legacy shape preserved
+
+`GET /api/sqftlab/exchange-rates` → `{ base, rates, direction, updatedAt, source, cached }`,
+1-hour cache, nine currencies (USD GBP EUR INR PKR SAR QAR BHD KWD).
+**`rates[X]` is AED per 1 X** (the brief's `1 / conversion_rates[X]`) while the
+DB and the legacy `/rates/exchange` keep the API's native `X per 1 AED`. Two
+directions in one file — documented in code, and asserted (`rates.INR < 1`).
+`ExchangeRate` gained nullable `sar/qar/bhd/kwd`. `EXCHANGE_RATE_API_KEY` is
+optional: the keyed endpoint is tried first, then keyless `open.er-api.com`
+(verified to carry all nine).
+
+**Cache-completeness guard:** 37 pre-migration rows (GCC columns null) satisfied
+the TTL and served a five-currency payload for an hour. `completeRow()` now
+rejects a row missing any quoted currency, so the first request after deploy
+refreshes to nine. Same class of bug as `psfSource` — an old row asserting a
+shape it predates.
+
+### Two DBs exist — always export `DATABASE_URL` before running a script
+
+`src/lib/db.ts` falls back to `file:./dev.db` (project **root**), while `.env`
+sets `prisma/dev.db`. A `bun -e` without the export reads a **different, stale**
+database — it reported `deleted 0 of 0` on a table the server had just written
+to, and `no such column: main.exchange_rates.sar` for a column the real DB had.
+Export `DATABASE_URL="file:$PWD/prisma/dev.db"` or you are testing nothing.
+
+### `dist/assets` accumulates ~100 bundles (the watcher runs `--emptyOutDir false`)
+
+Reading "any `index-*.js`" can pick a build from **weeks earlier** — the brand
+check first "failed" against `index-X9Nqp4Nd.js` dated 2026-09-24. Read the
+bundle `dist/index.html` actually references; that is what the browser gets.
+
+### The managed server really was up — `/health`, not `/api/health`
+
+`server.tsx` mounts the health check at `/health`. Probing `/api/health` returns
+a JSON 404, which read as "server down" for several turns during a legitimate
+restart window. Check `/health`, or a real route.
+
+### Suite state at end of Day 2
+
+    verify-day2 30 · verify-day1 83 · verify-fixes 41 · verify-cron 31
+    verify-intel 27 · verify-stream 15 · verify-server-routing 8
+    tsc --noEmit  0 errors outside src/generated/

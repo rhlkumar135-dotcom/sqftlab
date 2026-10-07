@@ -14,21 +14,6 @@ import { createToolsHandlers } from '@shogo-ai/sdk/tools/server'
 
 const app = new Hono()
 
-// CORS — `shogo generate` emits this block on every run. The authoritative
-// policy lives in custom-routes.ts (it deletes the header for disallowed
-// origins, which this block cannot do). Kept minimal and non-wildcard here so a
-// regeneration cannot silently re-open the API to every origin.
-// `c.body(null, 204)` rather than `c.text('', 204)` — 204 must carry no body, and
-// `text()` rejects 204 in Hono's types.
-app.use('*', async (c, next) => {
-  if (c.req.method === 'OPTIONS') {
-    c.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-    c.header('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    return c.body(null, 204)
-  }
-  await next()
-})
-
 // Health check endpoint
 app.get('/health', (c) => c.json({ ok: true, timestamp: new Date().toISOString() }))
 
