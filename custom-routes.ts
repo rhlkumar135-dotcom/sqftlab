@@ -28,6 +28,9 @@ import {
   type CmaCondition, type CmaSubject,
 } from './src/lib/cma'
 import { generatePropertyReport, PdfUnavailableError } from './src/lib/pdf-generator'
+import { computeCapitalFlow, type CapitalFlowResult } from './src/lib/capital-flow'
+import { computeRentalYield, type RentalYieldResult } from './src/lib/rental-yield'
+import { computeDeveloperPositioning, getBuildingScorecard, searchBuildings, type BuildingScorecard } from './src/lib/buildings'
 import { propertyLimitFor, deriveHolding, summariseHoldings, valuateHolding } from './src/lib/portfolio'
 import { fetchHoldingsComparables } from './src/lib/portfolio-jobs'
 
@@ -3825,6 +3828,229 @@ app.get('/sqftlab/building/:slug', async (c) => {
         : 'Not enough floor-tagged sales in this building to fit a premium curve.',
     },
   })
+})
+
+// ─── Day 9A/9B: response cache ───────────────────────────────────────────────
+//
+// The brief specifies Redis (6h for capital flow, 12h for yield). This stack has
+// no Redis — SQLite behind a single Bun process — so this is an in-process Map
+// with the same TTLs, exactly like the tier cache above and with the same
+// caveat: it is PROCESS-LOCAL, so with more than one instance each keeps its own
+// copy and a write is not visible to the others until their entry expires. Swap
+// in Redis before scaling past one process.
+const FLOW_TTL_MS = 6 * 3600 * 1000
+const YIELD_TTL_MS = 12 * 3600 * 1000
+const flowCache = new Map<string, { body: unknown; expiresAt: number }>()
+
+function readFlowCache<T>(key: string): T | null {
+  const hit = flowCache.get(key)
+  if (!hit) return null
+  if (hit.expiresAt <= Date.now()) {
+    flowCache.delete(key)
+    return null
+  }
+  return hit.body as T
+}
+
+function writeFlowCache(key: string, body: unknown, ttlMs: number): void {
+  flowCache.set(key, { body, expiresAt: Date.now() + ttlMs })
+  // The key space is bounded by the community count, so this is a safety valve
+  // rather than a real eviction policy — it stops a pathological caller with
+  // arbitrary area strings from pinning memory in a long-lived process.
+  if (flowCache.size > 500) {
+    const now = Date.now()
+    for (const [k, v] of flowCache) if (v.expiresAt <= now) flowCache.delete(k)
+  }
+}
+
+// ─── Day 9A Capital Flow Tracker ─────────────────────────────────────────────
+//
+// `/overview` is registered BEFORE `/capital-flow/:area`. Hono dispatches in
+// registration order, so with the order reversed the literal `overview` would be
+// captured as an area name and the overview endpoint would 404 or return an area
+// breakdown. `verify-day9` asserts this ordering holds.
+app.get('/sqftlab/capital-flow/overview', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Capital Flow Tracker')
+  if (blocked) return blocked
+
+  const cacheKey = 'sqftlab:capital-flow:overview'
+  const cached = readFlowCache<CapitalFlowResult>(cacheKey)
+  if (cached) return c.json({ ...cached, cached: true })
+
+  const rawMonths = Number(c.req.query('months') ?? 3)
+  const months = Number.isFinite(rawMonths) && rawMonths >= 1 && rawMonths <= 24 ? Math.floor(rawMonths) : 3
+
+  const result = await computeCapitalFlow({ scope: 'Dubai', months, limit: 15 })
+
+  // An empty result is deliberately NOT cached. "No nationality data yet" is the
+  // state a fresh deploy is in until the DLD sync runs, and pinning it for six
+  // hours would keep the feature dark for six hours after the data lands.
+  if (!result.insufficientData) writeFlowCache(cacheKey, result, FLOW_TTL_MS)
+
+  await trackEvent(c, 'capital_flow_view', { type: 'overview', source: result.source })
+  return c.json({ ...result, cached: false })
+})
+
+app.get('/sqftlab/capital-flow/:area', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Capital Flow Tracker')
+  if (blocked) return blocked
+
+  const area = decodeURIComponent(c.req.param('area'))
+
+  // Resolve the name to a community before answering. Flow is keyed by
+  // communityId, so an unmatched area would otherwise return a well-formed empty
+  // breakdown that reads as "nobody buys here" instead of "unknown area".
+  const community = await findCommunityByName(area)
+  if (!community) return c.json({ error: `Unknown area: ${area}` }, 404)
+
+  const cacheKey = `sqftlab:capital-flow:area:${community.slug}`
+  const cached = readFlowCache<CapitalFlowResult>(cacheKey)
+  if (cached) return c.json({ ...cached, cached: true })
+
+  const result = await computeCapitalFlow({
+    scope: community.nameEn,
+    district: community.slug,
+    communityId: community.id,
+    months: 3,
+    limit: 20,
+  })
+  if (!result.insufficientData) writeFlowCache(cacheKey, result, FLOW_TTL_MS)
+
+  await trackEvent(c, 'capital_flow_view', { type: 'area', area: community.slug, source: result.source })
+  return c.json({ ...result, cached: false })
+})
+
+// ─── Day 9B Ejari rental yield ───────────────────────────────────────────────
+//
+// Returns `rentSource`/`saleSource` on every response. The brief's version returns
+// a bare `grossYieldPct` computed from whatever it found, so a yield built from
+// portal asking rents is indistinguishable from one built from registered
+// contracts — the distinction the feature exists to make.
+app.get('/sqftlab/communities/:slug/yield', async (c) => {
+  const blocked = requireTier(c, 'pro', 'Rental Yield Data')
+  if (blocked) return blocked
+
+  const slug = c.req.param('slug')
+  const community = await prisma.community.findUnique({ where: { slug } })
+  if (!community) return c.json({ error: 'Community not found' }, 404)
+
+  const cacheKey = `sqftlab:yield:${community.slug}`
+  const cached = readFlowCache<RentalYieldResult>(cacheKey)
+  if (cached) return c.json({ ...cached, cached: true })
+
+  const result = await computeRentalYield(community.slug)
+
+  // Cache only a yield computed from registered contracts. A listing-fallback yield
+  // is a stand-in for data that has not arrived yet, so caching it for 12 hours would
+  // keep serving an asking-rent number for half a day after the first Ejari contract
+  // landed — the exact substitution this feature exists to prevent. `insufficientData`
+  // is never cached either, for the same reason: it pins "no data".
+  if (!result.insufficientData && result.rentSource === 'ejari') {
+    writeFlowCache(cacheKey, result, YIELD_TTL_MS)
+  }
+
+  await trackEvent(c, 'yield_view', { slug: community.slug, rentSource: result.rentSource })
+  return c.json({ ...result, cached: false })
+})
+
+// ─── Day 10A Developer Positioning Engine (Enterprise) ───────────────────────
+const DEVELOPER_POSITION_EXPECTED: Record<string, string> = {
+  projectName: 'a non-empty string',
+  area: 'a micro-market name that matches a community, e.g. "JLT" or "Downtown Dubai"',
+  beds: 'a non-negative integer (0 for a studio)',
+  launchPsfAed: 'a positive number (AED per square foot)',
+  compareMonths: 'optional integer 1-36; defaults to 6',
+}
+
+app.post('/sqftlab/developer/position', async (c) => {
+  const blocked = requireTier(c, 'enterprise', 'Developer Positioning')
+  if (blocked) return blocked
+
+  const userId = getUserId(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+
+  // `readJsonBody` rather than the brief's bare `await c.req.json()`, which throws
+  // on an empty or malformed body and surfaces as a 500 rather than a 400.
+  const body = await readJsonBody(c)
+
+  const projectName = typeof body.projectName === 'string' ? body.projectName.trim() : ''
+  const area = typeof body.area === 'string' ? body.area.trim() : ''
+  // The brief's request contract calls this `bedrooms`; the column is `beds`.
+  // Both spellings are accepted so neither caller breaks.
+  const beds = numField(body, 'beds') ?? numField(body, 'bedrooms')
+  const launchPsfAed = numField(body, 'launchPsfAed')
+  const compareMonths = numField(body, 'compareMonths')
+
+  const missing: string[] = []
+  if (!projectName) missing.push('projectName')
+  if (!area) missing.push('area')
+  if (beds === null || beds < 0 || !Number.isInteger(beds)) missing.push('beds')
+  if (launchPsfAed === null || launchPsfAed <= 0) missing.push('launchPsfAed')
+  if (missing.length) return badInput(c, missing, DEVELOPER_POSITION_EXPECTED)
+
+  // Narrow for the call below. The guard above is a runtime check on an array of
+  // field names, which TypeScript cannot use to narrow `beds` / `launchPsfAed`
+  // themselves — without this they stay `number | null` and fail to type-check.
+  if (beds === null || launchPsfAed === null) {
+    return badInput(c, ['beds', 'launchPsfAed'], DEVELOPER_POSITION_EXPECTED)
+  }
+
+  const months =
+    compareMonths != null && compareMonths >= 1 && compareMonths <= 36 ? Math.floor(compareMonths) : 6
+
+  const result = await computeDeveloperPositioning({
+    projectName,
+    area,
+    beds,
+    launchPsfAed,
+    compareMonths: months,
+  })
+
+  await trackEvent(c, 'developer_position', {
+    area,
+    beds,
+    launchPsfAed,
+    comparables: result.dldComparables,
+  })
+  return c.json(result)
+})
+
+// ─── Day 10B Building scorecard + search ─────────────────────────────────────
+// `/buildings` is registered before `/buildings/:slug`. They differ in path depth
+// so they cannot collide, but the search route is the literal one and keeping it
+// first means a future `/buildings/:slug`-style addition cannot shadow it.
+app.get('/sqftlab/buildings', async (c) => {
+  const q = (c.req.query('q') ?? '').trim()
+  if (q.length < 2) return c.json({ buildings: [], query: q })
+
+  const buildings = await searchBuildings(q)
+  await trackEvent(c, 'building_search', { q, results: buildings.length })
+  return c.json({ buildings, query: q })
+})
+
+app.get('/sqftlab/buildings/:slug', async (c) => {
+  const slug = c.req.param('slug')
+  const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
+  // Floor-range PSF is the Enterprise line item; the rest of the scorecard is the
+  // free tier. Computed from TIER_RANK rather than the brief's literal
+  // `tier === 'enterprise' || tier === 'institutional'`, so a tier added later
+  // inherits the access its rank implies instead of silently losing it.
+  const includeFloorBreakdown = (TIER_RANK[tier] ?? 0) >= (TIER_RANK.enterprise ?? 99)
+
+  // Tier is part of the key: without it an Enterprise payload would be served to
+  // a Free caller from cache, which is exactly the field being gated.
+  const cacheKey = `sqftlab:building:${slug}:${tier}`
+  const cached = readFlowCache<BuildingScorecard>(cacheKey)
+  if (cached) return c.json({ ...cached, cached: true })
+
+  const result = await getBuildingScorecard(slug, { includeFloorBreakdown })
+
+  // 30 minutes, as the brief specifies. An empty result is not cached: it is the
+  // state before the DLD ingest and would keep the page dark for the full TTL.
+  if (!result.insufficientData) writeFlowCache(cacheKey, result, 30 * 60 * 1000)
+
+  await trackEvent(c, 'building_view', { slug, matched: result.matched })
+  return c.json({ ...result, cached: false })
 })
 
 // ─── 6.3 District Yield Curve ───────────────────────────────────────────────

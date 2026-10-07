@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Runs every verify-* suite. Suites that WRITE rows run against a throwaway copy of
+# the project database; the rest run against the project database via _env-guard.
+# Written as a file because the agent shell is dash, which mangles inline loops.
+set -u
+cd "$(dirname "$0")/.."
+
+pass=0; fail=0; failed_names=""
+
+for f in scripts/verify-*.ts; do
+  n=$(basename "$f" .ts)
+  url=""
+  case "$n" in
+    verify-day9)  cp prisma/dev.db /tmp/day9-e2e.db;  url="file:/tmp/day9-e2e.db" ;;
+    verify-day10) cp prisma/dev.db /tmp/day10-e2e.db; url="file:/tmp/day10-e2e.db" ;;
+    # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
+    verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
+    verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
+  esac
+
+  if [ -n "$url" ]; then
+    out=$(DATABASE_URL="$url" bun run "$f" 2>&1)
+  else
+    out=$(bun run "$f" 2>&1)
+  fi
+  code=$?
+
+  # Each suite prints "<n> passed, <n> failed" or "<n>/<n>" style lines; take the
+  # passed/failed pair when present, otherwise fall back to the exit code.
+  line=$(printf '%s\n' "$out" | grep -oE '[0-9]+ passed, [0-9]+ failed' | tail -1)
+  checks=$(printf '%s\n' "$out" | grep -cE '^  (✓|✗)')
+
+  if [ "$code" -eq 0 ]; then
+    pass=$((pass+1))
+    printf "  PASS  %-26s %s\n" "$n" "${line:-exit 0}"
+  else
+    fail=$((fail+1))
+    failed_names="$failed_names $n"
+    printf "  FAIL  %-26s exit=%s  %s\n" "$n" "$code" "${line:-}"
+    printf '%s\n' "$out" | grep -E '^  ✗' | head -6 | sed 's/^/          /'
+  fi
+  printf "        (%s individual checks)\n" "$checks"
+done
+
+echo
+echo "  suites passed: $pass   failed: $fail"
+[ -n "$failed_names" ] && echo "  failing:$failed_names"
+exit $fail

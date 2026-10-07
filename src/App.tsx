@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -12,6 +12,9 @@ import { ForecastChart } from '@/components/ForecastChart'
 import { Glossary } from '@/components/Glossary'
 import PricingPage from '@/components/PricingPage'
 import CmaPage from '@/components/CmaPage'
+import CapitalFlowPage from '@/components/CapitalFlowPage'
+import BuildingSearchPage from '@/components/BuildingSearchPage'
+import BuildingPage from '@/components/BuildingPage'
 import PortfolioPage from '@/components/PortfolioPage'
 import SignInPage from '@/components/SignInPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
@@ -289,7 +292,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -298,7 +301,15 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   pricing: '/pricing',
   cma: '/cma',
   portfolio: '/portfolio',
+  'capital-flow': '/capital-flow',
+  buildings: '/buildings',
 }
+
+// Day 10: `/buildings/<slug>` is the first route in this app that carries a
+// parameter. It is matched separately from PAGE_PATHS rather than faking a page id
+// per building — the slug lives in `selectedBuilding`, and both the initial path
+// parse and popstate resolve it through this one pattern.
+const BUILDING_PATH = /^\/buildings\/([^/]+)$/
 
 const NAV = [
   { id: 'dashboard' as Page, label: 'Heatmap', icon: MapPin },
@@ -312,6 +323,8 @@ const NAV = [
   { id: 'alerts' as Page, label: 'Alerts', icon: Bell },
   { id: 'yield' as Page, label: 'Yield Calc', icon: Calculator },
   { id: 'cma' as Page, label: 'CMA', icon: Scale },
+  { id: 'buildings' as Page, label: 'Buildings', icon: Building2 },
+  { id: 'capital-flow' as Page, label: 'Capital Flow', icon: Globe },
 ]
 
 function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
@@ -3130,6 +3143,7 @@ function AppInner() {
   const [page, setPage] = useState<Page>('landing')
   const [selectedCommunity, setSelectedCommunity] = useState('dubai-marina')
   const [selectedListing, setSelectedListing] = useState('')
+  const [selectedBuilding, setSelectedBuilding] = useState<string | null>(null)
 
   // Spec Part 16 — one SSE connection for the whole app.
   const live = useLiveMarket()
@@ -3155,6 +3169,15 @@ function AppInner() {
     if (path === '/cma') setPage('cma')
     // Day 8: a shared /portfolio link opens the dashboard rather than the landing page.
     if (path === '/portfolio') setPage('portfolio')
+    // Day 9/10: two tools published after the nav was built, plus the first
+    // parameterised route in the app.
+    if (path === '/capital-flow') setPage('capital-flow')
+    if (path === '/buildings') setPage('buildings')
+    const bm = BUILDING_PATH.exec(path)
+    if (bm) {
+      setSelectedBuilding(decodeURIComponent(bm[1]))
+      setPage('building')
+    }
     if (new URLSearchParams(window.location.search).get('signed_in') === '1') setPage('signin')
     onHash()
     window.addEventListener('hashchange', onHash)
@@ -3174,6 +3197,19 @@ function AppInner() {
     }
   }, [])
 
+  // Day 10: opening a building sets the in-app state and a shareable
+  // `/buildings/<slug>` URL, the same contract `navigate` gives a static page. The
+  // slug rides in the history state so back/forward restores the right building
+  // rather than the last one viewed.
+  const navigateBuilding = useCallback((slug: string) => {
+    setSelectedBuilding(slug)
+    setPage('building')
+    const path = `/buildings/${slug}`
+    if (window.location.pathname !== path) {
+      window.history.pushState({ page: 'building', slug }, '', path)
+    }
+  }, [])
+
   // Back/forward should move between pages, not out of the app.
   //
   // An entry created before our first pushState — the initial page load — carries
@@ -3182,12 +3218,20 @@ function AppInner() {
   // pathname for those entries, and to the landing page for a path we do not own.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
-      const fromState = (e.state as { page?: Page } | null)?.page
+      const state = e.state as { page?: Page; slug?: string } | null
+      const fromState = state?.page
       if (fromState) {
+        if (state?.slug) setSelectedBuilding(state.slug)
         setPage(fromState)
         return
       }
       const path = window.location.pathname.replace(/\/+$/, '')
+      const bm = BUILDING_PATH.exec(path)
+      if (bm) {
+        setSelectedBuilding(decodeURIComponent(bm[1]))
+        setPage('building')
+        return
+      }
       const fromPath = (Object.keys(PAGE_PATHS) as Page[]).find((k) => PAGE_PATHS[k] === path)
       setPage(fromPath ?? 'landing')
     }
@@ -3222,6 +3266,11 @@ function AppInner() {
       {page === 'yield' && <YieldCalculator />}
       {page === 'mortgage' && <MortgageSimulator />}
       {page === 'cma' && <CmaPage onNavigate={navigate} />}
+      {page === 'capital-flow' && <CapitalFlowPage onNavigate={navigate} />}
+      {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
+      {page === 'building' && (
+        <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
+      )}
       {page === 'about' && <AboutPage />}
       {page === 'analytics' && <MarketAnalytics setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'predictions' && <PricePredictions setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}

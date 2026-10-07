@@ -88,7 +88,9 @@ app.use('*', async (c, next) => {
 })
 // SHOGO:CUSTOM-END
 
-// Serve static files in production
+// Serve static files in production.
+// These MUST remain below the CUSTOM block above: Hono dispatches in registration
+// order, so the SPA catch-all here would otherwise shadow that block entirely.
 app.use('/*', serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 

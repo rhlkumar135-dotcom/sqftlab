@@ -106,12 +106,13 @@ model Community {
   scoreWorship        Int      @default(0) @map("score_worship")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  transactions Transaction[]
-  listings     Listing[]
-  portfolios   Portfolio[]
-  watchlists   Watchlist[]
-  alerts       Alert[]
-  scores       InvestmentScore[]
+  transactions   Transaction[]
+  listings       Listing[]
+  portfolios     Portfolio[]
+  watchlists     Watchlist[]
+  alerts         Alert[]
+  scores         InvestmentScore[]
+  ejariContracts EjariContract[]
 
   @@map("communities")
 }
@@ -761,4 +762,42 @@ model InvestmentScore {
 
   @@index([communityId, calculatedAt])
   @@map("investment_scores")
+}
+
+/// Ejari is Dubai's official tenancy registration system: every residential lease
+/// in the emirate is registered, so a rent here is a *contracted* rent. That is a
+/// different kind of number from `Listing.purpose = 'rent'`, which is a portal
+/// asking price — and before this table existed the platform had only the latter,
+/// which is why `computeYieldCurve()` states outright that no contracted rent is
+/// ingested. Day 9 adds the register so a yield can eventually be computed from
+/// what tenants actually signed rather than what landlords hoped for.
+///
+/// Deliberately separate from `Transaction` rather than merged into it: DLD sales
+/// and Ejari tenancies are distinct registers with their own identifiers and their
+/// own lifecycle, and a single table would make it impossible to tell a contracted
+/// rent from an asking rent when reading a yield back. `source` records which
+/// upstream filled the row, the same way `Community.psfSource` and
+/// `Portfolio.valuationSource` already do.
+model EjariContract {
+  id            String    @id @default(cuid())
+  /// District name exactly as the register reports it. Kept alongside the FK
+  /// because a contract's area string does not always resolve to a community.
+  area          String
+  communityId   String?   @map("community_id")
+  buildingName  String?   @map("building_name")
+  bedrooms      Int?
+  sizeSqft      Float?    @map("size_sqft")
+  annualRentAed Float     @map("annual_rent_aed")
+  contractStart DateTime  @map("contract_start")
+  contractEnd   DateTime? @map("contract_end")
+  registeredAt  DateTime? @map("registered_at")
+  source        String    @default("ejari")
+  importedAt    DateTime  @default(now()) @map("imported_at")
+
+  community Community? @relation(fields: [communityId], references: [id])
+
+  @@index([area, contractStart])
+  @@index([communityId, contractStart])
+  @@index([buildingName, contractStart])
+  @@map("ejari_contracts")
 }
