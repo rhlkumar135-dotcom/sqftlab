@@ -1,7 +1,7 @@
 From 618cbdba52404f7b4107a510377da7f689e32513 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:07:58 +0000
-Subject: [PATCH 01/12] fix(static publish): emirate filter, district detail,
+Subject: [PATCH 01/13] fix(static publish): emirate filter, district detail,
  honest predictions
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -256,7 +256,7 @@ index afc62a4..c7b3870 100644
 From 646b12888d2c18938f3a7a2551cff1c93efb9626 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 06:42:42 +0000
-Subject: [PATCH 02/12] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
+Subject: [PATCH 02/13] Day 3: DLD-sourced PSF, N+1 and scraper fixes,
  Investment Score engine
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -1383,7 +1383,7 @@ index 0000000..ec37030
 From 59bf076bb75e6f867b203a55b3e3ed6e7d3ea4d5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:03:18 +0000
-Subject: [PATCH 03/12] Day 4: tier middleware, requireTier, payment kill
+Subject: [PATCH 03/13] Day 4: tier middleware, requireTier, payment kill
  switch, per-tier rate limiter
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2162,7 +2162,7 @@ index 0000000..fd0bf24
 From 3f879cf5a9777ee8e4ed0f827f45c787f45b6070 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 07:55:21 +0000
-Subject: [PATCH 04/12] fix(scraper): the listing crawl persisted nothing, and
+Subject: [PATCH 04/13] fix(scraper): the listing crawl persisted nothing, and
  reported success
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2453,7 +2453,7 @@ index 0000000..2930c2e
 From 56e70bbe1d89887ea58e3dd39011f91a49f420cd Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 08:12:23 +0000
-Subject: [PATCH 05/12] fix(ui,api): a denial is not data, and a missing
+Subject: [PATCH 05/13] fix(ui,api): a denial is not data, and a missing
  measurement is not a zero
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3345,7 +3345,7 @@ index c7b3870..f4ee5b8 100644
 From d40a40006748e449907196f59a680b947fe1fdb2 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:01:03 +0000
-Subject: [PATCH 06/12] fix(api): the calculators answered 200 with a payload
+Subject: [PATCH 06/13] fix(api): the calculators answered 200 with a payload
  of nulls
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -3661,7 +3661,7 @@ index b413ade..a07ce9f 100644
 From e316223d53fe7faf245b6c7bff3a3750b688f385 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:20:16 +0000
-Subject: [PATCH 07/12] Day 5: Stripe wired end to end, pricing page, checkout
+Subject: [PATCH 07/13] Day 5: Stripe wired end to end, pricing page, checkout
  + webhook handlers
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -5082,7 +5082,7 @@ index 0000000..90fe75f
 From 0649ef69b6955262c2b6c800677da3cae7e763a5 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 09:41:53 +0000
-Subject: [PATCH 08/12] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
+Subject: [PATCH 08/13] =?UTF-8?q?Day=206:=20CMA=20tool=20=E2=80=94=20backe?=
  =?UTF-8?q?nd=20PSF=20analysis=20+=20frontend=20results=20page?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -7078,7 +7078,7 @@ index 0000000..c3cf8a1
 From 61e4473b221447bad1aca344a88141dc0fdd6012 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:10:39 +0000
-Subject: [PATCH 09/12] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
+Subject: [PATCH 09/13] =?UTF-8?q?Day=207:=20White-label=20PDF=20report=20g?=
  =?UTF-8?q?enerator=20=E2=80=94=20Puppeteer=20HTML=E2=86=92PDF=20with=20CM?=
  =?UTF-8?q?A=20data?=
 MIME-Version: 1.0
@@ -8557,7 +8557,7 @@ index 0000000..5bccad0
 From 744c4a485abd29b2c36431a36d28242c9d7c5245 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 10:43:38 +0000
-Subject: [PATCH 10/12] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
+Subject: [PATCH 10/13] =?UTF-8?q?Day=208:=20Portfolio=20dashboard=20?=
  =?UTF-8?q?=E2=80=94=20holdings=20valued=20from=20real=20comparables,=20no?=
  =?UTF-8?q?=20invented=20figures?=
 MIME-Version: 1.0
@@ -10975,7 +10975,7 @@ index 5fe7be6..ba24d02 100644
 From 09e776f79a4dc40204d9224bfee975fee814ee08 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 11:48:33 +0000
-Subject: [PATCH 11/12] Day 9+10: capital flow by nationality, Ejari rental
+Subject: [PATCH 11/13] Day 9+10: capital flow by nationality, Ejari rental
  yield, developer positioning, building scorecards
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -14247,7 +14247,7 @@ index 0000000..8382d17
 From 716e97622c5461ee0dfc986e3e648d0216ad6b37 Mon Sep 17 00:00:00 2001
 From: Shogo Agent <agent@shogo.ai>
 Date: Wed, 7 Oct 2026 12:08:14 +0000
-Subject: [PATCH 12/12] Day 1 (Task F): prove the deal engine's positive path
+Subject: [PATCH 12/13] Day 1 (Task F): prove the deal engine's positive path
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -14581,6 +14581,1931 @@ index 0000000..d487f0f
 +  console.log(`\n  ${passed} passed, ${failed} failed`)
 +  if (failed > 0) console.log(`  failing: ${failures.join(' | ')}`)
 +  process.exit(failed > 0 ? 1 : 0)
++}
+-- 
+2.47.3
+
+
+From faea407277b4f54b59d44aab458dd38c4e016a55 Mon Sep 17 00:00:00 2001
+From: Shogo Agent <agent@shogo.ai>
+Date: Wed, 7 Oct 2026 12:17:52 +0000
+Subject: [PATCH 13/13] Day 11: Public Data API v1 + Export Centre (CSV/Excel)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Tasks A-D. The spec's code does not run against this codebase, so each part is
+implemented against the real schema; the deviations are load-bearing.
+
+PATH: server.tsx mounts this app with app.route('/api', customRoutes), so routes
+are declared '/v1/...' and served at /api/v1/... . The spec's '/api/v1/...' would
+have served /api/api/v1/... — every URL in its own docs 404s. Confirmed both ways
+against the live server.
+
+Task A — API keys
+  · route already existed; added the per-tier cap (3/5/10/20) and 201 + the
+    save-once warning.
+  · FIX: keys were created with a hardcoded tier 'pro', so an institutional
+    customer's allowance was enforced at 500/day instead of 100,000.
+  · FIX: callsToday was only ever incremented and never reset, so a key that
+    reached its limit once was permanently dead. Added calls_reset_at /
+    month_reset_at and reset lazily on first use after the boundary, which also
+    survives a scheduler outage or a mid-window restart.
+  · FIX: the spec reads the owner's subscriptionStatus and never acts on it, so a
+    cancelled customer's keys kept working. Now enforced.
+  · API keys are read from the Authorization header only — a ?api_key= fallback
+    writes live secrets into access logs.
+
+Task B — /v1 endpoints
+  · FIX: 'Sales' matches nothing (stored values are sale/off_plan_sale).
+  · FIX: no area/bedrooms/size/pricePsf/amount column exists; the spec's filters
+    and groupBy would not compile. Real columns are communityId/beds/areaSqft/
+    pricePerSqft/priceAed.
+  · FIX: mode:'insensitive' throws on SQLite — area text resolves via
+    findCommunityByName instead.
+  · an unmatched area returns 404 rather than silently exporting the whole table.
+
+Task C — Export Centre
+  · FIX: CSV had no escaping, so a community name containing a comma corrupted
+    every subsequent column; embedded quotes were not doubled.
+  · FIX: formula injection — scraping-supplied names beginning = + - @ executed
+    in the buyer's spreadsheet. Guarded, with a numeric exemption so real
+    negative values stay numeric.
+  · FIX: 'unlimited' was implemented as take: 999999; rowLimitFor() now returns a
+    documented ceiling and the response reports truncation honestly.
+  · UTF-8 BOM so Excel reads Arabic names correctly; CRLF per RFC 4180.
+  · xlsx installed from the SheetJS CDN: the npm line is frozen at 0.18.5 (2022)
+    with two unpatched advisories, and the fixes were never published to npm.
+
+Task D — Export Centre page
+  · FIX: the spec polls /api/v1/transactions for the row count, but that endpoint
+    is API-key authenticated and this page holds a session, so it would 401 for
+    everyone. Counts come from a session-authed preview route.
+  · Excel entitlement is answered by the server, not guessed client-side.
+
+Also: scripts/fix-server-order.ts — the schema edit relocated the SHOGO:CUSTOM
+block below the SPA catch-all again (routing 8/8 -> 1/8). A postgenerate hook was
+tried and measured: it does NOT fire, because the in-editor regeneration calls the
+SDK CLI directly. Repair is now one idempotent command.
+
+Verified: 21 suites / 676 checks green, scripts/verify-day11.ts 76 checks,
+0 hand-written TS errors, build clean, plus a live end-to-end pass against the
+running server (key create -> v1 read -> export -> revoke).
+---
+ bun.lock                      |   3 +
+ custom-routes.ts              | 379 ++++++++++++++++++++++++++-
+ package.json                  |   5 +-
+ prisma/schema.prisma          |  16 +-
+ scripts/_runall.sh            |   1 +
+ scripts/fix-server-order.ts   | 148 +++++------
+ scripts/verify-day11.ts       | 376 +++++++++++++++++++++++++++
+ server.tsx                    |   5 +-
+ src/App.tsx                   |   6 +-
+ src/components/ExportPage.tsx | 469 ++++++++++++++++++++++++++++++++++
+ src/lib/export-data.ts        | 245 ++++++++++++++++++
+ 11 files changed, 1555 insertions(+), 98 deletions(-)
+ create mode 100644 scripts/verify-day11.ts
+ create mode 100644 src/components/ExportPage.tsx
+ create mode 100644 src/lib/export-data.ts
+
+diff --git a/bun.lock b/bun.lock
+index 9335365..dc9591f 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -30,6 +30,7 @@
+         "stripe": "^23.0.0",
+         "tailwind-merge": "^3.4.0",
+         "tailwindcss-animate": "^1.0.7",
++        "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+       },
+       "devDependencies": {
+         "@prisma/internals": "^7.3.0",
+@@ -1389,6 +1390,8 @@
+ 
+     "wsl-utils": ["wsl-utils@0.3.1", "", { "dependencies": { "is-wsl": "^3.1.0", "powershell-utils": "^0.1.0" } }, "sha512-g/eziiSUNBSsdDJtCLB8bdYEUMj4jR7AGeUo96p/3dTafgjHhpF4RiCFPiRILwjQoDXx5MqkBr4fwWtR3Ky4Wg=="],
+ 
++    "xlsx": ["xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz", { "bin": { "xlsx": "./bin/xlsx.njs" } }, "sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA=="],
++
+     "xtend": ["xtend@4.0.2", "", {}, "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="],
+ 
+     "y18n": ["y18n@5.0.8", "", {}, "sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA=="],
+diff --git a/custom-routes.ts b/custom-routes.ts
+index 913ae83..682541b 100644
+--- a/custom-routes.ts
++++ b/custom-routes.ts
+@@ -33,11 +33,18 @@ import { computeRentalYield, type RentalYieldResult } from './src/lib/rental-yie
+ import { computeDeveloperPositioning, getBuildingScorecard, searchBuildings, type BuildingScorecard } from './src/lib/buildings'
+ import { propertyLimitFor, deriveHolding, summariseHoldings, valuateHolding } from './src/lib/portfolio'
+ import { fetchHoldingsComparables } from './src/lib/portfolio-jobs'
++import {
++  buildTransactionWhere, fetchExportRows, toCsv, toExcelBuffer,
++  rowLimitFor, EXCEL_MIN_RANK, SAFETY_CEILING,
++  type ExportFilters, type ExportFormat,
++} from './src/lib/export-data'
+ 
+ // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
+ // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
+-// request by the tier middleware (Day 4 Task A).
+-type AppVariables = { guestId: string; tier: CallerTier }
++// request by the tier middleware (Day 4 Task A). `apiKeyUserId`/`apiKeyTier` are
++// set by the /v1 API-key middleware (Day 11 Task A) and identify a caller that
++// authenticated with a key instead of a session.
++type AppVariables = { guestId: string; tier: CallerTier; apiKeyUserId?: string; apiKeyTier?: string }
+ 
+ const app = new Hono<{ Variables: AppVariables }>()
+ 
+@@ -4886,17 +4893,45 @@ app.post('/sqftlab/api-keys', async (c) => {
+   }
+   const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled key'
+ 
++  // The key inherits the CALLER's tier. The spec hardcoded 'pro' here, which
++  // meant an institutional customer's key carried a pro tier and their allowance
++  // was enforced at 500/day instead of 100,000 — paying for 200x and receiving 1x.
++  const tier = (c.get('tier') as CallerTier | undefined) ?? 'pro'
++  const maxKeys = tier === 'institutional' ? 20 : tier === 'enterprise' ? 10 : tier === 'elite' ? 5 : 3
++  const existingCount = await prisma.apiKey.count({ where: { userId, revokedAt: null } })
++  if (existingCount >= maxKeys) {
++    return c.json(
++      {
++        error: `Maximum ${maxKeys} active API keys on your plan`,
++        maxKeys,
++        current: existingCount,
++        upgradeUrl: '/pricing',
++      },
++      403,
++    )
++  }
++
+   const raw = `sqft_${randomBytes(24).toString('hex')}`
+   const keyHash = createHash('sha256').update(raw).digest('hex')
+ 
+   const created = await prisma.apiKey.create({
+-    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier: 'pro' },
++    data: { userId, keyHash, prefix: raw.slice(0, 12), name, tier },
+     select: { id: true, prefix: true, name: true, tier: true, createdAt: true },
+   })
+   await trackEvent(c, 'api_call', { action: 'create_key' })
+ 
+   // The only time the plaintext key exists outside the caller's own storage.
+-  return c.json({ ok: true, key: raw, meta: created })
++  return c.json(
++    {
++      ok: true,
++      key: raw,
++      prefix: created.prefix,
++      name: created.name,
++      warning: 'Save this key — it will not be shown again.',
++      meta: created,
++    },
++    201,
++  )
+ })
+ 
+ app.delete('/sqftlab/api-keys/:id', async (c) => {
+@@ -4911,6 +4946,342 @@ app.delete('/sqftlab/api-keys/:id', async (c) => {
+   return c.json({ ok: true, revoked: id })
+ })
+ 
++// ─── Public Data API v1 (Day 11 Tasks A + B) ─────────────────────────────────
++//
++// PATH: server.tsx mounts this app with `app.route('/api', customRoutes)`, so
++// routes declared here are relative to that mount point. Declaring '/v1/...'
++// serves /api/v1/... . The spec declares '/api/v1/...', which would have served
++// /api/api/v1/... and 404'd every URL in its own documentation — the same
++// mount-point trap the catch-all at the bottom of this file documents.
++
++const API_DAILY_LIMITS: Record<string, number> = {
++  pro: 500,
++  elite: 2_000,
++  enterprise: 10_000,
++  institutional: 100_000,
++}
++
++app.use('/v1/*', async (c, next) => {
++  const authHeader = c.req.header('Authorization')
++  const rawKey = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null
++
++  // Header only. A `?api_key=` fallback is convenient but writes a live secret
++  // into every access log and Referer header it passes through.
++  if (!rawKey) {
++    c.header('WWW-Authenticate', 'Bearer realm="sqftLab API"')
++    return c.json({ error: 'API key required. Include: Authorization: Bearer sqft_...' }, 401)
++  }
++
++  const keyHash = createHash('sha256').update(rawKey).digest('hex')
++  const key = await prisma.apiKey.findUnique({
++    where: { keyHash },
++    select: {
++      id: true, userId: true, tier: true, name: true,
++      revokedAt: true, callsToday: true, callsResetAt: true, monthResetAt: true,
++      user: { select: { subscriptionStatus: true } },
++    },
++  })
++
++  if (!key || key.revokedAt) return c.json({ error: 'Invalid or revoked API key' }, 401)
++
++  // The spec reads the owner's subscription status and then never uses it, so a
++  // cancelled customer's keys kept working forever. The key's TIER sets the
++  // allowance; the owner's STATUS decides whether that tier is still paid for.
++  const status = key.user?.subscriptionStatus
++  if (status !== 'active' && status !== 'trialing') {
++    return c.json(
++      { error: 'Subscription inactive for this API key', status: status ?? 'inactive', upgradeUrl: '/pricing' },
++      403,
++    )
++  }
++
++  // Lazy day/month rollover — see the callsResetAt note in schema.prisma.
++  const now = new Date()
++  const day = now.toISOString().slice(0, 10)
++  const month = day.slice(0, 7)
++  const rollDay = !key.callsResetAt || key.callsResetAt.toISOString().slice(0, 10) !== day
++  const rollMonth = !key.monthResetAt || key.monthResetAt.toISOString().slice(0, 7) !== month
++  const usedToday = rollDay ? 0 : key.callsToday
++
++  const limit = API_DAILY_LIMITS[key.tier] ?? API_DAILY_LIMITS.pro
++  c.header('X-API-Limit', String(limit))
++  c.header('X-API-Remaining', String(Math.max(0, limit - usedToday - 1)))
++
++  if (usedToday >= limit) {
++    return c.json(
++      { error: 'Daily API limit exceeded', limit, used: usedToday, retryAfterHours: 24, upgradeUrl: '/pricing' },
++      429,
++    )
++  }
++
++  prisma.apiKey
++    .update({
++      where: { id: key.id },
++      data: {
++        callsToday: rollDay ? 1 : { increment: 1 },
++        callsMonth: rollMonth ? 1 : { increment: 1 },
++        ...(rollDay ? { callsResetAt: now } : {}),
++        ...(rollMonth ? { monthResetAt: now } : {}),
++        lastUsedAt: now,
++      },
++    })
++    .catch(() => {})
++
++  c.set('apiKeyUserId', key.userId)
++  c.set('apiKeyTier', key.tier)
++  await next()
++})
++
++/**
++ * GET /api/v1/transactions
++ *
++ * Field names differ from the spec throughout: this schema stores
++ * communityId / beds / areaSqft / pricePerSqft / priceAed, and has no `area`,
++ * `bedrooms`, `size`, `pricePsf` or `amount` column at all.
++ */
++app.get('/v1/transactions', async (c) => {
++  const q = c.req.query()
++  const limit = Math.min(Math.max(parseInt(q.limit ?? '100') || 100, 1), 1000)
++  const offset = Math.max(parseInt(q.offset ?? '0') || 0, 0)
++  const beds = q.bedrooms ? parseInt(q.bedrooms) : undefined
++
++  for (const k of ['date_from', 'date_to'] as const) {
++    const v = q[k]
++    if (v && Number.isNaN(new Date(v).getTime())) {
++      return badInput(c, [k], { [k]: 'ISO date, e.g. 2026-01-31' })
++    }
++  }
++
++  const built = await buildTransactionWhere({
++    area: q.area ?? q.community,
++    beds: beds !== undefined && Number.isFinite(beds) && beds > 0 ? beds : undefined,
++    dateFrom: q.date_from,
++    dateTo: q.date_to,
++    psfMin: q.psf_min ? parseInt(q.psf_min) : undefined,
++    psfMax: q.psf_max ? parseInt(q.psf_max) : undefined,
++  })
++
++  if (!built.ok) {
++    return c.json(
++      {
++        error: `No community matches "${built.area}"`,
++        code: 'area_not_found',
++        hint: 'GET /api/v1/communities to list valid names',
++        data: [],
++        meta: { total: 0, limit, offset, returned: 0, source: 'DLD official records' },
++      },
++      404,
++    )
++  }
++
++  const [rows, total] = await Promise.all([
++    prisma.transaction.findMany({
++      where: built.where,
++      select: {
++        transactionDate: true, buildingName: true, beds: true, areaSqft: true,
++        pricePerSqft: true, priceAed: true, propertyType: true, transactionType: true,
++        community: { select: { nameEn: true, slug: true, emirate: true } },
++      },
++      orderBy: { transactionDate: 'desc' },
++      take: limit,
++      skip: offset,
++    }),
++    prisma.transaction.count({ where: built.where }),
++  ])
++
++  return c.json({
++    data: rows.map((r) => ({
++      date: r.transactionDate.toISOString().slice(0, 10),
++      community: r.community?.nameEn ?? null,
++      communitySlug: r.community?.slug ?? null,
++      emirate: r.community?.emirate ?? null,
++      building: r.buildingName,
++      bedrooms: r.beds,
++      sizeSqft: Number(r.areaSqft.toFixed(0)),
++      psfAed: Number(r.pricePerSqft.toFixed(0)),
++      priceAed: Number(r.priceAed.toFixed(0)),
++      propertyType: r.propertyType,
++      transactionType: r.transactionType,
++    })),
++    meta: {
++      total, limit, offset, returned: rows.length,
++      source: 'DLD official records',
++      // With no registry source connected this is the honest shape of the
++      // answer, not an error: the query is valid, the dataset is empty.
++      empty: total === 0,
++    },
++  })
++})
++
++app.get('/v1/communities', async (c) => {
++  const communities = await prisma.community.findMany({
++    select: { slug: true, nameEn: true, emirate: true, medianAedSqft: true },
++    orderBy: { nameEn: 'asc' },
++    take: 200,
++  })
++  return c.json({ data: communities, meta: { total: communities.length, source: 'sqftLab community registry' } })
++})
++
++app.get('/v1/communities/:slug/stats', async (c) => {
++  const community = await prisma.community.findUnique({
++    where: { slug: c.req.param('slug') },
++    select: { id: true, nameEn: true, slug: true, emirate: true, medianAedSqft: true, psfSource: true },
++  })
++  if (!community) return c.json({ error: 'Community not found' }, 404)
++
++  const since90 = new Date()
++  since90.setDate(since90.getDate() - 90)
++  const stats = await prisma.transaction.aggregate({
++    where: {
++      communityId: community.id,
++      transactionType: { in: [...SALE_TXN_TYPES] },
++      pricePerSqft: { gt: 100 },
++      transactionDate: { gte: since90 },
++    },
++    _avg: { pricePerSqft: true },
++    _min: { pricePerSqft: true },
++    _max: { pricePerSqft: true },
++    _count: { _all: true },
++  })
++
++  const n = stats._count._all
++  return c.json({
++    community: community.nameEn,
++    slug: community.slug,
++    emirate: community.emirate,
++    period: '90 days',
++    transactions: n,
++    avgPsfAed: n ? Number((stats._avg.pricePerSqft ?? 0).toFixed(0)) : null,
++    minPsfAed: n ? Number((stats._min.pricePerSqft ?? 0).toFixed(0)) : null,
++    maxPsfAed: n ? Number((stats._max.pricePerSqft ?? 0).toFixed(0)) : null,
++    // The registry median is a separate figure with its own provenance; it is
++    // reported alongside rather than substituted when the 90-day window is empty.
++    registryMedianPsfAed: community.medianAedSqft,
++    registryMedianSource: community.psfSource,
++    source: 'DLD official records',
++    empty: n === 0,
++  })
++})
++
++// ─── Export Centre (Day 11 Task C) ───────────────────────────────────────────
++
++function exportFiltersFrom(body: Record<string, unknown>): ExportFilters {
++  const areaRaw = typeof body.area === 'string' ? body.area : typeof body.community === 'string' ? body.community : ''
++  const beds = numField(body, 'bedrooms') ?? numField(body, 'beds')
++  return {
++    area: areaRaw.trim() || undefined,
++    beds: beds !== null && beds > 0 ? Math.floor(beds) : undefined,
++    dateFrom: typeof body.dateFrom === 'string' ? body.dateFrom : undefined,
++    dateTo: typeof body.dateTo === 'string' ? body.dateTo : undefined,
++    psfMin: numField(body, 'psfMin') ?? undefined,
++    psfMax: numField(body, 'psfMax') ?? undefined,
++  }
++}
++
++async function handleExport(c: Context, mode: 'preview' | 'download') {
++  const blocked = requireTier(c, 'pro', 'Data export')
++  if (blocked) return blocked
++  const userId = getUserId(c)
++  if (!userId) return upgradeRequired(c)
++
++  const body = await readJsonBody(c)
++  const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
++  const format: ExportFormat = body.format === 'excel' ? 'excel' : 'csv'
++
++  for (const k of ['dateFrom', 'dateTo'] as const) {
++    const v = body[k]
++    if (typeof v === 'string' && v.trim() && Number.isNaN(new Date(v).getTime())) {
++      return badInput(c, [k], { [k]: 'ISO date, e.g. 2026-01-31' })
++    }
++  }
++
++  const rank = TIER_RANK[tier] ?? 0
++  if (format === 'excel' && rank < EXCEL_MIN_RANK) {
++    return c.json(
++      { error: 'Excel export requires the Enterprise plan', format, requiredTier: 'enterprise', upgradeUrl: '/pricing' },
++      403,
++    )
++  }
++
++  const filters = exportFiltersFrom(body)
++  const built = await buildTransactionWhere(filters)
++  if (!built.ok) {
++    return c.json(
++      {
++        error: `No community matches "${built.area}"`,
++        code: 'area_not_found',
++        hint: 'Check the spelling, or use /sqftlab/communities for the list.',
++      },
++      404,
++    )
++  }
++
++  const rowLimit = rowLimitFor(tier)
++  const { rows, total } = await fetchExportRows(built.where, rowLimit)
++  const truncated = total > rows.length
++
++  if (mode === 'preview') {
++    return c.json({
++      total,
++      willExport: rows.length,
++      rowLimit,
++      unlimited: rowLimit >= SAFETY_CEILING,
++      truncated,
++      excelAllowed: rank >= EXCEL_MIN_RANK,
++      tier,
++      format,
++      empty: total === 0,
++      ...(truncated
++        ? {
++            message: `Your plan exports the ${rowLimit.toLocaleString()} most recent matches; ${(
++              total - rows.length
++            ).toLocaleString()} older rows are not included.`,
++          }
++        : {}),
++    })
++  }
++
++  const stamp = new Date().toISOString().slice(0, 10)
++  await trackEvent(c, 'export', {
++    format, rows: rows.length, total, truncated, area: filters.area ?? null, tier,
++  })
++
++  c.header('X-Export-Rows', String(rows.length))
++  c.header('X-Export-Total', String(total))
++  c.header('X-Export-Truncated', String(truncated))
++
++  if (format === 'csv') {
++    // The BOM is what makes Excel read the file as UTF-8; without it any Arabic
++    // community name in the data arrives as mojibake.
++    c.header('Content-Type', 'text/csv; charset=utf-8')
++    c.header('Content-Disposition', `attachment; filename="sqftlab-transactions-${stamp}.csv"`)
++    return c.body(`\uFEFF${toCsv(rows)}`)
++  }
++
++  const bytes = await toExcelBuffer(rows)
++  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
++  c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
++  c.header('Content-Disposition', `attachment; filename="sqftlab-transactions-${stamp}.xlsx"`)
++  return c.body(buffer)
++}
++
++app.post('/sqftlab/export', (c) => handleExport(c, 'download'))
++app.post('/sqftlab/export/preview', (c) => handleExport(c, 'preview'))
++
++app.get('/sqftlab/export/history', async (c) => {
++  const blocked = requireTier(c, 'pro', 'Data export')
++  if (blocked) return blocked
++  const userId = getUserId(c)
++  if (!userId) return upgradeRequired(c)
++  const events = await prisma.userEvent.findMany({
++    where: { userId, eventType: 'export' },
++    orderBy: { createdAt: 'desc' },
++    take: 3,
++    select: { id: true, eventData: true, createdAt: true },
++  })
++  return c.json({ exports: events })
++})
++
+ // Catch-all — must be registered LAST so every real route wins.
+ //
+ // The pattern is '*' and not '/api/*': server.tsx mounts this app with
+diff --git a/package.json b/package.json
+index 8e482f2..6647125 100644
+--- a/package.json
++++ b/package.json
+@@ -13,6 +13,8 @@
+     "build": "vite build",
+     "start": "bash scripts/railway-setup.sh",
+     "generate": "bun ./node_modules/@shogo-ai/sdk/bin/cli.mjs generate",
++    "postgenerate": "bun run scripts/fix-server-order.ts || true",
++    "_comment_postgenerate": "Only fires for a MANUAL `bun run generate`. The in-editor regeneration calls the SDK CLI directly and skips it — verified, see scripts/fix-server-order.ts.",
+     "db:generate": "bun x --bun prisma generate",
+     "db:migrate:deploy": "bun x --bun prisma migrate deploy",
+     "db:push": "bun x --bun prisma db push",
+@@ -45,7 +47,8 @@
+     "recharts": "^2.15.3",
+     "stripe": "^23.0.0",
+     "tailwind-merge": "^3.4.0",
+-    "tailwindcss-animate": "^1.0.7"
++    "tailwindcss-animate": "^1.0.7",
++    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+   },
+   "devDependencies": {
+     "@prisma/internals": "^7.3.0",
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index c9f99b7..682d368 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -680,9 +680,19 @@ model ApiKey {
+   prefix     String // first 12 chars, for display
+   name       String
+   tier       String    @default("pro")
+-  callsToday Int       @default(0) @map("calls_today")
+-  callsMonth Int       @default(0) @map("calls_month")
+-  lastUsedAt DateTime? @map("last_used_at")
++  callsToday   Int       @default(0) @map("calls_today")
++  callsMonth   Int       @default(0) @map("calls_month")
++  // Both counters are reset LAZILY, on first use after their boundary.
++  //
++  // Nothing else resets them, and the Day 11 spec only ever increments. Without
++  // these columns a key that reached its daily limit on day one stayed exhausted
++  // forever — the limiter compares against a counter that never comes down, so
++  // every key became permanently dead at exactly the limit it was sold.
++  // Resetting lazily (rather than from a cron tick) also means it still works if
++  // the scheduler is down or the process restarts mid-window.
++  callsResetAt DateTime? @map("calls_reset_at")
++  monthResetAt DateTime? @map("month_reset_at")
++  lastUsedAt   DateTime? @map("last_used_at")
+   revokedAt  DateTime? @map("revoked_at")
+   createdAt  DateTime  @default(now()) @map("created_at")
+ 
+diff --git a/scripts/_runall.sh b/scripts/_runall.sh
+index 243ffdd..86dbee4 100644
+--- a/scripts/_runall.sh
++++ b/scripts/_runall.sh
+@@ -18,6 +18,7 @@ for f in scripts/verify-*.ts; do
+     # run against the project database — but detectDeals() rewrites every isDeal
+     # flag, so it would corrupt real state before its guard even mattered.
+     verify-deal-engine) cp prisma/dev.db /tmp/deal-e2e.db; url="file:/tmp/deal-e2e.db" ;;
++    verify-day11) cp prisma/dev.db /tmp/day11-e2e.db; url="file:/tmp/day11-e2e.db" ;;
+     # Named after the feature, not the day: its guard requires the URL to contain "cma-e2e".
+     verify-day6-e2e) cp prisma/dev.db /tmp/cma-e2e.db; url="file:/tmp/cma-e2e.db" ;;
+     verify-day*-e2e) d=$(echo "$n" | sed 's/^verify-//'); cp prisma/dev.db "/tmp/${d}.db"; url="file:/tmp/${d}.db" ;;
+diff --git a/scripts/fix-server-order.ts b/scripts/fix-server-order.ts
+index f5485b4..8795542 100644
+--- a/scripts/fix-server-order.ts
++++ b/scripts/fix-server-order.ts
+@@ -1,100 +1,76 @@
+-/**
+- * Repair server.tsx ordering after `shogo generate` rewrites it.
+- *
+- * The generated file registers the static handlers and `Bun.serve()` immediately
+- * after the API routes, then re-emits the `SHOGO:CUSTOM asset-routing` region at
+- * the very bottom — *after* the SPA catch-all. Hono dispatches in registration
+- * order, and that catch-all answers every unmatched path with index.html, so the
+- * region never executes:
+- *
+- *   - the /p/<projectId>/ rewrite is dead, so the preview serves index.html
+- *     where the browser expects a JS module → blank page
+- *   - the cache headers are dead, so a stale shell can hide a fresh deploy
+- *
+- * The generated file's own header claims it "will not be overwritten if it
+- * exists". It is. So this script moves the static block back below
+- * `SHOGO:CUSTOM-END`, where it belongs.
+- *
+- * Idempotent. Run after any schema change:
+- *   bun run scripts/fix-server-order.ts
+- *
+- * `scripts/verify-server-routing.ts` asserts the *behaviour* (that the middleware
+- * runs), which is the check that actually matters — this script only repairs.
+- */
+-import { readFileSync, writeFileSync } from 'fs'
+-
++// Restore the required ORDER of server.tsx after a regeneration.
++//
++//   bun run scripts/fix-server-order.ts
++//
++// WHY THIS EXISTS
++//
++// server.tsx is auto-generated, but the region between its SHOGO:CUSTOM markers
++// is preserved verbatim across regeneration — its POSITION is not. `shogo
++// generate` consistently relocates that region to the bottom of the file, below
++// the SPA catch-all:
++//
++//     app.use('/*', serveStatic({ root: './dist' }))
++//     app.get('*', serveStatic({ path: './dist/index.html' }))
++//
++// Hono dispatches in registration order, so anything mounted after that
++// catch-all is unreachable — the catch-all answers *every* unmatched path with
++// index.html before the later middleware ever runs. The custom region holds the
++// asset-path rewrite that the preview needs (without it the client bundle is
++// requested as HTML and the page renders blank), so losing the ordering breaks
++// the preview silently: the markers survive, so nothing looks wrong in the diff.
++//
++// Editing prisma/schema.prisma is enough to trigger a regeneration, which makes
++// this a recurring tax on every schema change rather than a one-off mistake.
++// scripts/verify-server-routing.ts catches it (it drops from 8 to 1 checks), but
++// only if it is run. This script makes the repair a single command instead of a
++// hand-move that has to be redone from scratch each time.
++//
++// Idempotent: running it on an already-correct file changes nothing.
++//
++// NOT AUTOMATIC — measured, don't re-litigate it. A `postgenerate` npm hook was
++// added to package.json and a schema edit was made to trigger a regeneration. The
++// block was relocated again and the hook did not run, because the in-editor
++// regeneration invokes the SDK CLI directly rather than going through
++// `bun run generate`. So there is no hook to hang this off; the detection is
++// `scripts/verify-server-routing.ts` (it drops 8 → 1) and the repair is this
++// command. The `postgenerate` entry is kept only because a *manual*
++// `bun run generate` (fresh clone, Railway build) does go through npm and would
++// benefit from it.
+ const FILE = 'server.tsx'
++const START = '// SHOGO:CUSTOM-START'
++const END = '// SHOGO:CUSTOM-END'
++const ANCHOR = '// Serve static files in production'
+ 
+-const STATIC_BLOCK_RE =
+-  /\/\/ Serve static files in production\napp\.use\('\/\*', serveStatic\(\{ root: '\.\/dist' \}\)\)\napp\.get\('\*', serveStatic\(\{ path: '\.\/dist\/index\.html' \}\)\)\n\nconst port = Number\(process\.env\.PORT\) \|\| 3001\nconsole\.log\(`🚀 Server running on http:\/\/localhost:\$\{port\}`\)\n\nBun\.serve\(\{ port, fetch: app\.fetch \}\)\n/
+-
+-const TAIL_BLOCK = `// ─── Static files + SPA fallback ─────────────────────────────────────────────
+-// Deliberately LAST. Hono dispatches in registration order, so the SPA catch-all
+-// below answers every unmatched path with index.html — anything registered after
+-// it never runs. \`shogo generate\` moves these back above the custom region on
+-// every schema change, which silently turns the asset-routing middleware above
+-// into dead code and blanks the preview. \`scripts/fix-server-order.ts\` repairs
+-// the ordering; \`scripts/verify-server-routing.ts\` detects the regression.
+-app.use('/*', serveStatic({ root: './dist' }))
+-app.get('*', serveStatic({ path: './dist/index.html' }))
+-
+-const port = Number(process.env.PORT) || 3001
+-console.log(\`🚀 Server running on http://localhost:\${port}\`)
+-Bun.serve({ port, fetch: app.fetch })`
++const src = await Bun.file(FILE).text()
+ 
+-let src = readFileSync(FILE, 'utf8')
+-
+-const routingAt = src.indexOf('// SHOGO:CUSTOM-START asset-routing')
+-if (routingAt === -1) {
+-  console.log('✗ server.tsx has no SHOGO:CUSTOM asset-routing region — nothing to reorder.')
+-  console.log('  Re-add it from git history; without it prefixed asset requests 404 into index.html.')
++const s = src.indexOf(START)
++const e = src.indexOf(END)
++if (s === -1 || e === -1) {
++  console.error(`✗ ${FILE}: SHOGO:CUSTOM markers not found — refusing to touch it.`)
+   process.exit(1)
+ }
+ 
+-const staticAt = src.search(/\/\/ Serve static files in production|app\.use\('\/\*', serveStatic/)
+-
+-if (staticAt === -1) {
+-  console.log('✓ server.tsx already in the correct order (static handlers are last).')
+-  process.exit(0)
++const anchorAt = src.indexOf(ANCHOR)
++if (anchorAt === -1) {
++  console.error(`✗ ${FILE}: anchor "${ANCHOR}" not found — the generator's shape changed, fix by hand.`)
++  process.exit(1)
+ }
+ 
+-if (staticAt > routingAt) {
+-  console.log('✓ server.tsx already in the correct order (static handlers are last).')
++if (s < anchorAt) {
++  console.log(`✓ ${FILE}: custom region already above the SPA catch-all (line ${src.slice(0, s).split('\n').length}). Nothing to do.`)
+   process.exit(0)
+ }
+ 
+-// The generated head block — remove it verbatim.
+-const headBlock = `// Serve static files in production
+-app.use('/*', serveStatic({ root: './dist' }))
+-app.get('*', serveStatic({ path: './dist/index.html' }))
+-
+-const port = Number(process.env.PORT) || 3001
+-console.log(\`🚀 Server running on http://localhost:\${port}\`)
+-
+-Bun.serve({ port, fetch: app.fetch })
+-`
++const block = src.slice(s, e + END.length)
++// Remove the region, then collapse the blank run it leaves behind.
++const rest = (src.slice(0, s) + src.slice(e + END.length)).replace(/\n{3,}/g, '\n\n')
+ 
+-if (!src.includes(headBlock)) {
+-  console.log('✗ Could not find the generated static block verbatim — server.tsx changed shape.')
+-  console.log('  Inspect it by hand: static handlers must come after SHOGO:CUSTOM-END.')
+-  process.exit(1)
+-}
+-
+-if (!src.includes('// SHOGO:CUSTOM-END')) {
+-  console.log('✗ No SHOGO:CUSTOM-END marker to anchor against.')
+-  process.exit(1)
+-}
+-
+-if (!STATIC_BLOCK_RE.test(src)) {
+-  console.log('✗ Static block did not match the expected generated form.')
+-  process.exit(1)
+-}
++const at = rest.indexOf(ANCHOR)
++const out = `${rest.slice(0, at)}${block}\n\n${rest.slice(at)}`
+ 
+-src = src.replace(headBlock, '')
+-// Collapse the blank lines the removal leaves behind.
+-src = src.replace(/\n{3,}/g, '\n\n')
+-src = src.replace('// SHOGO:CUSTOM-END', `// SHOGO:CUSTOM-END\n\n${TAIL_BLOCK}\n`)
++await Bun.write(FILE, out)
+ 
+-writeFileSync(FILE, src)
+-console.log('✓ Reordered server.tsx — static handlers + Bun.serve now come after SHOGO:CUSTOM-END.')
+-console.log('  Verify with: bun run scripts/verify-server-routing.ts')
++const line = out.slice(0, out.indexOf(START)).split('\n').length
++const anchorLine = out.slice(0, out.indexOf(ANCHOR)).split('\n').length
++console.log(`✓ ${FILE}: moved custom region to line ${line}, above the catch-all at line ${anchorLine}.`)
++console.log('  Now run: bun run scripts/verify-server-routing.ts')
+diff --git a/scripts/verify-day11.ts b/scripts/verify-day11.ts
+new file mode 100644
+index 0000000..1ffb4cd
+--- /dev/null
++++ b/scripts/verify-day11.ts
+@@ -0,0 +1,376 @@
++// Day 11 verification — Public Data API v1 + Export Centre.
++//
++// Run:
++//   cp prisma/dev.db /tmp/day11-e2e.db
++//   DATABASE_URL=file:/tmp/day11-e2e.db bun run scripts/verify-day11.ts
++//
++// Runs the REAL Hono app in-process against a throwaway COPY of the database and
++// creates its own synthetic users, one per entitlement, so the tier gates are
++// exercised without touching the seeded demo account. Every row created here is
++// removed in `finally`.
++//
++// A COPY is required rather than merely tidy: this suite creates API keys and
++// forces counters to their limit, and it inserts transactions. Against the
++// project database that would leave live credentials and synthetic market data
++// behind.
++import { prisma } from '../src/lib/db'
++import { createHash } from 'node:crypto'
++
++const dbUrl = process.env.DATABASE_URL ?? ''
++if (!dbUrl.includes('day11-e2e')) {
++  throw new Error(
++    `Refusing to run: DATABASE_URL must point at the disposable copy (…day11-e2e.db), got "${dbUrl || '<unset>'}".\n` +
++      'This script creates API keys and transactions; running it against the project database would pollute it.',
++  )
++}
++
++const { default: app } = await import('../custom-routes')
++
++let passed = 0
++let failed = 0
++const failures: string[] = []
++
++function check(name: string, ok: boolean, detail?: unknown) {
++  if (ok) {
++    passed++
++    console.log(`  ✓ ${name}`)
++  } else {
++    failed++
++    failures.push(name)
++    console.log(`  ✗ ${name}${detail === undefined ? '' : ` — ${JSON.stringify(detail).slice(0, 300)}`}`)
++  }
++}
++
++async function req(
++  path: string,
++  opts: { method?: string; body?: unknown; token?: string | null; apiKey?: string | null } = {},
++): Promise<{ status: number; body: Record<string, unknown>; text: string; res: Response }> {
++  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
++  if (opts.token) headers.Authorization = `Bearer ${opts.token}`
++  if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`
++  const res = await app.request(path, {
++    method: opts.method ?? 'GET',
++    headers,
++    ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
++  })
++  const text = await res.text()
++  let body: Record<string, unknown> = {}
++  try {
++    body = text ? (JSON.parse(text) as Record<string, unknown>) : {}
++  } catch {
++    body = {}
++  }
++  return { status: res.status, body, text, res }
++}
++
++const ID = 'zz-verify-day11'
++const NASTY_BUILDING = 'Zz Evil, "Tower" =1+2'
++const createdUsers: string[] = []
++const createdTransactions: string[] = []
++const createdKeys: string[] = []
++
++async function makeUser(role: string, tier: string, status = 'active') {
++  const u = await prisma.user.create({
++    data: { email: `${ID}-${role}@example.invalid`, subscriptionTier: tier, subscriptionStatus: status },
++    select: { id: true },
++  })
++  createdUsers.push(u.id)
++  return u.id
++}
++
++try {
++  const community = await prisma.community.findFirst({
++    select: { id: true, nameEn: true, slug: true, emirate: true },
++    orderBy: { id: 'asc' },
++  })
++  if (!community) throw new Error('No community row to attach synthetic transactions to')
++  const other = await prisma.community.findFirst({
++    where: { id: { not: community.id } },
++    select: { id: true },
++    orderBy: { id: 'asc' },
++  })
++
++  const recent = new Date()
++  recent.setDate(recent.getDate() - 5)
++
++  // Two synthetic sales in `community`, and one with a hostile building name.
++  for (const [i, building] of [
++    ['Zz Verify One', 1800],
++    [NASTY_BUILDING, 1750],
++  ].entries()) {
++    const t = await prisma.transaction.create({
++      data: {
++        dldId: `${ID}-TX-${i}`,
++        communityId: community.id,
++        transactionType: 'sale',
++        propertyType: 'apartment',
++        beds: 2,
++        areaSqft: 1000,
++        priceAed: building[1] * 1000,
++        pricePerSqft: building[1],
++        transactionDate: recent,
++        buildingName: building[0] as string,
++      },
++      select: { id: true },
++    })
++    createdTransactions.push(t.id)
++  }
++
++  const proUser = await makeUser('pro', 'pro')
++  const apiUser = await makeUser('api', 'pro')
++  const entUser = await makeUser('ent', 'enterprise')
++  const inactiveUser = await makeUser('inactive', 'pro', 'cancelled')
++  const freeUser = await makeUser('free', 'free')
++
++  // ── Task A — API key management ─────────────────────────────────────────────
++  console.log('\n── Task A: API key management ──')
++
++  const guestCreate = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'x' } })
++  check('guest cannot create a key (403)', guestCreate.status === 403, guestCreate.status)
++
++  const freeCreate = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'x' }, token: freeUser })
++  check('free tier cannot create a key (403)', freeCreate.status === 403, freeCreate.status)
++
++  const made = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'Zz primary' }, token: apiUser })
++  const rawKey = String(made.body.key ?? '')
++  const meta = (made.body.meta ?? {}) as Record<string, unknown>
++  if (meta.id) createdKeys.push(String(meta.id))
++
++  check('pro creates a key (201)', made.status === 201, made.status)
++  check('key starts with sqft_', rawKey.startsWith('sqft_'), rawKey.slice(0, 10))
++  check('key is long enough to be unguessable (>=32 chars)', rawKey.length >= 32, rawKey.length)
++  check("key tier inherits the CALLER's tier", meta.tier === 'pro', meta.tier)
++  check('response carries a save-it-once warning', typeof made.body.warning === 'string')
++
++  const stored = await prisma.apiKey.findUnique({
++    where: { id: String(meta.id) },
++    select: { keyHash: true, prefix: true, name: true, tier: true },
++  })
++  check('only the SHA-256 hash is stored, never the key', stored?.keyHash === createHash('sha256').update(rawKey).digest('hex'))
++  check('the plaintext key appears nowhere in the row', JSON.stringify(stored ?? {}).includes(rawKey) === false)
++  check('prefix is the first 12 chars, for display', stored?.prefix === rawKey.slice(0, 12))
++
++  const listed = await req('/sqftlab/api-keys', { token: apiUser })
++  const listJson = JSON.stringify(listed.body)
++  check('list returns the key', listed.status === 200 && Array.isArray(listed.body.keys))
++  check('list NEVER returns the full key', !listJson.includes(rawKey))
++  check('list exposes the prefix', listJson.includes(rawKey.slice(0, 12)))
++
++  // Max keys is per tier: pro = 3.
++  const cap1 = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'Zz 1' }, token: proUser })
++  const cap2 = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'Zz 2' }, token: proUser })
++  const cap3 = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'Zz 3' }, token: proUser })
++  check(
++    'pro can hold 3 keys',
++    [cap1, cap2, cap3].every((r) => r.status === 201),
++    [cap1.status, cap2.status, cap3.status],
++  )
++  const overCap = await req('/sqftlab/api-keys', { method: 'POST', body: { name: 'Zz 4' }, token: proUser })
++  check('4th key on pro is refused (max 3)', overCap.status === 403, overCap.status)
++  check('refusal names the cap and the upgrade path', overCap.body.maxKeys === 3 && overCap.body.upgradeUrl === '/pricing')
++
++  const proKeys = await prisma.apiKey.findMany({ where: { userId: proUser }, select: { id: true } })
++  proKeys.forEach((k) => createdKeys.push(k.id))
++  check('exactly 3 active keys exist for that pro user', proKeys.length === 3, proKeys.length)
++
++  // ── Task A/B — API-key auth on /v1 ──────────────────────────────────────────
++  console.log('\n── Task B: /v1 authentication ──')
++
++  const noKey = await req('/v1/transactions')
++  check('no key → 401', noKey.status === 401, noKey.status)
++  check('401 advertises the scheme', noKey.res.headers.get('www-authenticate')?.includes('Bearer') === true)
++
++  const badKey = await req('/v1/transactions', { apiKey: 'sqft_deadbeef' })
++  check('unknown key → 401', badKey.status === 401, badKey.status)
++
++  const inactive = await req('/v1/transactions', {
++    apiKey: await mintKeyFor(inactiveUser),
++  })
++  check('key whose owner cancelled → 403 (spec read the status but never used it)', inactive.status === 403, inactive.status)
++
++  // ── Task B — /v1/transactions ───────────────────────────────────────────────
++  console.log('\n── Task B: /v1/transactions ──')
++
++  const tx = await req(`/v1/transactions?area=${encodeURIComponent(community.nameEn)}`, { apiKey: rawKey })
++  check('valid key → 200', tx.status === 200, tx.status)
++  const dataArr = Array.isArray(tx.body.data) ? (tx.body.data as Record<string, unknown>[]) : []
++  const txMeta = (tx.body.meta ?? {}) as Record<string, unknown>
++  check('returns a data array and a meta block', Array.isArray(tx.body.data) && typeof txMeta === 'object')
++  check('meta reports total/limit/offset/source', ['total', 'limit', 'offset', 'source'].every((k) => k in txMeta))
++  check('the synthetic sale is returned (positive path)', dataArr.some((r) => r.building === 'Zz Verify One'))
++
++  const one = dataArr.find((r) => r.building === 'Zz Verify One') ?? {}
++  check('row uses real column names (psfAed/sizeSqft/priceAed)', 'psfAed' in one && 'sizeSqft' in one && 'priceAed' in one, Object.keys(one))
++  check('row has no phantom spec fields (area/pricePsf/amount)', !('area' in one) && !('pricePsf' in one) && !('amount' in one))
++  check('community resolves to a name, not an id', one.community === community.nameEn, one.community)
++
++  const bySlug = await req(`/v1/transactions?area=${encodeURIComponent(community.slug)}`, { apiKey: rawKey })
++  check('area matching works off slug too (portal short forms)', bySlug.status === 200)
++
++  const typo = await req('/v1/transactions?area=Downtwon%20Dubai', { apiKey: rawKey })
++  check('unmatched area → 404, NOT the whole table', typo.status === 404, typo.status)
++  check('unmatched area returns zero rows', Array.isArray(typo.body.data) && (typo.body.data as unknown[]).length === 0)
++
++  const badDate = await req('/v1/transactions?date_from=not-a-date', { apiKey: rawKey })
++  check('invalid date → 400 (not a 500)', badDate.status === 400, badDate.status)
++
++  const stats = await req(`/v1/communities/${community.slug}/stats`, { apiKey: rawKey })
++  check('/v1/communities/:slug/stats → 200', stats.status === 200, stats.status)
++  check('stats counts the synthetic sales', Number(stats.body.transactions) >= 2, stats.body.transactions)
++  check('stats reports null (not 0) psf when the window is empty', stats.body.avgPsfAed !== 0)
++
++  const missing = await req('/v1/communities/zz-no-such-place/stats', { apiKey: rawKey })
++  check('unknown community → 404', missing.status === 404, missing.status)
++
++  // ── the daily counter rollover (the fix) ────────────────────────────────────
++  console.log('\n── Task A: daily counter ──')
++
++  const keyRow = await prisma.apiKey.findUnique({ where: { id: String(meta.id) }, select: { id: true, callsToday: true } })
++  const yesterday = new Date()
++  yesterday.setDate(yesterday.getDate() - 1)
++
++  await prisma.apiKey.update({
++    where: { id: keyRow!.id },
++    data: { callsToday: 500, callsResetAt: new Date() },
++  })
++  const exhausted = await req('/v1/transactions', { apiKey: rawKey })
++  check('at the limit → 429', exhausted.status === 429, exhausted.status)
++  check('429 states the limit and how to raise it', exhausted.body.limit === 500 && exhausted.body.upgradeUrl === '/pricing')
++  check('429 reports remaining quota via headers', exhausted.res.headers.get('x-api-remaining') === '0')
++
++  // THE BUG: counters were never reset, so a key that hit its limit once stayed
++  // dead forever. A stale callsResetAt must roll the window over.
++  await prisma.apiKey.update({
++    where: { id: keyRow!.id },
++    data: { callsToday: 500, callsResetAt: yesterday },
++  })
++  const rolled = await req('/v1/transactions', { apiKey: rawKey })
++  check('a stale reset timestamp rolls the window → 200 (was permanently locked)', rolled.status === 200, rolled.status)
++
++  const after = await prisma.apiKey.findUnique({ where: { id: keyRow!.id }, select: { callsToday: true, callsResetAt: true } })
++  check('counter restarts at 1 after the roll', after?.callsToday === 1, after?.callsToday)
++  check('reset timestamp is stamped forward', (after?.callsResetAt?.getTime() ?? 0) > yesterday.getTime())
++
++  // ── revocation ──────────────────────────────────────────────────────────────
++  const revoked = await req(`/sqftlab/api-keys/${meta.id}`, { method: 'DELETE', token: apiUser })
++  check('DELETE revokes (200)', revoked.status === 200, revoked.status)
++  const afterRevoke = await req('/v1/transactions', { apiKey: rawKey })
++  check('revoked key is refused (401)', afterRevoke.status === 401, afterRevoke.status)
++
++  // ── Task C — Export Centre ──────────────────────────────────────────────────
++  console.log('\n── Task C: Export Centre ──')
++
++  const guestExport = await req('/sqftlab/export', { method: 'POST', body: { format: 'csv' } })
++  check('guest export → 403', guestExport.status === 403, guestExport.status)
++
++  const freeExport = await req('/sqftlab/export', { method: 'POST', body: { format: 'csv' }, token: freeUser })
++  check('free tier export → 403', freeExport.status === 403, freeExport.status)
++
++  const csv = await req('/sqftlab/export', {
++    method: 'POST',
++    body: { format: 'csv', area: community.nameEn },
++    token: apiUser,
++  })
++  check('pro CSV export → 200', csv.status === 200, csv.status)
++  check('CSV content-type', csv.res.headers.get('content-type')?.startsWith('text/csv') === true)
++  check('CSV is an attachment with a filename', csv.res.headers.get('content-disposition')?.includes('attachment') === true)
++  check('CSV carries a UTF-8 BOM (Arabic names survive Excel)', csv.text.startsWith('\uFEFF'))
++  check('CSV header row matches the documented columns', csv.text.includes('Date,Community,Building,Beds,Size (sqft),PSF (AED),Total (AED)'))
++  check('CSV contains the synthetic row', csv.text.includes('Zz Verify One'))
++  check('export reports counts in headers', csv.res.headers.get('x-export-rows') !== null && csv.res.headers.get('x-export-total') !== null)
++
++  // CSV correctness — the two ways an export silently corrupts data.
++  const nastyLine = csv.text.split('\r\n').find((l) => l.includes('Evil')) ?? ''
++  check('a building name containing a comma is quoted', nastyLine.includes('"'), nastyLine)
++  check('embedded quotes are doubled (RFC 4180)', nastyLine.includes('""'))
++  check('a leading = is neutralised so Excel will not execute it', !/(^|,)"?=1\+2/.test(nastyLine), nastyLine)
++  check('rows are CRLF separated', csv.text.includes('\r\n'))
++
++  const proExcel = await req('/sqftlab/export', { method: 'POST', body: { format: 'excel' }, token: apiUser })
++  check('pro requesting Excel → 403 enterprise required', proExcel.status === 403, proExcel.status)
++  check('the 403 names the required tier', proExcel.body.requiredTier === 'enterprise')
++
++  const entExcel = await req('/sqftlab/export', { method: 'POST', body: { format: 'excel' }, token: entUser })
++  check('enterprise Excel export → 200', entExcel.status === 200, entExcel.status)
++  check('xlsx content-type', entExcel.res.headers.get('content-type')?.includes('spreadsheetml.sheet') === true)
++  check('body is a real xlsx (ZIP magic PK)', entExcel.text.startsWith('PK'))
++
++  const badAreaExport = await req('/sqftlab/export', {
++    method: 'POST',
++    body: { format: 'csv', area: 'Nowhere At All' },
++    token: apiUser,
++  })
++  check('export with an unmatched area → 404', badAreaExport.status === 404, badAreaExport.status)
++
++  const badDateExport = await req('/sqftlab/export', {
++    method: 'POST',
++    body: { format: 'csv', dateFrom: 'yesterday-ish' },
++    token: apiUser,
++  })
++  check('export with an invalid date → 400', badDateExport.status === 400, badDateExport.status)
++
++  const preview = await req('/sqftlab/export/preview', {
++    method: 'POST',
++    body: { area: community.nameEn },
++    token: apiUser,
++  })
++  check('preview → 200', preview.status === 200, preview.status)
++  check('preview reports rowLimit for the tier (pro = 1000)', preview.body.rowLimit === 1000, preview.body.rowLimit)
++  check('preview reports whether Excel is unlocked', preview.body.excelAllowed === false)
++  check('preview is not truncated when under the cap', preview.body.truncated === false)
++
++  const entPreview = await req('/sqftlab/export/preview', { method: 'POST', body: {}, token: entUser })
++  check('enterprise preview unlocks Excel', entPreview.body.excelAllowed === true)
++  check('enterprise preview marks the cap as effectively unlimited', entPreview.body.unlimited === true)
++
++  // Truncation arithmetic, tested directly at the row limit the route uses.
++  const { fetchExportRows, buildTransactionWhere } = await import('../src/lib/export-data')
++  if (other) {
++    const built = await buildTransactionWhere({ area: community.nameEn })
++    if (built.ok) {
++      const cut = await fetchExportRows(built.where, 1)
++      check('fetchExportRows honours the cap', cut.rows.length === 1, cut.rows.length)
++      check('fetchExportRows still reports the true total', cut.total >= 2, cut.total)
++      check('total > returned is what drives the truncation notice', cut.total > cut.rows.length)
++    } else {
++      check('buildTransactionWhere resolved the community', false, built.reason)
++    }
++  }
++
++  const history = await req('/sqftlab/export/history', { token: apiUser })
++  check('export history → 200', history.status === 200, history.status)
++  check('history records the export just performed', Array.isArray(history.body.exports) && (history.body.exports as unknown[]).length >= 1)
++  check('history returns at most 3 entries', ((history.body.exports ?? []) as unknown[]).length <= 3)
++} catch (e) {
++  failed++
++  failures.push('suite threw')
++  console.log(`  ✗ suite threw — ${(e as Error).message}`)
++} finally {
++  const [k, t, u] = await Promise.all([
++    prisma.apiKey.deleteMany({ where: { userId: { in: createdUsers } } }),
++    prisma.transaction.deleteMany({ where: { dldId: { startsWith: ID } } }),
++    prisma.userEvent.deleteMany({ where: { userId: { in: createdUsers } } }),
++  ])
++  const users = await prisma.user.deleteMany({ where: { email: { startsWith: ID } } })
++  console.log(`\n  cleaned up: ${k.count} keys, ${t.count} transactions, ${u.count} events, ${users.count} users`)
++  await prisma.$disconnect()
++
++  console.log(`\n  ${passed} passed, ${failed} failed`)
++  if (failed > 0) console.log(`  failing: ${failures.join(' | ')}`)
++  process.exit(failed > 0 ? 1 : 0)
++}
++
++/** Mint a key directly for a user (bypasses the HTTP route where that is not the point). */
++async function mintKeyFor(userId: string): Promise<string> {
++  const raw = `sqft_${createHash('sha256').update(userId).digest('hex').slice(0, 40)}`
++  await prisma.apiKey.create({
++    data: {
++      userId,
++      keyHash: createHash('sha256').update(raw).digest('hex'),
++      prefix: raw.slice(0, 12),
++      name: 'Zz minted',
++      tier: 'pro',
++    },
++  })
++  return raw
++}
+diff --git a/server.tsx b/server.tsx
+index 0ae5817..5fd0540 100644
+--- a/server.tsx
++++ b/server.tsx
+@@ -88,9 +88,7 @@ app.use('*', async (c, next) => {
+ })
+ // SHOGO:CUSTOM-END
+ 
+-// Serve static files in production.
+-// These MUST remain below the CUSTOM block above: Hono dispatches in registration
+-// order, so the SPA catch-all here would otherwise shadow that block entirely.
++// Serve static files in production
+ app.use('/*', serveStatic({ root: './dist' }))
+ app.get('*', serveStatic({ path: './dist/index.html' }))
+ 
+@@ -98,3 +96,4 @@ const port = Number(process.env.PORT) || 3001
+ console.log(`🚀 Server running on http://localhost:${port}`)
+ 
+ Bun.serve({ port, fetch: app.fetch })
++
+diff --git a/src/App.tsx b/src/App.tsx
+index 000ea9c..dc046fd 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -15,6 +15,7 @@ import CmaPage from '@/components/CmaPage'
+ import CapitalFlowPage from '@/components/CapitalFlowPage'
+ import BuildingSearchPage from '@/components/BuildingSearchPage'
+ import BuildingPage from '@/components/BuildingPage'
++import ExportPage from '@/components/ExportPage'
+ import PortfolioPage from '@/components/PortfolioPage'
+ import SignInPage from '@/components/SignInPage'
+ import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
+@@ -292,7 +293,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
+ 
+ // ─── Navigation ──────────────────────────────────────────────────────────────
+ 
+-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building'
++type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export'
+ 
+ // The pages that publish a real URL. Anything absent here is in-app only: navigating
+ // to it deliberately leaves the address bar alone, which is how the app has always
+@@ -303,6 +304,7 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
+   portfolio: '/portfolio',
+   'capital-flow': '/capital-flow',
+   buildings: '/buildings',
++  export: '/export',
+ }
+ 
+ // Day 10: `/buildings/<slug>` is the first route in this app that carries a
+@@ -325,6 +327,7 @@ const NAV = [
+   { id: 'cma' as Page, label: 'CMA', icon: Scale },
+   { id: 'buildings' as Page, label: 'Buildings', icon: Building2 },
+   { id: 'capital-flow' as Page, label: 'Capital Flow', icon: Globe },
++  { id: 'export' as Page, label: 'Export', icon: Download },
+ ]
+ 
+ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; live: LiveMarket }) {
+@@ -3268,6 +3271,7 @@ function AppInner() {
+       {page === 'cma' && <CmaPage onNavigate={navigate} />}
+       {page === 'capital-flow' && <CapitalFlowPage onNavigate={navigate} />}
+       {page === 'buildings' && <BuildingSearchPage onOpenBuilding={navigateBuilding} />}
++      {page === 'export' && <ExportPage onNavigate={navigate} />}
+       {page === 'building' && (
+         <BuildingPage slug={selectedBuilding} onNavigate={navigate} onBack={() => navigate('buildings')} />
+       )}
+diff --git a/src/components/ExportPage.tsx b/src/components/ExportPage.tsx
+new file mode 100644
+index 0000000..df740d7
+--- /dev/null
++++ b/src/components/ExportPage.tsx
+@@ -0,0 +1,469 @@
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { Download, FileSpreadsheet, FileText, Info, Lock, Clock } from 'lucide-react'
++import { authedFetch } from '@/lib/session'
++
++/**
++ * Export Centre (Day 11 Task D).
++ *
++ * Two deviations from the spec's design, both because the spec's version cannot
++ * work:
++ *
++ *  - The spec has this page poll `/api/v1/transactions?limit=1` for the row
++ *    count. That endpoint is API-KEY authenticated, and this page holds a
++ *    SESSION, so the call would 401 for every user. The count comes from
++ *    `/api/sqftlab/export/preview`, which is session-authenticated and returns
++ *    the same total plus the tier's cap.
++ *  - The spec greys out Excel from a client-side tier string. Entitlement is
++ *    decided server-side (`excelAllowed` in the preview response), so the UI
++ *    reflects the answer rather than guessing it — and the server refuses
++ *    regardless of what the button does.
++ */
++
++interface Preview {
++  total: number
++  willExport: number
++  rowLimit: number
++  unlimited: boolean
++  truncated: boolean
++  excelAllowed: boolean
++  tier: string
++  empty: boolean
++  message?: string
++}
++
++interface ExportEvent {
++  id: string
++  eventData: { format?: string; rows?: number; area?: string | null } | null
++  createdAt: string
++}
++
++const BEDROOM_OPTIONS = ['Any', '1', '2', '3', '4', '5+']
++
++export default function ExportPage({ onNavigate }: { onNavigate?: (page: 'pricing') => void }) {
++  const [area, setArea] = useState('')
++  const [bedrooms, setBedrooms] = useState('Any')
++  const [dateFrom, setDateFrom] = useState('')
++  const [dateTo, setDateTo] = useState('')
++  const [psfMin, setPsfMin] = useState('')
++  const [psfMax, setPsfMax] = useState('')
++
++  const [preview, setPreview] = useState<Preview | null>(null)
++  const [history, setHistory] = useState<ExportEvent[]>([])
++  const [blocked, setBlocked] = useState<string | null>(null)
++  const [notice, setNotice] = useState<string | null>(null)
++  const [error, setError] = useState<string | null>(null)
++  const [busy, setBusy] = useState<'csv' | 'excel' | null>(null)
++  const [previewing, setPreviewing] = useState(false)
++  const timer = useRef<number | null>(null)
++
++  const body = useCallback(
++    () => ({
++      area: area.trim() || undefined,
++      bedrooms: bedrooms === 'Any' ? undefined : bedrooms === '5+' ? 5 : Number(bedrooms),
++      dateFrom: dateFrom || undefined,
++      dateTo: dateTo || undefined,
++      psfMin: psfMin ? Number(psfMin) : undefined,
++      psfMax: psfMax ? Number(psfMax) : undefined,
++    }),
++    [area, bedrooms, dateFrom, dateTo, psfMin, psfMax],
++  )
++
++  const load = useCallback(async () => {
++    setPreviewing(true)
++    setError(null)
++    try {
++      const res = await authedFetch('/api/sqftlab/export/preview', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify(body()),
++      })
++      const b = (await res.json().catch(() => ({}))) as Preview & { error?: string }
++      if (res.status === 403) {
++        setBlocked(b.error ?? 'Data export requires a Pro plan')
++        setPreview(null)
++        return
++      }
++      if (!res.ok) {
++        // Surface the server's own words — "No community matches X" is the
++        // useful answer, and a generic message would hide it.
++        setError(b.error ?? `Request failed (${res.status})`)
++        setPreview(null)
++        return
++      }
++      setBlocked(null)
++      setPreview(b)
++    } catch {
++      setError('Could not reach the export service.')
++    } finally {
++      setPreviewing(false)
++    }
++  }, [body])
++
++  useEffect(() => {
++    if (timer.current) window.clearTimeout(timer.current)
++    timer.current = window.setTimeout(load, 350)
++    return () => {
++      if (timer.current) window.clearTimeout(timer.current)
++    }
++  }, [load])
++
++  const loadHistory = useCallback(async () => {
++    try {
++      const res = await authedFetch('/api/sqftlab/export/history')
++      if (!res.ok) return
++      const b = (await res.json().catch(() => ({}))) as { exports?: ExportEvent[] }
++      setHistory(Array.isArray(b.exports) ? b.exports : [])
++    } catch {
++      /* history is decorative; never block the page on it */
++    }
++  }, [])
++
++  useEffect(() => {
++    void loadHistory()
++  }, [loadHistory])
++
++  async function download(format: 'csv' | 'excel') {
++    setBusy(format)
++    setNotice(null)
++    setError(null)
++    try {
++      const res = await authedFetch('/api/sqftlab/export', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ ...body(), format }),
++      })
++
++      if (!res.ok) {
++        const b = (await res.json().catch(() => ({}))) as { error?: string }
++        setError(b.error ?? `Export failed (${res.status})`)
++        return
++      }
++
++      const rows = res.headers.get('X-Export-Rows')
++      const total = res.headers.get('X-Export-Total')
++      const truncated = res.headers.get('X-Export-Truncated') === 'true'
++
++      const blob = await res.blob()
++      const disposition = res.headers.get('Content-Disposition') ?? ''
++      const named = /filename="([^"]+)"/.exec(disposition)?.[1]
++      const url = URL.createObjectURL(blob)
++      const a = document.createElement('a')
++      a.href = url
++      a.download = named ?? `sqftlab-transactions.${format === 'csv' ? 'csv' : 'xlsx'}`
++      document.body.appendChild(a)
++      a.click()
++      a.remove()
++      URL.revokeObjectURL(url)
++
++      setNotice(
++        truncated
++          ? `Exported ${rows} of ${total} matching rows. Your plan caps exports at ${preview?.rowLimit.toLocaleString() ?? ''} rows.`
++          : `Exported ${rows ?? '0'} row${rows === '1' ? '' : 's'}.`,
++      )
++      void loadHistory()
++    } catch {
++      setError('The download could not be started.')
++    } finally {
++      setBusy(null)
++    }
++  }
++
++  const field = 'w-full rounded-[12px] px-3 py-2.5 text-[13px] outline-none mono'
++  const fieldStyle = { background: 'var(--g3)', border: '1px solid var(--gb)', color: 'var(--ink)' }
++  const label = 'block text-[11px] font-semibold uppercase tracking-wide mb-1.5'
++
++  if (blocked) {
++    return (
++      <div className="max-w-[900px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
++        <div className="g2 p-5 sm:p-6">
++          <div className="flex items-start gap-3">
++            <div className="rounded-[14px] p-2.5 shrink-0" style={{ background: 'var(--warn-bg)' }}>
++              <Lock size={20} style={{ color: 'var(--warn)' }} />
++            </div>
++            <div className="min-w-0">
++              <h1 className="text-lg font-semibold" style={{ color: 'var(--ink)' }}>
++                Data export needs a Pro plan
++              </h1>
++              <p className="text-[13px] mt-1 leading-relaxed" style={{ color: 'var(--ink-4)' }}>
++                {blocked}
++              </p>
++              {onNavigate && (
++                <button
++                  onClick={() => onNavigate('pricing')}
++                  className="mt-4 px-4 py-2 rounded-[10px] text-[13px] font-semibold"
++                  style={{ background: 'var(--b600)', color: '#fff' }}
++                >
++                  See plans
++                </button>
++              )}
++            </div>
++          </div>
++        </div>
++      </div>
++    )
++  }
++
++  return (
++    <div className="max-w-[900px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
++      <div className="flex items-start gap-3 mb-5">
++        <div className="rounded-[14px] p-2.5 shrink-0" style={{ background: 'rgba(37,99,235,0.09)' }}>
++          <Download size={20} style={{ color: 'var(--b600)' }} />
++        </div>
++        <div className="min-w-0">
++          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: 'var(--ink)' }}>
++            Export Transaction Data
++          </h1>
++          <p className="text-[13px] mt-0.5" style={{ color: 'var(--ink-4)' }}>
++            Download DLD transaction records in CSV or Excel format
++          </p>
++        </div>
++      </div>
++
++      <div className="g2 p-4 sm:p-5">
++        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
++          <div className="sm:col-span-2">
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-area">
++              Area / Community
++            </label>
++            <input
++              id="ex-area"
++              value={area}
++              onChange={(e) => setArea(e.target.value)}
++              placeholder="e.g. Dubai Marina"
++              className={field}
++              style={fieldStyle}
++            />
++          </div>
++
++          <div>
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-beds">
++              Bedrooms
++            </label>
++            <select
++              id="ex-beds"
++              value={bedrooms}
++              onChange={(e) => setBedrooms(e.target.value)}
++              className={field}
++              style={fieldStyle}
++            >
++              {BEDROOM_OPTIONS.map((o) => (
++                <option key={o} value={o}>
++                  {o === 'Any' ? 'Any' : o === '5+' ? '5+' : `${o} BR`}
++                </option>
++              ))}
++            </select>
++          </div>
++
++          <div>
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-psfmin">
++              PSF min (AED)
++            </label>
++            <input
++              id="ex-psfmin"
++              type="number"
++              inputMode="numeric"
++              value={psfMin}
++              onChange={(e) => setPsfMin(e.target.value)}
++              placeholder="100"
++              className={field}
++              style={fieldStyle}
++            />
++          </div>
++
++          <div>
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-from">
++              Date from
++            </label>
++            <input
++              id="ex-from"
++              type="date"
++              value={dateFrom}
++              onChange={(e) => setDateFrom(e.target.value)}
++              className={field}
++              style={fieldStyle}
++            />
++          </div>
++
++          <div>
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-to">
++              Date to
++            </label>
++            <input
++              id="ex-to"
++              type="date"
++              value={dateTo}
++              onChange={(e) => setDateTo(e.target.value)}
++              className={field}
++              style={fieldStyle}
++            />
++          </div>
++
++          <div>
++            <label className={label} style={{ color: 'var(--ink-5)' }} htmlFor="ex-psfmax">
++              PSF max (AED)
++            </label>
++            <input
++              id="ex-psfmax"
++              type="number"
++              inputMode="numeric"
++              value={psfMax}
++              onChange={(e) => setPsfMax(e.target.value)}
++              placeholder="No limit"
++              className={field}
++              style={fieldStyle}
++            />
++          </div>
++        </div>
++
++        <div className="mt-5 pt-4" style={{ borderTop: '1px solid var(--gb)' }}>
++          <div className="flex items-baseline justify-between gap-3 flex-wrap">
++            <p className="text-[13px]" style={{ color: 'var(--ink-4)' }}>
++              {previewing && !preview ? (
++                'Counting matching records…'
++              ) : preview ? (
++                <>
++                  Estimated{' '}
++                  <span className="mono font-semibold" style={{ color: 'var(--ink)' }}>
++                    {preview.total.toLocaleString()}
++                  </span>{' '}
++                  record{preview.total === 1 ? '' : 's'}
++                  {preview.truncated && (
++                    <>
++                      {' '}
++                      · this plan exports the{' '}
++                      <span className="mono">{preview.rowLimit.toLocaleString()}</span> most recent
++                    </>
++                  )}
++                </>
++              ) : (
++                'Adjust the filters above'
++              )}
++            </p>
++            {preview && (
++              <p className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
++                {preview.unlimited ? 'Unlimited rows' : `${preview.rowLimit.toLocaleString()} row limit on your plan`}
++              </p>
++            )}
++          </div>
++
++          {error && (
++            <div className="flex items-start gap-2.5 mt-3">
++              <Info size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
++              <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--warn)' }}>
++                {error}
++              </p>
++            </div>
++          )}
++
++          {notice && (
++            <div className="mt-3 rounded-[10px] px-3 py-2.5" style={{ background: 'var(--g4)' }}>
++              <p className="text-[12.5px]" style={{ color: 'var(--ink-3)' }}>
++                {notice}
++              </p>
++            </div>
++          )}
++
++          {preview?.empty && !error && (
++            <div className="flex items-start gap-2.5 mt-3">
++              <Info size={15} className="shrink-0 mt-0.5" style={{ color: 'var(--warn)' }} />
++              <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--ink-4)' }}>
++                No transactions match these filters. The DLD transaction register behind this export
++                holds no rows in this environment, so every filter returns an empty file — the header
++                row is written so the download is still valid.
++              </p>
++            </div>
++          )}
++
++          <div className="flex flex-col sm:flex-row gap-2.5 mt-4">
++            <button
++              onClick={() => download('csv')}
++              disabled={busy !== null}
++              className="flex-1 flex items-center justify-center gap-2 rounded-[10px] px-4 py-2.5 text-[13px] font-semibold transition-opacity"
++              style={{ background: 'var(--b600)', color: '#fff', opacity: busy ? 0.6 : 1 }}
++            >
++              <FileText size={15} />
++              {busy === 'csv' ? 'Preparing…' : 'Download CSV'}
++            </button>
++
++            <button
++              onClick={() => download('excel')}
++              disabled={busy !== null || preview?.excelAllowed === false}
++              className="flex-1 flex items-center justify-center gap-2 rounded-[10px] px-4 py-2.5 text-[13px] font-semibold transition-opacity"
++              style={{
++                background: preview?.excelAllowed === false ? 'var(--g4)' : 'var(--ink)',
++                color: preview?.excelAllowed === false ? 'var(--ink-5)' : '#fff',
++                opacity: busy ? 0.6 : 1,
++                cursor: preview?.excelAllowed === false ? 'not-allowed' : 'pointer',
++              }}
++            >
++              <FileSpreadsheet size={15} />
++              {busy === 'excel' ? 'Preparing…' : 'Download Excel'}
++              {preview?.excelAllowed === false && (
++                <span
++                  className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold tracking-wide"
++                  style={{ background: 'var(--b600)', color: '#fff' }}
++                >
++                  ENTERPRISE
++                </span>
++              )}
++            </button>
++          </div>
++
++          {preview?.excelAllowed === false && (
++            <p className="text-[11.5px] mt-2" style={{ color: 'var(--ink-5)' }}>
++              Excel export requires the Enterprise plan.{' '}
++              {onNavigate && (
++                <button
++                  onClick={() => onNavigate('pricing')}
++                  className="underline font-semibold"
++                  style={{ color: 'var(--b600)' }}
++                >
++                  Upgrade for unlimited rows →
++                </button>
++              )}
++            </p>
++          )}
++        </div>
++      </div>
++
++      {history.length > 0 && (
++        <div className="g2 p-4 sm:p-5 mt-4">
++          <div className="flex items-center gap-2 mb-3">
++            <Clock size={14} style={{ color: 'var(--ink-4)' }} />
++            <h2 className="text-[13px] font-semibold" style={{ color: 'var(--ink)' }}>
++              Recent exports
++            </h2>
++          </div>
++          <div className="space-y-1.5">
++            {history.map((h) => (
++              <div
++                key={h.id}
++                className="flex items-center justify-between gap-3 rounded-[10px] px-3 py-2"
++                style={{ background: 'var(--g4)' }}
++              >
++                <div className="min-w-0">
++                  <span className="text-[12.5px] font-medium uppercase" style={{ color: 'var(--ink-3)' }}>
++                    {h.eventData?.format ?? 'export'}
++                  </span>
++                  {h.eventData?.area && (
++                    <span className="text-[12px] ml-2" style={{ color: 'var(--ink-4)' }}>
++                      {h.eventData.area}
++                    </span>
++                  )}
++                </div>
++                <div className="flex items-center gap-3 shrink-0">
++                  <span className="mono text-[12px]" style={{ color: 'var(--ink-4)' }}>
++                    {h.eventData?.rows ?? 0} rows
++                  </span>
++                  <span className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
++                    {new Date(h.createdAt).toLocaleDateString()}
++                  </span>
++                </div>
++              </div>
++            ))}
++          </div>
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/src/lib/export-data.ts b/src/lib/export-data.ts
+new file mode 100644
+index 0000000..1a35302
+--- /dev/null
++++ b/src/lib/export-data.ts
+@@ -0,0 +1,245 @@
++import { prisma } from './db'
++import { SALE_TXN_TYPES } from './deals'
++import { findCommunityByName } from './community-match'
++
++/**
++ * Shared filter/serialisation logic for the Export Centre (Day 11 Task C).
++ *
++ * Kept out of custom-routes.ts so the parts that are easy to get quietly wrong —
++ * CSV escaping and formula-injection guarding — are plain functions that can be
++ * tested directly rather than only through an HTTP round-trip.
++ */
++
++export type ExportFormat = 'csv' | 'excel'
++
++export type ExportFilters = {
++  area?: string
++  beds?: number
++  dateFrom?: string
++  dateTo?: string
++  psfMin?: number
++  psfMax?: number
++}
++
++/** Rows a sub-100 AED/sqft transfer is a placeholder, not a market price. */
++export const DEFAULT_PSF_FLOOR = 100
++
++/**
++ * Per-tier row ceilings.
++ *
++ * The spec says "unlimited" above Pro. That is not implementable as written —
++ * an unbounded findMany streams the whole table into one string/buffer and the
++ * request dies on memory long before it dies on size. So the top tiers get a
++ * deliberately generous ceiling that no real filtered query reaches, and the
++ * response reports `truncated` honestly when it is hit.
++ */
++export const SAFETY_CEILING = 100_000
++
++export const EXPORT_ROW_LIMITS: Record<string, number> = {
++  pro: 1_000,
++  // `elite` is a real tier in this schema and ranks above pro. The spec's ladder
++  // (pro | enterprise | institutional) omits it, and an omitted tier must not
++  // silently LOSE a paid feature — that is the same omission that demoted the
++  // seeded elite account to guest in Day 1. Elite is placed between pro and
++  // enterprise; change this single line to move it.
++  elite: 5_000,
++  enterprise: SAFETY_CEILING,
++  institutional: SAFETY_CEILING,
++}
++
++/** Excel is the higher-tier format; the spec grants it to Enterprise and up. */
++export const EXCEL_MIN_RANK = 3 // elite and above (see TIER_RANK in custom-routes.ts)
++
++export function rowLimitFor(tier: string): number {
++  return EXPORT_ROW_LIMITS[tier] ?? 0
++}
++
++// ─── CSV ─────────────────────────────────────────────────────────────────────
++
++const NUMERIC = /^-?\d+(\.\d+)?$/
++
++/**
++ * A cell beginning with one of these is treated as a FORMULA by Excel and
++ * Sheets, not as text. Exported data is user- and third-party-supplied (building
++ * and community names come from portal scrape data), so a crafted name like
++ * `=HYPERLINK("http://evil","click")` would execute in the buyer's spreadsheet
++ * when they open the file. This is the export-side half of that class of bug.
++ */
++function needsFormulaGuard(s: string): boolean {
++  // A genuine number must not be quoted into text — `-5` is a value, `-5+cmd`
++  // is not. Only the ambiguous leading `-` needs the numeric exemption.
++  if (NUMERIC.test(s)) return false
++  return /^[=+\-@\t\r]/.test(s)
++}
++
++/** RFC 4180 cell: quote when it contains a delimiter, quote or newline. */
++export function csvCell(value: unknown): string {
++  if (value === null || value === undefined) return ''
++  let s = String(value)
++  if (needsFormulaGuard(s)) s = `'${s}`
++  if (/[",\r\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`
++  return s
++}
++
++export type ExportRow = {
++  transactionDate: Date
++  community: string
++  buildingName: string | null
++  beds: number
++  areaSqft: number
++  pricePerSqft: number
++  priceAed: number
++  propertyType: string
++}
++
++export const EXPORT_HEADER = [
++  'Date',
++  'Community',
++  'Building',
++  'Beds',
++  'Size (sqft)',
++  'PSF (AED)',
++  'Total (AED)',
++  'Type',
++] as const
++
++export function rowToCells(r: ExportRow): (string | number)[] {
++  return [
++    r.transactionDate.toISOString().slice(0, 10),
++    r.community,
++    r.buildingName ?? '',
++    r.beds,
++    Number(r.areaSqft.toFixed(0)),
++    Number(r.pricePerSqft.toFixed(0)),
++    Number(r.priceAed.toFixed(0)),
++    r.propertyType,
++  ]
++}
++
++/** CRLF line endings, as RFC 4180 specifies. Excel accepts LF too, but the
++ *  standard one is what other parsers assume. */
++export function toCsv(rows: ExportRow[]): string {
++  const lines = [EXPORT_HEADER.map(csvCell).join(',')]
++  for (const r of rows) lines.push(rowToCells(r).map(csvCell).join(','))
++  // Trailing newline: without it some readers drop the final record.
++  return lines.join('\r\n') + '\r\n'
++}
++
++// ─── Filtering ───────────────────────────────────────────────────────────────
++
++export type WhereResult =
++  | { ok: true; where: Record<string, unknown> }
++  | { ok: false; reason: 'area_not_found'; area: string }
++
++/**
++ * Build the Prisma `where` for an export/API query.
++ *
++ * Two deliberate differences from the spec's version:
++ *
++ *  - `transactionType: 'Sales'` matches NOTHING in this schema (the stored values
++ *    are `sale` / `off_plan_sale`), so the stock filter silently exports zero rows
++ *    from a full table. SALE_TXN_TYPES is the schema's own list.
++ *  - `mode: 'insensitive'` is Postgres-only and THROWS on SQLite. Area text is
++ *    resolved to a community id in JS instead (see community-match.ts).
++ *
++ * An area that matches no community returns `ok: false`. Falling through to the
++ * unfiltered query would answer a typo ("Downtwon Dubai") with the entire table —
++ * a wrong answer dressed as a successful one.
++ */
++export async function buildTransactionWhere(f: ExportFilters): Promise<WhereResult> {
++  const since = f.dateFrom ? new Date(f.dateFrom) : defaultFrom()
++  const until = f.dateTo ? new Date(f.dateTo) : new Date()
++
++  const where: Record<string, unknown> = {
++    transactionType: { in: [...SALE_TXN_TYPES] },
++    transactionDate: { gte: since, lte: until },
++    pricePerSqft: {
++      gt: f.psfMin ?? DEFAULT_PSF_FLOOR,
++      ...(f.psfMax !== undefined && f.psfMax > 0 ? { lt: f.psfMax } : {}),
++    },
++  }
++  if (f.beds) where.beds = f.beds
++
++  if (f.area && f.area.trim()) {
++    const community = await findCommunityByName(f.area)
++    if (!community) return { ok: false, reason: 'area_not_found', area: f.area }
++    where.communityId = community.id
++  }
++
++  return { ok: true, where }
++}
++
++/** 12 months back — the export window the spec specifies. */
++export function defaultFrom(): Date {
++  const d = new Date()
++  d.setFullYear(d.getFullYear() - 1)
++  return d
++}
++
++const ROW_SELECT = {
++  transactionDate: true,
++  buildingName: true,
++  beds: true,
++  areaSqft: true,
++  pricePerSqft: true,
++  priceAed: true,
++  propertyType: true,
++  community: { select: { nameEn: true } },
++} as const
++
++/** Rows plus the true match count, so the caller can say what was left behind. */
++export async function fetchExportRows(
++  where: Record<string, unknown>,
++  take: number,
++): Promise<{ rows: ExportRow[]; total: number }> {
++  const [raw, total] = await Promise.all([
++    prisma.transaction.findMany({
++      where,
++      select: ROW_SELECT,
++      orderBy: { transactionDate: 'desc' },
++      take,
++    }),
++    prisma.transaction.count({ where }),
++  ])
++
++  const rows: ExportRow[] = raw.map((r) => ({
++    transactionDate: r.transactionDate,
++    community: r.community?.nameEn ?? '',
++    buildingName: r.buildingName,
++    beds: r.beds,
++    areaSqft: r.areaSqft,
++    pricePerSqft: r.pricePerSqft,
++    priceAed: r.priceAed,
++    propertyType: r.propertyType,
++  }))
++
++  return { rows, total }
++}
++
++// ─── Excel ───────────────────────────────────────────────────────────────────
++
++/**
++ * Real .xlsx via SheetJS, imported lazily so the ~900 KB library is only paid
++ * for by the requests that actually produce a workbook.
++ */
++export async function toExcelBuffer(rows: ExportRow[]): Promise<Uint8Array> {
++  const mod = await import('xlsx')
++  const XLSX = (mod as unknown as { default?: typeof mod }).default ?? mod
++
++  const data = rows.map((r) => ({
++    Date: r.transactionDate.toISOString().slice(0, 10),
++    Community: r.community,
++    Building: r.buildingName ?? '',
++    Beds: r.beds,
++    'Size (sqft)': Number(r.areaSqft.toFixed(0)),
++    'PSF (AED)': Number(r.pricePerSqft.toFixed(0)),
++    'Total (AED)': Number(r.priceAed.toFixed(0)),
++    Type: r.propertyType,
++  }))
++
++  const wb = XLSX.utils.book_new()
++  const ws = XLSX.utils.json_to_sheet(data)
++  XLSX.utils.book_append_sheet(wb, ws, 'Transactions')
++  // SheetJS types `write` as returning `any`; the buffer form is a Uint8Array.
++  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Uint8Array
 +}
 -- 
 2.47.3
