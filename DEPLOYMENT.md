@@ -95,6 +95,44 @@ isolated so one dead upstream cannot freeze the whole dataset:
 | `alerts` | Scans deal alerts, notifies pending matches |
 | `intelligence` | RPI, building profiles, supply pipeline, migration, district metrics, market summary |
 
+### Day 19 — news jobs
+
+Two further endpoints, same auth:
+
+| Schedule (UTC) | Endpoint | What it does |
+|---|---|---|
+| `*/30 * * * *` | `GET /api/sqftlab/cron/news-ingest?secret=$CRON_SECRET` | Fetches all news feeds, stores new articles, then runs the model over up to 30 unanalysed items. Writes a `CronRun` row as `news-ingest`. |
+| `0 2 * * *` | `GET /api/sqftlab/cron/daily-digest?secret=$CRON_SECRET` | Builds the one-per-day `IntelligenceSummary`. Writes a `CronRun` row as `daily-digest`. Safe to call repeatedly — it reports `already-generated-today` rather than duplicating. |
+
+```bash
+curl -fsS "$BASE/api/sqftlab/cron/news-ingest?secret=$CRON_SECRET"
+curl -fsS "$BASE/api/sqftlab/cron/daily-digest?secret=$CRON_SECRET"
+```
+
+A full `news-ingest` tick is slow — roughly 12 s when there is nothing new, and up
+to ~75 s when there are 30 articles to analyse, because the model is called once
+per article. Size the scheduler's timeout accordingly; the run is recorded in
+`CronRun` either way, so a client timeout does not lose the result.
+
+`POST /api/sqftlab/news/trigger-ingest` is the manual equivalent and returns `202`
+immediately for exactly this reason (institutional tier).
+
+**Neither job schedules itself.** Nothing in this process holds a timer.
+
+### Rebuilding listing attribution
+
+The scrape is not part of the hourly job — it is long (~12 min) and is triggered
+deliberately:
+
+```bash
+curl -fsS "$BASE/api/sqftlab/scrape?secret=$CRON_SECRET"
+```
+
+`communityId` is in the upsert's update set, so a later crawl re-attributes rows it
+sees again. Rows scraped under the pre-Day-19 `lid` values are the exception: the
+corrected ids never return them, so a full rebuild needs them cleared first — see
+`scripts/resolve-lids.ts` and the Day 19 notes in `MEMORY.md`.
+
 Returns `200` when every step passed, `207` when some failed — so a monitor can tell
 "ran clean" from "ran but the data is only partly fresh".
 

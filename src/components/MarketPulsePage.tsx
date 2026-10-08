@@ -318,6 +318,33 @@ export default function MarketPulsePage({ onBack }: { onBack?: () => void }) {
             )}
           </div>
 
+          {/* Day 19 — teaser for the Market Intelligence feed.
+              A real <a href> rather than an in-app navigate: /news is a published
+              route, so this works on a cold load, survives being crawled, and is
+              linkable. It is also placed on the market stats page on purpose — this
+              is where a reader has just looked at the numbers and is most likely to
+              want the news behind them. */}
+          <div
+            className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-[14px] p-4"
+            style={{ background: 'rgba(37,99,235,0.05)', border: '1px solid rgba(37,99,235,0.15)' }}
+          >
+            <div>
+              <div className="font-semibold" style={{ color: 'var(--ink)' }}>
+                📡 Market Intelligence Feed
+              </div>
+              <div className="text-[13px]" style={{ ...muted, marginTop: 2 }}>
+                Real-time UAE property and financial news, AI-analysed every 30 minutes.
+              </div>
+            </div>
+            <a
+              href="/news"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-[10px] px-4 py-2 font-semibold text-[13px]"
+              style={{ background: '#2563EB', color: '#fff' }}
+            >
+              View Feed →
+            </a>
+          </div>
+
           {data.generatedAt && (
             <p className="text-[11px] mt-4" style={muted}>
               Generated {new Date(data.generatedAt).toLocaleString('en-AE')} · refreshed daily.

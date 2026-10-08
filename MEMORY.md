@@ -1247,3 +1247,91 @@ stream). All now cron-secret gated; verified 401 unauth / 200 authed.
 `0 transactions` (no key) · `7,553 listings` (PropertyFinder, real) · `4,735 DLD reference rows`
 (real, keyless) · `44 communities`. Trends/deals/intelligence correctly render empty rather
 than inventing numbers — that is the argument for the Dubai Pulse key.
+
+---
+
+## Day 19 — Market Intelligence Feed, and three PropertyFinder data defects
+
+### The briefing's premise did not survive contact
+
+**All nine RSS feeds in the brief are dead.** Fetched every one, plus the stated
+fallbacks, before writing any code: khaleejtimes 404 · gulfnews 404 ·
+arabianbusiness 405 · zawya 200-but-HTML-zero-items · thenationalnews 404 ·
+tradearabia 404 · feeds.reuters.com DNS ENOTFOUND · wam.ae 200-not-XML. Shipped
+verbatim, the feature would have ingested zero rows on every tick while its own
+sidebar reported eight healthy sources. Transport is now Google News RSS, which is
+live and returns ~100 items per query carrying the same mastheads the brief names.
+
+`rss-parser` **silently drops `<source>`** unless declared in `customFields`. Without
+it every item fell back to the feed's own label, so the Sources panel showed
+"Dubai — Property & Real Estate" instead of "The National". Rows stored before the
+fix are repaired on the next pass (`repaired` counter).
+
+Also absent here, each forcing a deviation: no `ANTHROPIC_API_KEY` and no
+`@anthropic-ai/sdk` (reused the Day 13 credential + Shogo provider path), no Redis
+(`src/lib/cache.ts`, same TTLs), no `node-cron` (HTTP-triggered jobs, because a
+timer in a process that restarts every deploy silently stops).
+
+Schema is SQLite-and-Postgres portable: no `String[]`, no `@db.Text`, JSON as TEXT.
+Published at **`/news`**, not `/intelligence` — that page id already owns the
+Pro-tier intelligence report.
+
+A `news-ingest` tick is ~12 s idle, ~75 s with 30 articles to analyse. The sandbox
+proxy cuts HTTP at ~12 s, so the request appears to fail while the server finishes
+correctly; the `CronRun` row is the source of truth, and a manual trigger returns
+`202` immediately.
+
+### Three data defects — all pre-existing, all fixed and verified
+
+1. **Every listing link was dead.** `source_url` was hand-built as
+   `/en/property/<id>.html`; PropertyFinder no longer serves that path (`/en/property/`
+   appears 0 times on a live page, `/en/plp/` 42). 5,847 of 7,553 were null, 10/10
+   sampled returned 404. Now from the portal's own `share_url`. Rebuilt: **3,409/3,409
+   have a URL, 10/10 return 200.**
+
+2. **Every scrape target id was wrong.** `l=31` labelled "Dubai Marina" is really
+   **Al Twar**; `l=544` labelled "JVC" is **AG Tower**; all eight Abu Dhabi ids
+   (6663–6671) resolved to nothing and returned the whole ~192k UAE catalogue —
+   which is how Dubai villas were filed under Saadiyat Island. Ids re-derived from
+   PropertyFinder's own `location.path` (segments align with `location.path_name`)
+   and each verified by reading back `pageProps.location.name`.
+   `scripts/resolve-lids.ts` is re-runnable, so this can be re-derived not re-guessed.
+
+3. **Attribution was contaminated.** Fixed at the root two ways: a scope guard that
+   rejects a listing whose own location disagrees with the area being scraped, and
+   **`communityId` added to the upsert's update set** — the upsert key is
+   `externalId`, and every other column was refreshed while this one was frozen, so
+   a mis-filed listing kept its wrong district *forever*. Correcting the ids alone
+   would not have repaired a single existing row.
+
+`l=6665` and `l=6666` returned **byte-identical** result sets — the sharpest single
+proof that the Abu Dhabi filter was doing nothing.
+
+### Verifying data, not just code
+
+`verify-news.ts` green · `verify-cron` 31/31 · `verify-day17-routing` 101/101 ·
+`verify-server-routing` 8/8 (after re-running `scripts/fix-server-order.ts`, which
+`shogo generate` had re-broken — editing `prisma/schema.prisma` is enough to trigger
+it; the `postgenerate` hook does **not** fire for in-editor regeneration) · browser QA
+PASS at the live preview.
+
+**Two traps worth remembering:**
+
+- `DATABASE_URL` in the shell points at `/app/workspace/prisma/dev.db` — an empty
+  workspace-root leftover. The project's real DB is
+  `.../aa4e2d6a.../prisma/dev.db`. Scripts must set `DATABASE_URL` explicitly or they
+  read the wrong database and report "no such table".
+- The sandbox proxy cuts at ~12 s, so a long synchronous endpoint looks like a crash
+  (HTTP 000) while the server completes fine. Check `CronRun` before diagnosing.
+
+### Reconciliation
+
+In the **dev** DB the listings were rebuilt from scratch — rows scraped under the old
+`lid` values can never be re-seen by a correct crawl, so they had to be cleared.
+`3,617` records across `27` districts; every district's canonical URL now names its own
+area (`abu-dhabi-al-reem-island`, `dubai-dubai-marina`). `19` Dubai + `8` Abu Dhabi
+areas; `Al Maryah Island` returned nothing on this run.
+
+**Production still needs the same rebuild**: `www.sqftlab.com` returns 429 to this
+sandbox, so it was never reachable to verify. Clearing production listings and
+running `GET /api/sqftlab/scrape?secret=$CRON_SECRET` once will converge it.
