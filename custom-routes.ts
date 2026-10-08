@@ -9,6 +9,8 @@ import { publish, subscribe, streamStatus, recentMessages } from './src/lib/even
 import { detectDeals, marketPsfByCommunity } from './src/lib/deals'
 import { findCommunityByName, invalidateCommunityCache } from './src/lib/community-match'
 import { runHourlyRefresh, recentCronRuns, HOURLY_JOB } from './src/lib/cron'
+import { startScheduler, schedulerInfo } from './src/lib/scheduler'
+import { ensureAdminUser } from './src/lib/admin-bootstrap'
 import {
   runIntelligencePipeline, computeYieldCurve, migrationSurges, applyScenario,
   computeRealPriceIndex, computeBuildingProfiles, computeSupplyPipeline,
@@ -3054,12 +3056,38 @@ app.get('/sqftlab/market/analytics', async (c) => {
   const totalTx30d = communities.reduce((s, c) => s + c.transactionCount30d, 0)
   const avgPsf = Math.round(communities.reduce((s, c) => s + c.medianAedSqft, 0) / communities.length)
   const avgYield = Math.round(communities.reduce((s, c) => s + c.grossYieldPct, 0) / communities.length * 100) / 100
-  const avgPriceChange30d = Math.round(communities.reduce((s, c) => s + c.priceChange30d, 0) / communities.length * 100) / 100
-  const avgPriceChange1y = Math.round(communities.reduce((s, c) => s + c.priceChange1y, 0) / communities.length * 100) / 100
+  // Momentum requires a transaction register. With no register rows there is no price
+  // movement to report, and ranking districts by a stored 0 would present an arbitrary
+  // order as a market signal — so the rankings come back empty and the averages null,
+  // which the UI shows as unavailable rather than as a flat market.
+  const registerRows = await prisma.transaction.count({
+    where: { transactionType: { in: [...SALE_TXN_TYPES] } },
+  })
+  const hasMomentum = registerRows > 0
 
-  const topGainers = [...communities].sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 10)
-  const topLosers = [...communities].sort((a, b) => a.priceChange30d - b.priceChange30d).slice(0, 10)
-  const highestYield = [...communities].sort((a, b) => b.grossYieldPct - a.grossYieldPct).slice(0, 10)
+  const avgPriceChange30d = hasMomentum
+    ? Math.round((communities.reduce((s, c) => s + c.priceChange30d, 0) / communities.length) * 100) / 100
+    : null
+  const avgPriceChange1y = hasMomentum
+    ? Math.round((communities.reduce((s, c) => s + c.priceChange1y, 0) / communities.length) * 100) / 100
+    : null
+
+  const topGainers = hasMomentum
+    ? [...communities]
+        .filter((c) => c.priceChange30d !== 0)
+        .sort((a, b) => b.priceChange30d - a.priceChange30d)
+        .slice(0, 10)
+    : []
+  const topLosers = hasMomentum
+    ? [...communities]
+        .filter((c) => c.priceChange30d !== 0)
+        .sort((a, b) => a.priceChange30d - b.priceChange30d)
+        .slice(0, 10)
+    : []
+  const highestYield = [...communities]
+    .filter((c) => c.grossYieldPct > 0)
+    .sort((a, b) => b.grossYieldPct - a.grossYieldPct)
+    .slice(0, 10)
   const mostActive = [...communities].sort((a, b) => b.transactionCount30d - a.transactionCount30d).slice(0, 10)
 
   const priceBuckets = [
@@ -3377,18 +3405,39 @@ app.get('/sqftlab/intelligence', async (c) => {
   const avgYield = communities.length
     ? communities.reduce((a, d) => a + d.grossYieldPct, 0) / communities.length
     : 0
-  const avgMomentum = communities.length
-    ? communities.reduce((a, d) => a + d.priceChange30d, 0) / communities.length
-    : 0
+  // Momentum requires a transaction register — the same rule as /market/analytics. With no
+  // register rows the movement figures are absent rather than zero, because zero is a
+  // market reading ("flat") while absence is the truth ("not measured"). `direction`
+  // mattered most: `priceChange30d >= 0` classified all 44 districts as 'inflow' on no
+  // evidence at all.
+  const registerRows = await prisma.transaction.count({
+    where: { transactionType: { in: [...SALE_TXN_TYPES] } },
+  })
+  const hasMomentum = registerRows > 0
+
+  const avgMomentum =
+    hasMomentum && communities.length
+      ? communities.reduce((a, d) => a + d.priceChange30d, 0) / communities.length
+      : null
   const activeListings = listingGroups.reduce((a, g) => a + g._count._all, 0)
 
-  const gainers = [...communities].sort((a, b) => b.priceChange30d - a.priceChange30d)
-  const losers = [...communities].sort((a, b) => a.priceChange30d - b.priceChange30d)
-  const breadth = {
-    gainers: communities.filter((d) => d.priceChange30d > 0.5).length,
-    flat: communities.filter((d) => d.priceChange30d >= -0.5 && d.priceChange30d <= 0.5).length,
-    losers: communities.filter((d) => d.priceChange30d < -0.5).length,
-  }
+  const gainers = hasMomentum
+    ? [...communities]
+        .filter((d) => d.priceChange30d !== 0)
+        .sort((a, b) => b.priceChange30d - a.priceChange30d)
+    : []
+  const losers = hasMomentum
+    ? [...communities]
+        .filter((d) => d.priceChange30d !== 0)
+        .sort((a, b) => a.priceChange30d - b.priceChange30d)
+    : []
+  const breadth = hasMomentum
+    ? {
+        gainers: communities.filter((d) => d.priceChange30d > 0.5).length,
+        flat: communities.filter((d) => d.priceChange30d >= -0.5 && d.priceChange30d <= 0.5).length,
+        losers: communities.filter((d) => d.priceChange30d < -0.5).length,
+      }
+    : null
 
   const scatter = communities.map((d) => ({
     slug: d.slug,
@@ -3396,7 +3445,7 @@ app.get('/sqftlab/intelligence', async (c) => {
     psf: d.medianAedSqft,
     yield: d.grossYieldPct,
     volume: d.transactionCount30d,
-    momentum: d.priceChange30d,
+    momentum: hasMomentum ? d.priceChange30d : null,
   }))
 
   const flow = [...valueByCommunity.entries()]
@@ -3410,7 +3459,9 @@ app.get('/sqftlab/intelligence', async (c) => {
         valueAed: Math.round(value),
         perTxnAed: Math.round(perTxn),
         txnCount: d.transactionCount30d,
-        direction: d.priceChange30d >= 0 ? 'inflow' : 'outflow',
+        // No register means no direction. Defaulting to 'inflow' on a stored 0
+        // labelled every district an inflow on no evidence.
+        direction: hasMomentum ? (d.priceChange30d >= 0 ? 'inflow' : 'outflow') : 'unknown',
       }
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
@@ -3423,7 +3474,7 @@ app.get('/sqftlab/intelligence', async (c) => {
     overview: {
       avgPsf,
       avgYield: Number(avgYield.toFixed(2)),
-      momentumIndex: Number(avgMomentum.toFixed(2)),
+      momentumIndex: avgMomentum === null ? null : Number(avgMomentum.toFixed(2)),
       transactionCount: txns.length,
       totalValueAed: Math.round(totalValue),
       activeListings,
@@ -4837,6 +4888,12 @@ app.get('/sqftlab/cron/status', async (c) => {
     healthy: ageMs != null && ageMs < staleAfterMs,
     staleAfterMs,
     runCount: runs.length,
+    /**
+     * Whether anything is actually driving the schedule. Without this the route answered
+     * "ageMs: null, healthy: false" on a deployment whose cron routes had never been
+     * called, leaving no way to tell "the job is failing" from "nothing ever calls it".
+     */
+    scheduler: schedulerInfo(),
     ...(cronAuthorized(c) ? { runs } : {}),
   })
 })
@@ -8623,6 +8680,24 @@ app.post('/sqftlab/news/trigger-ingest', async (c) => {
 app.all('*', (c) =>
   c.json({ error: `No API route matches ${c.req.method} ${c.req.path}` }, 404),
 )
+
+// ─── Boot tasks ─────────────────────────────────────────────────────────────
+//
+// Started from module scope because this file is imported exactly once, by server.tsx,
+// and that is the only startup hook a regenerated file leaves available. Both tasks are
+// failure-tolerant by construction: a database that is not ready, or an operator who has
+// not set ADMIN_EMAIL, must not stop the API from serving.
+void ensureAdminUser().then((result) => {
+  if (result.action === 'unconfigured') return
+  console.log(
+    `[startup] admin ${result.action}: ${result.email ?? 'n/a'}` +
+      (result.detail ? ` (${result.detail})` : ''),
+  )
+})
+
+// The cron routes have no external caller on this deployment, so the timers live in the
+// process. See src/lib/scheduler.ts for what that assumes.
+startScheduler()
 
 export default app
 

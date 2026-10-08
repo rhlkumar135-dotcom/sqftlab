@@ -52,7 +52,10 @@ export async function refreshCommunityStats(): Promise<{
   listing: number
   none: number
 }> {
-  const [txPsf, txCount, listPsf, listRent] = await Promise.all([
+  const since30d = new Date()
+  since30d.setDate(since30d.getDate() - 30)
+
+  const [txPsf, txCount, txCount30d, listPsf, listRent] = await Promise.all([
     prisma.transaction.groupBy({
       by: ['communityId'],
       where: {
@@ -63,6 +66,13 @@ export async function refreshCommunityStats(): Promise<{
     }),
     prisma.transaction.groupBy({
       by: ['communityId'],
+      _count: { _all: true },
+    }),
+    // Counted, not assumed. `transactionCount30d` was written once by the seed script
+    // and never recomputed, so it advertised activity the register could not support.
+    prisma.transaction.groupBy({
+      by: ['communityId'],
+      where: { transactionDate: { gte: since30d } },
       _count: { _all: true },
     }),
     prisma.listing.groupBy({
@@ -79,6 +89,7 @@ export async function refreshCommunityStats(): Promise<{
 
   const txPsfMap = new Map(txPsf.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
   const txCountMap = new Map(txCount.map((r) => [r.communityId, r._count._all]))
+  const txCount30dMap = new Map(txCount30d.map((r) => [r.communityId, r._count._all]))
   const listPsfMap = new Map(listPsf.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
   const rentMap = new Map(listRent.map((r) => [r.communityId, r._avg.priceAed ?? 0]))
 
@@ -88,6 +99,10 @@ export async function refreshCommunityStats(): Promise<{
       medianAedSqft: true,
       medianAnnualRentAed: true,
       grossYieldPct: true,
+      // Read so the value can be preserved where a register backs it, and cleared where
+      // one does not. Without these in the select the update wrote `undefined`.
+      priceChange30d: true,
+      priceChange1y: true,
     },
   })
 
@@ -109,13 +124,27 @@ export async function refreshCommunityStats(): Promise<{
       else if (lp > 0) listing++
       else none++
 
+      // Momentum can only come from a transaction register. Preserved where register
+      // rows exist, cleared to 0 where they do not — otherwise a value written once by
+      // the seed script survives every refresh and is served as a market movement.
+      const hasRegister = (txCountMap.get(cm.id) ?? 0) > 0
+
       return prisma.community.update({
         where: { id: cm.id },
         data: {
-          medianAedSqft: mp || cm.medianAedSqft,
-          medianAnnualRentAed: mr || cm.medianAnnualRentAed,
-          grossYieldPct: yld || cm.grossYieldPct,
+          // Written as computed, including 0. The previous `|| cm.medianAedSqft`
+          // fallback kept whatever was already in the row whenever live data was
+          // absent, so a seeded median survived every refresh and was served as a
+          // market PSF — five communities advertised a price their own psfSource
+          // labelled 'none'. A district with no data now reads 0, which the UI
+          // renders as DASH rather than as a number.
+          medianAedSqft: mp,
+          medianAnnualRentAed: mr,
+          grossYieldPct: yld,
           totalTransactions: txCountMap.get(cm.id) ?? 0,
+          transactionCount30d: txCount30dMap.get(cm.id) ?? 0,
+          priceChange30d: hasRegister ? cm.priceChange30d : 0,
+          priceChange1y: hasRegister ? cm.priceChange1y : 0,
           // Provenance must describe what actually backs the number. Labelling a
           // community 'listing' when it has neither transactions nor sale
           // listings asserts a source that does not exist. 'none' says so.

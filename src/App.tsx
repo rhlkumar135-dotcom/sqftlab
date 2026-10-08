@@ -131,6 +131,16 @@ const PCT = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
  * no sale listings, so their PSF is legitimately absent — and must read as absent.
  */
 const hasSalePsf = (v: number | null | undefined): boolean => (v ?? 0) > 0
+/**
+ * A price change of 0 is not "flat" — it means we do not have one.
+ *
+ * No transaction register is ingested, so no movement can be computed, and the real
+ * ingest paths write 0 for exactly that reason. Rendering it as "+0.0%" asserts a flat
+ * market, which is a different wrong answer from the fabricated value it replaced.
+ */
+const hasPriceChange = (v: number | null | undefined): boolean => (v ?? 0) !== 0
+/** A yield of 0 means the PSF and the rent were not both real — not a 0% return. */
+const hasYield = (v: number | null | undefined): boolean => (v ?? 0) > 0
 
 // A missing measurement is not a zero. "AED 0/sqft" and "0 txns" read as observed
 // facts, when on this deployment they mean "no government transaction feed is
@@ -769,8 +779,8 @@ const LAYERS: {
   signed?: boolean
 }[] = [
   { id: 'psf', label: 'PSF', value: (c) => c.medianAedSqft, format: (n) => `AED ${Math.round(n).toLocaleString()}` },
-  { id: 'yield', label: 'Yield', value: (c) => c.grossYieldPct, format: (n) => `${n.toFixed(1)}%` },
-  { id: 'momentum', label: 'Momentum', value: (c) => c.priceChange30d, format: (n) => PCT(n), signed: true },
+  { id: 'yield', label: 'Yield', value: (c) => c.grossYieldPct, format: (n) => (hasYield(n) ? `${n.toFixed(1)}%` : DASH) },
+  { id: 'momentum', label: 'Momentum', value: (c) => c.priceChange30d, format: (n) => (hasPriceChange(n) ? PCT(n) : DASH), signed: true },
   { id: 'deals', label: 'Deals', value: (c) => c.dealCount ?? 0, format: (n) => `${n} ${n === 1 ? 'deal' : 'deals'}` },
   { id: 'volume', label: 'Volume', value: (c) => c.totalTransactions, format: (n) => `${n.toLocaleString()} txns` },
 ]
@@ -831,7 +841,7 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
           ? (v < 0 ? 'var(--down)' : t < 0.5 ? 'var(--b500)' : 'var(--up)')
           : t < 0.33 ? 'var(--up)' : t < 0.66 ? 'var(--b500)' : 'var(--b800)'
         const circle = L.circleMarker([c.latitude, c.longitude], { radius: r, fillColor: color, fillOpacity: 0.7, color: '#fff', weight: 2 }).addTo(map)
-        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">${hasSalePsf(c.medianAedSqft) ? `AED ${c.medianAedSqft.toLocaleString()}` : DASH}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
+        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">${hasSalePsf(c.medianAedSqft) ? `AED ${c.medianAedSqft.toLocaleString()}` : DASH}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${hasYield(c.grossYieldPct) ? `${c.grossYieldPct}%` : DASH}</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${hasPriceChange(c.priceChange30d) ? (c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)') : 'var(--ink-4)'}">${hasPriceChange(c.priceChange30d) ? PCT(c.priceChange30d) : DASH}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
         circle.on('click', () => { setSelectedCommunity(c.slug); setPage('community') })
       })
       // Refit to what is actually on screen. The view used to be pinned to a
@@ -928,25 +938,35 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
         <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
           <h3 className="font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--ink)' }}><TrendingUp size={16} style={{ color: 'var(--up)' }} /> Top Gainers (30d)</h3>
           <div className="space-y-2">
-            {[...communities].filter(c => c.medianAedSqft > 0).sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 5).map(c => (
+            {[...communities].filter(c => hasPriceChange(c.priceChange30d)).sort((a, b) => b.priceChange30d - a.priceChange30d).slice(0, 5).map(c => (
               <button key={c.id} onClick={() => { setSelectedCommunity(c.slug); setPage('community') }}
                 className="flex items-center justify-between w-full py-1.5 rounded-lg px-2 transition-colors hover:bg-blue-50/60">
                 <span className="text-sm" style={{ color: 'var(--ink)' }}>{c.nameEn}</span>
                 <span className="text-sm font-semibold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{PCT(c.priceChange30d)}</span>
               </button>
             ))}
+            {/* Ranked on price change, so it can only rank districts that have one. With no
+                transaction register there is nothing to rank, and an empty list is the
+                honest answer — filtering on `medianAedSqft > 0` instead displayed five
+                districts at +0.0%, which reads as a flat market. */}
+            {!communities.some(c => hasPriceChange(c.priceChange30d)) && (
+              <div className="text-sm py-2" style={{ color: 'var(--ink-5)' }}>No movement data — needs a transaction register</div>
+            )}
           </div>
         </div>
         <div className="p-5 rounded-[18px]" style={{ background: 'var(--g2)', border: '1px solid var(--gb)', boxShadow: 'var(--sh-card)' }}>
           <h3 className="font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--ink)' }}><Zap size={16} style={{ color: 'var(--b600)' }} /> Highest Yield</h3>
           <div className="space-y-2">
-            {[...communities].sort((a, b) => b.grossYieldPct - a.grossYieldPct).slice(0, 5).map(c => (
+            {[...communities].sort((a, b) => b.grossYieldPct - a.grossYieldPct).filter(c => hasYield(c.grossYieldPct)).slice(0, 5).map(c => (
               <button key={c.id} onClick={() => { setSelectedCommunity(c.slug); setPage('community') }}
                 className="flex items-center justify-between w-full py-1.5 rounded-lg px-2 transition-colors hover:bg-blue-50/60">
                 <span className="text-sm" style={{ color: 'var(--ink)' }}>{c.nameEn}</span>
-                <span className="text-sm font-semibold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{c.grossYieldPct}%</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{hasYield(c.grossYieldPct) ? `${c.grossYieldPct}%` : DASH}</span>
               </button>
             ))}
+            {!communities.some(c => hasYield(c.grossYieldPct)) && (
+              <div className="text-sm py-2" style={{ color: 'var(--ink-5)' }}>No yield data — needs both sale prices and rents</div>
+            )}
           </div>
         </div>
       </div>
@@ -1028,9 +1048,9 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-4 border-t border-white/10 text-white">
           {[
-            { label: '30-day change', value: PCT(community.priceChange30d), color: community.priceChange30d >= 0 ? '#86EFAC' : '#FCA5A5' },
-            { label: '1-year change', value: PCT(community.priceChange1y), color: community.priceChange1y >= 0 ? '#86EFAC' : '#FCA5A5' },
-            { label: 'Gross yield', value: `${community.grossYieldPct}%`, color: '#86EFAC' },
+            { label: '30-day change', value: hasPriceChange(community.priceChange30d) ? PCT(community.priceChange30d) : DASH, color: hasPriceChange(community.priceChange30d) ? (community.priceChange30d >= 0 ? '#86EFAC' : '#FCA5A5') : 'rgba(255,255,255,0.45)' },
+            { label: '1-year change', value: hasPriceChange(community.priceChange1y) ? PCT(community.priceChange1y) : DASH, color: hasPriceChange(community.priceChange1y) ? (community.priceChange1y >= 0 ? '#86EFAC' : '#FCA5A5') : 'rgba(255,255,255,0.45)' },
+            { label: 'Gross yield', value: hasYield(community.grossYieldPct) ? `${community.grossYieldPct}%` : DASH, color: hasYield(community.grossYieldPct) ? '#86EFAC' : 'rgba(255,255,255,0.45)' },
             { label: 'Txns (30d)', value: String(community.transactionCount30d), color: '#fff' },
             { label: 'Neighbourhood score', value: String(community.neighbourhoodScore), color: '#93C5FD' },
           ].map((s, i) => (
@@ -1130,9 +1150,11 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
             <h3 className="font-semibold mb-3" style={{ color: 'var(--ink)' }}>Rental Yield</h3>
             <div className="space-y-3">
               {[
-                { label: 'Annual Rent (median)', value: format(community.medianAnnualRentAed) },
-                { label: 'Gross Yield', value: `${community.grossYieldPct}%`, color: 'var(--up)' },
-                { label: 'Net Yield (est.)', value: `${(community.grossYieldPct * 0.78).toFixed(1)}%`, color: 'var(--up)' },
+                { label: 'Annual Rent (median)', value: (community.medianAnnualRentAed ?? 0) > 0 ? format(community.medianAnnualRentAed) : DASH },
+                { label: 'Gross Yield', value: hasYield(community.grossYieldPct) ? `${community.grossYieldPct}%` : DASH, color: hasYield(community.grossYieldPct) ? 'var(--up)' : 'var(--ink-5)' },
+                // Derived from the gross, so meaningful only when the gross is. Multiplying
+                // an absent yield by 0.78 would manufacture a precise-looking "estimate".
+                { label: 'Net Yield (est.)', value: hasYield(community.grossYieldPct) ? `${(community.grossYieldPct * 0.78).toFixed(1)}%` : DASH, color: hasYield(community.grossYieldPct) ? 'var(--up)' : 'var(--ink-5)' },
               ].map((r, i) => (
                 <div key={i} className="flex justify-between">
                   <span className="text-sm" style={{ color: 'var(--ink-4)' }}>{r.label}</span>
@@ -1523,11 +1545,11 @@ function Watchlist({ setPage, setSelectedCommunity }: { setPage: (p: Page) => vo
                     <div className="font-semibold" style={{ color: 'var(--ink)' }}>{c.nameEn}</div>
                     <div className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{c.emirate.replace('_', ' ')}</div>
                   </div>
-                  <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)' }}>{PCT(c.priceChange30d)}</div>
+                  <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: hasPriceChange(c.priceChange30d) ? (c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)') : 'var(--ink-4)' }}>{hasPriceChange(c.priceChange30d) ? PCT(c.priceChange30d) : DASH}</div>
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-xs">
                   <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{hasSalePsf(c.medianAedSqft) ? format(c.medianAedSqft) : DASH}</div><div style={{ color: 'var(--ink-5)' }}>AED/sqft</div></div>
-                  <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{c.grossYieldPct}%</div><div style={{ color: 'var(--ink-5)' }}>Yield</div></div>
+                  <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: hasYield(c.grossYieldPct) ? 'var(--up)' : 'var(--ink-4)' }}>{hasYield(c.grossYieldPct) ? `${c.grossYieldPct}%` : DASH}</div><div style={{ color: 'var(--ink-5)' }}>Yield</div></div>
                   <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{c.transactionCount30d}</div><div style={{ color: 'var(--ink-5)' }}>Txns</div></div>
                 </div>
               </button>
@@ -2467,7 +2489,7 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
                   <span className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(c.emirate as string).replace('_', ' ')}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>+{c.priceChange30d as number}%</span>
+                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{hasPriceChange(c.priceChange30d as number) ? `+${c.priceChange30d as number}%` : DASH}</span>
                   <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{hasSalePsf(c.medianAedSqft as number) ? `${format(c.medianAedSqft as number)}/sqft` : 'no sale data'}</span>
                 </div>
               </button>
@@ -2486,7 +2508,7 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
                 className="flex items-center justify-between w-full py-2 rounded-lg px-3 transition-colors hover:bg-blue-50/60">
                 <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
                 <div className="text-right">
-                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{c.grossYieldPct as number}%</span>
+                  <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>{hasYield(c.grossYieldPct as number) ? `${c.grossYieldPct as number}%` : DASH}</span>
                   <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{format(c.medianAnnualRentAed as number)}/yr</span>
                 </div>
               </button>
@@ -2525,7 +2547,7 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
                 <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>{c.nameEn as string}</span>
                 <span className="text-xs capitalize" style={{ color: 'var(--ink-5)' }}>{(c.emirate as string).replace('_', ' ')}</span>
               </div>
-              <span className="text-sm font-bold" style={{ color: 'var(--down)', fontFamily: 'var(--font-data)' }}>{c.priceChange30d as number}%</span>
+              <span className="text-sm font-bold" style={{ color: 'var(--down)', fontFamily: 'var(--font-data)' }}>{hasPriceChange(c.priceChange30d as number) ? `${c.priceChange30d as number}%` : DASH}</span>
             </button>
           ))}
         </div>

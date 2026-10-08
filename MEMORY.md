@@ -1429,3 +1429,62 @@ from magic-link testing.
 **`prisma/dev.db` is gitignored**, so none of these data fixes travel with a push. Production
 (Railway/Postgres) still holds the seeded values and needs the equivalent SQL applied. The
 audit script does ship.
+
+## Day 20 — self-sustaining pipelines, reproducible admin, fabricated momentum removed
+
+### The pipelines now run themselves
+The cron routes (`/sqftlab/cron/hourly`, `/cron/news-ingest`, `/cron/daily-digest`) are HTTP
+endpoints that need an external caller, and this deployment had none — so the documented
+"news refreshes every 30 minutes", "scores recompute at 03:00" and "WhatsApp digest at 08:00"
+had run **zero times**. `src/lib/scheduler.ts` runs the timers in-process: hourly refresh
+every 60m, news ingest every 30m, digest checked hourly at 02:00 UAE. On by default only in
+production (`NODE_ENV=production`), or with `ENABLE_INPROCESS_CRON=true`; `DISABLE_INPROCESS_CRON=true`
+overrides. Started from `custom-routes.ts` module scope — `server.tsx` is regenerated, so it
+is the only startup hook that survives.
+- **Single-instance assumption.** Every replica would run these timers. Needs an external
+  scheduler or a leader lock if this ever scales beyond one instance — otherwise the digest
+  goes out once per replica.
+- `/sqftlab/cron/status` now returns a `scheduler` block. Before it answered
+  `healthy:false, ageMs:null` on a deployment whose jobs had never been called, giving no way
+  to tell "the job is failing" from "nothing ever calls it".
+- Verified by `scripts/verify-scheduler.ts` (**22/22**), which proves the hourly refresh
+  actually fires with no external caller (5.2s, 7 ok / 5 skipped for unconfigured sources).
+
+### Admin access is reproducible
+`src/lib/admin-bootstrap.ts` ensures the operator account on boot from `ADMIN_EMAIL` +
+`ADMIN_PASSWORD`, so it survives a fresh database instead of being a fact about one manual
+session. It **does not** reset the password of an account that already exists — a silent
+reset on boot would invalidate a working credential on every deploy — and it does not invent
+an account when the variables are unset. Tested: create, idempotent second boot, promote an
+existing non-admin without touching its password, unconfigured no-op.
+
+### The fabricated momentum is gone (root cause, not just the values)
+Zeroing the stored values alone would not have held: `refreshCommunityStats` wrote
+`medianAedSqft: mp || cm.medianAedSqft`, and that `||` fallback kept the previous value
+whenever live data was absent — which is exactly how seeded numbers survived every refresh.
+Now the computed value is written **including 0**, momentum is cleared where no register
+backs it, and `transactionCount30d` is counted instead of assumed. `priceChange30d`/`1y` also
+had to be added to the `findMany` select, or the update wrote `undefined`.
+- Server: both analytics endpoints gate momentum on register rows — rankings empty, averages
+  `null`, and `flow.direction` `'unknown'`. That last one mattered most: `priceChange30d >= 0`
+  had classified **all 44** districts as `'inflow'` on no evidence.
+- UI: `hasPriceChange`/`hasYield` helpers beside the existing `DASH`/`hasSalePsf`, applied at
+  10 render sites, plus empty states on the gainer/loser/yield lists. A zero price change
+  renders as `—`, not `+0.0%`, because "flat" is a market reading and "not measured" is the
+  truth.
+- `market_summary` (2 rows computed from 6 transactions that no longer exist, reporting an
+  18% rental yield) deleted. `district_metrics` is empty so the pipeline will not recreate
+  one, and `/market-summary` now returns its designed `insufficientData` state.
+
+### The one seeded row left standing, deliberately
+`demo@sqftlab.com` — `DEMO_ACCOUNT_AUTOLOGIN` signs every anonymous visitor into it. **Kept**:
+deleting it leaves anonymous visitors with no session at all. Its placeholder phone
+`+971501234567` was cleared — nothing reads `users.phone` (the WhatsApp digest keys on
+`whatsappPhone`), so it was pure fabrication on a real row. `verify-live-data` still fails on
+this row and should: it *is* seeded. Set `DEMO_ACCOUNT_AUTOLOGIN=false` if guests should sign
+in instead of sharing a showcase portfolio.
+
+### Regression set
+`verify-day13` 112/112 · `verify-day17-routing` 101/101 · `verify-server-routing` 8/8 ·
+`verify-scheduler` 22/22 · `verify-live-data` 16/1 (the demo row) · tsc 0 errors outside
+pre-existing `src/generated/` noise.
