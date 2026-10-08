@@ -1385,3 +1385,47 @@ the 2,126 UAE-wide average the model cited) — nothing invented.
 the Market Pulse page are *also* built on `prisma.transaction`, so they render zeros with a
 "register is empty" note. Grounding them in listings was deliberately **not** part of this
 change — the request was about the assistant. Do not treat the pulse as working.
+
+## Live-data audit — the deployment is NOT all live data
+
+`scripts/verify-live-data.ts` walks every table and text column for fabricated markers, then
+checks provenance (listings → real portal, news → real publishers, macro → names a source,
+derived tables supported by their inputs). Result: **15 passed, 3 failed.**
+
+Each marker carries a `verify` regex because LIKE alone is too blunt: it flags the real
+district "Hammock Park" for `mock` and a base64 path ending `...TBD0RRZDP55M` for `tbd`.
+A check that cries wolf on real data gets switched off, so precision is the point.
+
+**Seeded values still served as market facts (the real finding):**
+
+- **39 of 44 communities report a non-zero price change** (Dubai Marina +2.3%/30d, +18.5%/1y)
+  while `transactions` holds **0 rows** — no price movement is computable from anything. The
+  values are the constants in `scripts/seed-sqftlab.ts`, and `refreshCommunityStats` never
+  writes `priceChange30d`/`priceChange1y`. Note `src/lib/dld.ts:164` and `src/lib/adrec.ts:161`
+  write **0** for these fields precisely because no register exists yet. They are displayed as
+  "30-day change" / "1-year change" on the community screens, the map tooltip and Top movers.
+  NOT zeroed: unlike PSF, the UI has no "unknown" rendering for a price change — `PCT(0)`
+  would print "+0.0%" and read as a flat market, which is a different wrong answer. Needs a
+  DASH guard alongside the data change (11 sites reference these fields in `src/`).
+- **`market_summary` claims 6 transactions** from the now-empty register, and it IS read —
+  `custom-routes.ts:4775, 5032, 5066, 5218` and `cron.ts:276` all serve the latest row.
+- **`refreshCommunityStats` writes `medianAedSqft: mp || cm.medianAedSqft`.** The `||`
+  fallback keeps the seeded median when live data is absent, which is how five communities
+  came to advertise a PSF whose own `psf_source` said `none`: JBR 3089, Arabian Ranches 1786,
+  Jumeirah 7700, Umm Suqeim 3125, Al Maryah Island 2727 — all with zero listings. **Fixed**
+  (set to 0; the UI already renders that as DASH / "no sale data"). The `||` pattern is worth
+  fixing at the source too.
+
+**Not mock data — a deliberate feature, flagged not removed:** `demo@sqftlab.com`
+("Demo Investor", placeholder phone +971501234567) is seeded by `scripts/seed-sqftlab.ts`,
+and `DEMO_ACCOUNT_AUTOLOGIN` (default on, `custom-routes.ts:3727`) signs **every anonymous
+visitor** into it. Deleting it would leave anonymous visitors with no session at all. Its
+portfolio ("Marina Tower Apt 1204") is hand-authored showcase data. Whether anonymous
+visitors should be able to see it is a product call, not a cleanup.
+
+**Also removed:** one expired `verification_tokens` row for `qa-check@example.com`, left over
+from magic-link testing.
+
+**`prisma/dev.db` is gitignored**, so none of these data fixes travel with a push. Production
+(Railway/Postgres) still holds the seeded values and needs the equivalent SQL applied. The
+audit script does ship.
