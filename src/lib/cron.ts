@@ -11,6 +11,7 @@ import { syncDldReference } from './dld-open'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
 import { revalueAllHoldings } from './portfolio-jobs'
 import { sendWhatsappDigests } from './whatsapp-jobs'
+import { captureMarketSnapshot } from './market-history'
 
 export const HOURLY_JOB = 'hourly-refresh'
 
@@ -244,6 +245,13 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
   await step('communityStats', async () => {
     const r = await refreshCommunityStats()
     return `${r.communities} communities (dld=${r.dld}, listing=${r.listing}, none=${r.none})`
+  })
+
+  // Runs immediately after communityStats, and depends on it: the snapshot copies the
+  // columns that step just wrote, so capturing first would record stale values.
+  await step('marketSnapshot', async () => {
+    const r = await captureMarketSnapshot()
+    return `${r.communities} districts captured for ${r.period}`
   })
 
   await step('deals', async () => {

@@ -159,6 +159,7 @@ model Community {
   alerts         Alert[]
   scores         InvestmentScore[]
   ejariContracts EjariContract[]
+  marketSnapshots MarketSnapshot[]
 
   @@map("communities")
 }
@@ -1126,4 +1127,54 @@ model IntelligenceSummary {
 
   @@index([date])
   @@map("intelligence_summaries")
+}
+
+/// Append-only, one row per community per calendar day: the point-in-time market
+/// metrics as they stood at that day's last refresh.
+///
+/// Why this exists. `communities.median_aed_sqft` and its siblings are mutable
+/// columns — every refresh overwrites them, so yesterday's price is destroyed the
+/// moment today's is written and no trend can ever be computed from them. The same
+/// loss happens one level down: `listings.scraped_at` advances on each upsert, so a
+/// listing carries only its most recent observation, and rows older than 30 days are
+/// deleted outright by the scrape job. The net effect was that the platform had no
+/// property-market history at all — every number was a single point that the next
+/// refresh erased.
+///
+/// The write rule is what makes this both current and historical: today's row is
+/// updated in place on every refresh (so "latest" always means the newest data), and
+/// every earlier row is never touched again (so history only ever grows).
+///
+/// Not to be confused with `DistrictMetrics`, which is keyed by month and fed from
+/// the government transaction register. That one stays empty until the DLD/ADREC
+/// keys are configured; this one is fed from live listings and therefore works today,
+/// with `psfSource` recording which of the two actually backed the number.
+model MarketSnapshot {
+  id            String @id @default(cuid())
+  communityId   String @map("community_id")
+  /// UAE calendar day (UTC+4) as YYYY-MM-DD, so the unique key groups by local day
+  /// rather than by a UTC instant that would split one Dubai evening across two rows.
+  period        String
+  /// Denormalised so the market-wide series can be split by emirate without a join.
+  emirate       String
+
+  medianPsf     Float  @map("median_psf")
+  medianRentAed Float  @default(0) @map("median_rent_aed")
+  grossYieldPct Float  @default(0) @map("gross_yield_pct")
+  /// What actually backed `medianPsf` that day: dld | listing | none.
+  psfSource     String @map("psf_source")
+
+  /// Live inventory that day, split by purpose. Recorded because the scrape job
+  /// deletes listings after 30 days — without this, supply history is unrecoverable.
+  saleCount     Int    @default(0) @map("sale_count")
+  rentCount     Int    @default(0) @map("rent_count")
+
+  capturedAt    DateTime @default(now()) @map("captured_at")
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, period])
+  @@index([period])
+  @@index([communityId, period])
+  @@map("market_snapshots")
 }

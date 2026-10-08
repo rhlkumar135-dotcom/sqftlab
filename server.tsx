@@ -35,6 +35,16 @@ const tools = createToolsHandlers({})
 app.post('/api/tools/execute', (c) => tools.execute(c.req.raw))
 app.get('/api/tools/schemas', (c) => tools.list(c.req.raw))
 
+// Serve static files in production
+app.use('/*', serveStatic({ root: './dist' }))
+app.get('*', serveStatic({ path: './dist/index.html' }))
+
+const port = Number(process.env.PORT) || 3001
+console.log(`🚀 Server running on http://localhost:${port}`)
+
+Bun.serve({ port, fetch: app.fetch })
+
+
 // SHOGO:CUSTOM-START asset-routing
 // MUST be registered BEFORE the static handlers below. Hono dispatches in
 // registration order, so anything mounted after the SPA catch-all is
@@ -106,13 +116,3 @@ app.use('*', async (c, next) => {
   }
 })
 // SHOGO:CUSTOM-END
-
-// Serve static files in production
-app.use('/*', serveStatic({ root: './dist' }))
-app.get('*', serveStatic({ path: './dist/index.html' }))
-
-const port = Number(process.env.PORT) || 3001
-console.log(`🚀 Server running on http://localhost:${port}`)
-
-Bun.serve({ port, fetch: app.fetch })
-

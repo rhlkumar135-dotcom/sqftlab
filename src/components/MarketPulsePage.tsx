@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Activity, ArrowLeft, Building2, TrendingUp, Trophy } from 'lucide-react'
 import { usePageMeta } from '@/lib/seo'
+import MarketHistoryPanel from './MarketHistoryPanel'
 
 /**
  * Public Market Pulse (Day 13 Task D).
@@ -204,6 +205,13 @@ export default function MarketPulsePage({ onBack }: { onBack?: () => void }) {
                 {hasData ? `AED ${compactAed(market?.totalVolumeAed)}` : '—'}
               </div>
             </div>
+          </div>
+
+          {/* What has actually been recorded, and how fresh it is. Sits directly under the
+              point-in-time figures because that is the contrast it exists to make: the
+              numbers above are overwritten on every refresh, these are what survived. */}
+          <div className="mb-4">
+            <MarketHistoryPanel />
           </div>
 
           {/* Most active communities */}

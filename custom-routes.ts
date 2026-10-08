@@ -31,6 +31,7 @@ import {
   subscriptionPeriodEnd, customerIdOf, normalizeStripeStatus, PAID_PLANS, BILLING_PERIODS,
 } from './src/lib/stripe'
 import { dldConfigured } from './src/lib/dld'
+import { loadMarketHistory, captureMarketSnapshot, uaeDay } from './src/lib/market-history'
 import { dldReferenceCounts } from './src/lib/dld-open'
 import { adrecConfigured } from './src/lib/adrec'
 import { hashPassword, verifyPassword, passwordProblem, isValidEmail } from './src/lib/passwords'
@@ -892,6 +893,76 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
           signInUrl: '/auth/signin',
         }
       : {}),
+  })
+})
+
+// ─── Market History ──────────────────────────────────────────────────────────
+
+// GET /sqftlab/market/history — the recorded history, next to the newest refresh.
+//
+// Returns two series that are deliberately kept apart, because they are not
+// interchangeable and presenting either as the other would be a lie:
+//
+//   · `daily`  — one point per recorded day: whole-market median PSF, live inventory
+//                counts, and how many districts were backed by the government register
+//                that day. This series *starts* the day the snapshot job was enabled;
+//                before that no history exists, and `historyStartsOn` says so rather
+//                than back-filling a shape that was never observed.
+//
+//   · `supply` — monthly, derived from the portal's own "first listed" timestamps,
+//                which reach back much further. The counts are genuine supply history.
+//                The PSF per bucket is a *cohort* figure — the asking price today of
+//                listings that first appeared that month — so `supplyBasis` labels it
+//                as such and callers must not plot it as a market price series.
+app.get('/sqftlab/market/history', async (c) => {
+  const rawDays = Number(c.req.query('days') ?? 90)
+  const emirateParam = c.req.query('emirate')
+  const history = await loadMarketHistory({
+    days: Number.isFinite(rawDays) ? rawDays : 90,
+    emirate: emirateParam && emirateParam !== 'all' ? emirateParam : undefined,
+  })
+
+  // Read live rather than from the snapshot, so "latest" can never be older than the
+  // columns the rest of the site is serving right now.
+  const newest = await prisma.marketSnapshot.findFirst({
+    orderBy: { capturedAt: 'desc' },
+    select: { capturedAt: true, period: true },
+  })
+
+  const [districts, listed] = await Promise.all([
+    prisma.community.count(),
+    prisma.listing.count(),
+  ])
+
+  return c.json({
+    asOf: history.asOf,
+    latest: {
+      // When the data behind these numbers was last written, which is the question a
+      // reader actually has. A timestamp is the only way to tell "current" from "stale".
+      refreshedAt: newest?.capturedAt ?? null,
+      period: newest?.period ?? uaeDay(),
+      districts,
+      listings: listed,
+      // Nothing captured yet (fresh database, job not yet run) — say so plainly.
+      snapshotPending: newest === null,
+    },
+    coverage: {
+      historyStartsOn: history.firstPeriod,
+      latestRecordedOn: history.lastPeriod,
+      daysRecorded: history.daysRecorded,
+      districtsPerDay: history.daily.length > 0 ? history.daily[history.daily.length - 1].districts : 0,
+    },
+    daily: history.daily,
+    supply: history.supply,
+    supplyBasis: 'cohort_listed_month',
+    notes: {
+      daily:
+        'Inventory-weighted mean of district medians, weighted by live sale listings. Starts when snapshotting was enabled.',
+      supply:
+        'Listings grouped by the portal\'s first-listed month. Counts are supply history. The PSF shown is the CURRENT asking price of that cohort, not the market price at the time — do not plot it as a price series.',
+      psfSource:
+        'listing = asking prices from live listings; dld = government transaction register. Register data requires DUBAI_PULSE_API_KEY (or ADREC_API_URL/ADREC_API_KEY).',
+    },
   })
 })
 
