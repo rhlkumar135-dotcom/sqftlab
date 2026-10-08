@@ -27,11 +27,11 @@ const {
   buildLiveContext,
   aiDailyLimitFor,
   aiTierIsUnlimited,
-  resolveAiCredential,
   AI_MAX_MESSAGE_CHARS,
   AI_CONTEXT_WINDOW_MESSAGES,
   AI_DAILY_LIMITS,
 } = await import('../src/lib/ai-chat')
+const { resolveGatewayToken, selectProvider } = await import('../src/lib/llm-providers')
 
 let passed = 0
 let failed = 0
@@ -203,20 +203,45 @@ console.log('\n── pure rules: the prompt must ground answers in live data �
 
 console.log('\n── pure rules: credential resolution is honest about absence ──')
 {
-  check('no env at all resolves to null (route answers 503)', resolveAiCredential({} as NodeJS.ProcessEnv) === null)
+  // Resolution now lives in llm-providers.ts, and a missing credential no longer means
+  // "503": the assistant answers from the database instead. The narrower invariant still
+  // holds and is still worth asserting — an absent credential never becomes a token.
+  check('no env at all resolves to no gateway token', resolveGatewayToken({} as NodeJS.ProcessEnv) === null)
   check(
     'a non-shogo_sk key is not accepted as an API key',
-    resolveAiCredential({ SHOGO_API_KEY: 'not-a-key' } as NodeJS.ProcessEnv) === null,
+    resolveGatewayToken({ SHOGO_API_KEY: 'not-a-key' } as NodeJS.ProcessEnv) === null,
   )
   check(
     'malformed AI_PROXY_TOKENS falls through rather than throwing',
-    resolveAiCredential({ AI_PROXY_TOKENS: '{not json' } as NodeJS.ProcessEnv) === null,
+    resolveGatewayToken({ AI_PROXY_TOKENS: '{not json' } as NodeJS.ProcessEnv) === null,
   )
-  const okProxy = resolveAiCredential({
-    PROJECT_ID: 'p1',
-    AI_PROXY_TOKENS: JSON.stringify({ p1: 'jwt-for-p1', p2: 'jwt-for-p2' }),
-  } as NodeJS.ProcessEnv)
-  check('the PROJECT_ID entry is preferred', okProxy?.token === 'jwt-for-p1', okProxy?.source)
+  check(
+    'the PROJECT_ID entry is preferred',
+    resolveGatewayToken({
+      PROJECT_ID: 'p1',
+      AI_PROXY_TOKENS: JSON.stringify({ p1: 'jwt-for-p1', p2: 'jwt-for-p2' }),
+    } as NodeJS.ProcessEnv) === 'jwt-for-p1',
+  )
+  check(
+    'with nothing configured the assistant goes offline rather than unavailable',
+    selectProvider({ AI_PROVIDER: 'auto' } as NodeJS.ProcessEnv) === null,
+  )
+  check(
+    'the billed gateway is not reached while it is disallowed',
+    selectProvider({
+      PROJECT_ID: 'p1',
+      AI_PROXY_TOKENS: JSON.stringify({ p1: 'jwt' }),
+      AI_ALLOW_GATEWAY_FALLBACK: 'false',
+    } as NodeJS.ProcessEnv) === null,
+  )
+  check(
+    'a free provider outranks the billed gateway',
+    selectProvider({
+      GROQ_API_KEY: 'gsk_x',
+      PROJECT_ID: 'p1',
+      AI_PROXY_TOKENS: JSON.stringify({ p1: 'jwt' }),
+    } as NodeJS.ProcessEnv)?.id === 'groq',
+  )
 }
 
 console.log('\n── live: request contract ──')
@@ -279,17 +304,27 @@ console.log('\n── live: a delivered answer is counted, a failed one is not �
   const sent = await req('/sqftlab/ai/chat', { method: 'POST', body: { message: 'What does price per sqft mean?' } })
   const after = await prisma.aiChatMessage.count({ where: { sessionId: ANON_KEY } })
 
-  // The transport is an external dependency, so the outcome is one of three documented
-  // contracts. Whichever it is, the invariant below must hold — that is the assertion.
+  // The route can no longer answer 502 or 503: answerMarketQuestion degrades internally —
+  // repair, then the computed answer — rather than failing. A 200 is the only success path,
+  // which is the point of the change.
   check(
-    'the send answers with a documented status',
-    [200, 502, 503].includes(sent.status),
+    'the send answers 200 — no "unconfigured" or provider-failure status exists any more',
+    sent.status === 200,
     { status: sent.status, error: sent.body.error },
   )
 
   if (sent.status === 200) {
     check('a 200 carries a non-empty reply', typeof sent.body.reply === 'string' && sent.body.reply.length > 0)
-    check('a 200 reports the model used', typeof sent.body.model === 'string', sent.body.model)
+    check(
+      'a 200 reports which engine answered',
+      sent.body.mode === 'deterministic' || typeof sent.body.model === 'string',
+      { mode: sent.body.mode, model: sent.body.model },
+    )
+    check(
+      'a 200 states whether every figure was verified against the data',
+      typeof sent.body.verified === 'boolean',
+      sent.body.verified,
+    )
     check('a 200 declares whether the answer is register-backed', typeof sent.body.dataBacked === 'boolean', sent.body.dataBacked)
     check('a 200 reports remaining quota', sent.body.remaining === 10 - 1, sent.body.remaining)
     check('the user turn and the answer are stored together', after - before === 2, after - before)
@@ -300,11 +335,8 @@ console.log('\n── live: a delivered answer is counted, a failed one is not �
       select: { tokensUsed: true },
     })
     check('the assistant row carries a token count', typeof tokens?.tokensUsed === 'number', tokens?.tokensUsed)
-  } else if (sent.status === 503) {
-    check('a 503 is reported as unconfigured, not as a fake reply', sent.body.configured === false, sent.body.configured)
-    check('an unconfigured answer writes no turns', after - before === 0, after - before)
   } else {
-    check('a 502 explains the failure', typeof sent.body.detail === 'string', sent.body.detail)
+    check('a non-200 explains the failure', typeof sent.body.detail === 'string', sent.body.detail)
     // Quota must NOT be consumed by a call that produced no answer.
     check('a failed call does not charge the quota', after - before === 0, after - before)
   }
@@ -478,11 +510,24 @@ console.log('\n── client wiring ──')
     'the pulse route carries no tier gate',
     !/requireTier/.test(routes.slice(Math.max(0, pulseAt - 600), pulseAt)),
   )
-  // A failed call must not charge the quota — asserted structurally because the branch
-  // is unreachable without a broken provider.
+  // The old contract had a provider-failure branch that returned 502 before the rows were
+  // written. That branch is gone on purpose: answerMarketQuestion degrades internally
+  // (repair, then the computed answer) and never throws, so every validated request is
+  // answered and counted. The invariant is now the ABSENCE of that branch — if one
+  // reappears, a provider outage would consume a quota slot without delivering a reply.
   const chatBlock = routes.slice(chatAt, historyAt)
-  const catchIdx = chatBlock.indexOf("code: 'ai_error'")
-  check('the provider-failure branch returns before the rows are written', catchIdx > -1 && catchIdx < chatBlock.indexOf('createMany'))
+  // Comments are stripped first: the block explains why the 503 branch was removed, and
+  // scanning prose for status codes would fail on the explanation of their absence.
+  const chatCode = chatBlock.replace(/^\s*\/\/.*$/gm, '')
+  check(
+    'the chat route has no provider-failure branch that would skip the rows',
+    !chatCode.includes("code: 'ai_error'") && !/\b50[23]\b/.test(chatCode),
+  )
+  check(
+    'the rows are written only after an answer exists',
+    chatBlock.indexOf('answerMarketQuestion') > -1 &&
+      chatBlock.indexOf('answerMarketQuestion') < chatBlock.indexOf('createMany'),
+  )
 }
 
 console.log(`\n${'─'.repeat(60)}`)

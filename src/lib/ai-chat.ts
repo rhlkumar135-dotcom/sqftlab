@@ -28,14 +28,17 @@ import {
  * 1. MODEL TRANSPORT. The brief calls
  *    `new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })`. There is no
  *    ANTHROPIC_API_KEY in this environment and `@anthropic-ai/sdk` is not a
- *    dependency, so that object could only throw on construction. The pod does carry
- *    an AI proxy credential — `AI_PROXY_TOKENS`, a JSON map of projectId -> ai-proxy
- *    JWT — which fronts Claude and answers `claude-haiku-4-5` with HTTP 200. That is
- *    what this module uses, through the Shogo AI SDK provider.
+ *    dependency, so that object could only throw on construction.
  *
- *    Note the pod's own `RUNTIME_AUTH_SECRET` does NOT work here: it is a *workspace*
- *    token (`wrt_v1_…`) and the proxy rejects it with `invalid_api_key`. The working
- *    credential is the project-scoped JWT in `AI_PROXY_TOKENS`.
+ *    Transport now lives in `llm-providers.ts`, which fronts free tiers first (Groq,
+ *    OpenRouter, Gemini, a local runtime), then the platform AI gateway, then nothing.
+ *    Two facts about the gateway are worth keeping, because both were established by
+ *    probe rather than assumption: it serves only billed frontier models — there is no
+ *    free model on it — and the pod's own `RUNTIME_AUTH_SECRET` is rejected by it
+ *    (`wrt_v1_…`, `invalid_api_key`), so only the project-scoped `AI_PROXY_TOKENS` JWT
+ *    works. When no provider is configured this module does not fail: `ai-grounding.ts`
+ *    answers from the database. A chat box that invents answers is worse than one that
+ *    computes them, and worse still than one that says what it does not have.
  *
  * 2. QUOTA KEY. The brief keys guests on the `X-Session-Id` request header. A header is
  *    caller-supplied, so a caller can rotate it per request and the "10 messages/day"
@@ -52,8 +55,10 @@ import {
  *    not exist. `buildMarketContext` reports absence as absence instead.
  */
 
-/** Fast and cheap, which is what a chat surface wants. The proxy resolves this alias. */
-export const AI_MODEL = 'claude-haiku-4-5'
+/**
+ * Ceiling on a reply. Which model serves it is decided in llm-providers.ts, so this is the
+ * only output knob the prompt layer owns.
+ */
 export const AI_MAX_OUTPUT_TOKENS = 800
 /** Turns of prior conversation replayed to the model. */
 export const AI_CONTEXT_WINDOW_MESSAGES = 10
@@ -98,42 +103,10 @@ export function aiTierIsUnlimited(tier: string | undefined): boolean {
   return UNLIMITED_TIERS.has(tier ?? '')
 }
 
-export interface AiCredential {
-  token: string
-  /** Where the token came from, for diagnostics. Never the token itself. */
-  source: 'ai_proxy' | 'shogo_key'
-}
-
-/**
- * Find a usable credential for the model call, or null.
- *
- * Null is a legitimate state, not an error: the route turns it into a clear 503 rather
- * than a fabricated reply. `/health`-style honesty — a chat box that invents answers is
- * worse than one that says the assistant is not configured.
- */
-export function resolveAiCredential(env: NodeJS.ProcessEnv = process.env): AiCredential | null {
-  const raw = env.AI_PROXY_TOKENS
-  if (raw) {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const entries = parsed as Record<string, string>
-        const preferred = env.PROJECT_ID ? entries[env.PROJECT_ID] : undefined
-        const token = preferred ?? Object.values(entries)[0]
-        if (typeof token === 'string' && token.length > 0) {
-          return { token, source: 'ai_proxy' }
-        }
-      }
-    } catch {
-      // A malformed map is worth falling through from, not crashing on.
-    }
-  }
-  const key = env.SHOGO_API_KEY
-  if (typeof key === 'string' && key.startsWith('shogo_sk_')) {
-    return { token: key, source: 'shogo_key' }
-  }
-  return null
-}
+// Credential resolution lives in llm-providers.ts (`resolveGatewayToken`). It used to be
+// duplicated here, which meant two parsers of the same environment could disagree about
+// which token the deployment was using — and the FAQ for "why is it offline" had two
+// possible answers. One parser, one answer.
 
 export interface AiTurn {
   role: 'user' | 'assistant'
