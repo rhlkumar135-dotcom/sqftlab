@@ -1536,3 +1536,65 @@ Fix is the same switch: `DEMO_ACCOUNT_AUTOLOGIN=false`.
 
 ### Regression set (additions)
 `verify-ai-grounding` 57/57 · tsc 105 (unchanged baseline, all in `src/generated/`).
+
+## Container clock is ~48h behind real time (2026-10-10) — read this before any time-based work
+
+`scripts/check-clock.ts` measures it against three external `Date` headers and exits non-zero
+past a 5-minute tolerance. On 2026-10-10 it reported **48.66 hours behind**, confirmed
+independently by google.com, propertyfinder.ae and cloudflare.com (all said 10 Oct while the
+container said 8 Oct). The container's `date`, `bun`'s `Date.now()` and SQLite's
+`datetime('now')` all agree with each other and are all wrong together.
+
+**Why this is written down.** It produced two false findings in one session before the cause
+was found, and both looked exactly like data corruption:
+
+- ~5% of listings seemed "listed in the future", and 20/255 news items likewise.
+  The source dates were **correct**; our clock was lagging.
+- Every recent news headline rendered as "just now", because a relative-time formatter sees
+  a negative age for a timestamp that is genuinely current.
+
+**Never fix this by rewriting source data.** `listed_at` comes from the portal and `pubDate`
+from the feed; `scraped_at` comes from us. Clamping a source date to our clock destroys real
+data whenever our clock lags. I did exactly that once — clamped 161 listings to their (wrong)
+`scraped_at` — before finding the cause. `src/lib/listing-dates.ts` now only replaces a value
+that is *unusable* (absent, null, unparseable, or >30 days ahead, which is a parse fault, not
+drift), and `resolveListedAt` keeps a modestly-future date as the source stated it.
+`listedAt` is also refreshed on upsert now, so a bad date self-heals on the next crawl instead
+of being permanent (that column used to be create-only).
+
+Before trusting any "last N days" output, the 30-day news window, market-history months, or a
+relative timestamp: run `check-clock.ts` first, and check it in the target environment, since
+production (Railway) could not be probed from here.
+
+## Statistics: means were stored under `median` names — fixed
+
+`refreshCommunityStats` (src/lib/cron.ts) computed `medianAedSqft` and `medianAnnualRentAed`
+with Prisma `_avg`. A mean is dragged by outliers and these columns are named for the median,
+so the UI repeated a claim the number did not support. Measured effect: **Palm Jumeirah's
+annual rent read AED 790,812 against a true AED 300,000**, because five rent listings carried
+sale-scale prices — and that figure divides straight into gross yield, which is where the
+district's implausible **15.2% yield** came from. Both columns are now true medians
+(`medianByCommunity`), which is robust to those rows by construction, so no plausibility band
+had to be invented. Post-fix: Palm yield **6.31%**, MBR City 12.06% → 4.59%,
+DIFC 7.21% → 5.09%. Remaining outliers (12 rent listings) are harmless to a median.
+
+## Testing notes
+
+- `scripts/audit-mock-data.ts` audits every table for synthetic data: marker vocabulary, id
+  shape, implausible values, duplication. It reports the clock skew first and treats
+  date-anomaly counts as informational while the clock is wrong. Two false positives it
+  originally had, both fixed: a sub-100 AED/sqft floor applied to **rent** listings (rent psf
+  per *year* is legitimately in the tens — 916 healthy rows were flagged), and mixing ISO
+  `T`-separated with space-separated timestamps in a string comparison.
+- `verify-server-routing` **fails by premise, not by regression**. It boots `server.tsx` and
+  asserts it serves `dist/assets` immutably and the SPA shell `no-cache`. Static serving now
+  belongs to the runtime: probing the runtime origin returns `application/javascript` with
+  `Cache-Control: public, max-age=31536000, immutable`, and `/` returns `no-store`. The suite
+  also expects `no-cache` where reality is the stricter `no-store`.
+- `verify-live-data` has one standing failure: `demo@sqftlab.com` exists as a user, which the
+  suite forbids. It has no password and `is_admin = 0`, so it is not a privilege escalation —
+  but `DEMO_ACCOUNT_AUTOLOGIN` defaults **on**, so every anonymous visitor shares that
+  account, its portfolios, and its AI chat transcript. Fix is the same switch:
+  `DEMO_ACCOUNT_AUTOLOGIN=false`.
+- Suites that spawn or hit the sidecar can fail transiently with `API server not ready` while
+  a rebuild restarts it. Re-run before believing a routing failure.

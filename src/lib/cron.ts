@@ -36,6 +36,36 @@ export interface RefreshResult {
 }
 
 /**
+ * Median value per community.
+ *
+ * Used instead of a mean because individual bad rows are exactly what a mean is worst at:
+ * one rent listing carrying a sale-scale price moves a whole district's advertised rent,
+ * and a single mis-parsed 11 sqft "duplex" yields a price-per-sqft in the thousands. Both
+ * are present in the live data. A median is unmoved by either, which is why it is the right
+ * statistic for "what does a typical unit here cost" — and what these columns have always
+ * claimed to hold.
+ */
+function medianByCommunity(pairs: Array<[string | null, number | null]>): Map<string, number> {
+  const buckets = new Map<string, number[]>()
+  for (const [communityId, value] of pairs) {
+    if (communityId === null || value === null || !Number.isFinite(value) || value <= 0) continue
+    const bucket = buckets.get(communityId)
+    if (bucket === undefined) buckets.set(communityId, [value])
+    else bucket.push(value)
+  }
+
+  const medians = new Map<string, number>()
+  for (const [communityId, values] of buckets) {
+    values.sort((a, b) => a - b)
+    const middle = Math.floor(values.length / 2)
+    const median =
+      values.length % 2 === 0 ? (values[middle - 1]! + values[middle]!) / 2 : values[middle]!
+    medians.set(communityId, median)
+  }
+  return medians
+}
+
+/**
  * Recompute every community's PSF from government transaction data, falling
  * back to listing asking prices only where no transactions exist.
  *
@@ -43,9 +73,9 @@ export interface RefreshResult {
  * `community.medianAedSqft` was previously always derived from PropertyFinder
  * asking prices. `psfSource` records which one a given row actually used.
  *
- * Five grouped queries plus one batched write replace the per-community loop
- * (~160 queries). Yields are only overwritten when both inputs are real, so a
- * community with no rent data keeps its previous value rather than dropping to 0.
+ * Four grouped queries, two row fetches reduced to medians, and one batched write replace the
+ * per-community loop (~160 queries). Yields are only overwritten when both inputs are real,
+ * so a community with no rent data keeps its previous value rather than dropping to 0.
  */
 export async function refreshCommunityStats(): Promise<{
   communities: number
@@ -76,23 +106,30 @@ export async function refreshCommunityStats(): Promise<{
       where: { transactionDate: { gte: since30d } },
       _count: { _all: true },
     }),
-    prisma.listing.groupBy({
-      by: ['communityId'],
+    // Fetched row-wise and reduced to a MEDIAN in JS. Prisma's groupBy offers only
+    // mean/min/max, and these two columns are named `medianAedSqft` and
+    // `medianAnnualRentAed` — so a mean was being stored under a median's name, which is a
+    // lie the UI then repeated. The consequence was not cosmetic: measured on this dataset
+    // the mean overstated Palm Jumeirah's annual rent by 69% (AED 790,812 against AED
+    // 468,785 before the five sale-scale rent listings) and that figure divides straight
+    // into gross yield, which is why the district advertised a yield no market supports.
+    // A median is robust to those rows by construction, so no plausibility band has to be
+    // invented to defend the number.
+    prisma.listing.findMany({
       where: { purpose: 'sale', pricePerSqft: { gt: 0 } },
-      _avg: { pricePerSqft: true },
+      select: { communityId: true, pricePerSqft: true },
     }),
-    prisma.listing.groupBy({
-      by: ['communityId'],
+    prisma.listing.findMany({
       where: { purpose: 'rent', priceAed: { gt: 0 } },
-      _avg: { priceAed: true },
+      select: { communityId: true, priceAed: true },
     }),
   ])
 
   const txPsfMap = new Map(txPsf.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
   const txCountMap = new Map(txCount.map((r) => [r.communityId, r._count._all]))
   const txCount30dMap = new Map(txCount30d.map((r) => [r.communityId, r._count._all]))
-  const listPsfMap = new Map(listPsf.map((r) => [r.communityId, r._avg.pricePerSqft ?? 0]))
-  const rentMap = new Map(listRent.map((r) => [r.communityId, r._avg.priceAed ?? 0]))
+  const listPsfMap = medianByCommunity(listPsf.map((r) => [r.communityId, r.pricePerSqft]))
+  const rentMap = medianByCommunity(listRent.map((r) => [r.communityId, r.priceAed]))
 
   const communities = await prisma.community.findMany({
     select: {

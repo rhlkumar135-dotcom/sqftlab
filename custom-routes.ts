@@ -66,6 +66,7 @@ import {
   answerMarketQuestion, normalizeHistory,
 } from './src/lib/ai-chat'
 import { candidateProviders, selectProvider } from './src/lib/llm-providers'
+import { resolveListedAt } from './src/lib/listing-dates'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -2134,7 +2135,9 @@ export function pfParse(property: any, source: string, purpose: string) {
     imageUrl: property.images?.[0]?.medium ?? property.images?.[0]?.small ?? null,
     latitude: loc.coordinates?.lat ?? null,
     longitude: loc.coordinates?.lon ?? null,
-    listedAt: new Date(property.listed_date ?? Date.now()),
+    // `listed_date` is the portal's own first-listed field, but it can be absent, null, or
+    // in the future (see listing-dates.ts), so it is resolved rather than trusted.
+    listedAt: resolveListedAt(property.listed_date).listedAt,
     districtName: loc.name ?? 'Unknown',
     locationSlug: loc.slug ?? (loc.name ?? 'unknown').toLowerCase().replace(/\s+/g, '-'),
     // `path_name` is the portal's own hierarchical location ("Dubai, Dubai Marina,
@@ -2331,6 +2334,13 @@ app.get('/sqftlab/scrape', async (c) => {
                   sourceUrl: parsed.sourceUrl,
                   agentName: parsed.agentName, agencyName: parsed.agencyName,
                   latitude: parsed.latitude, longitude: parsed.longitude,
+                  // `listedAt` IS refreshed, which it previously was not. Two reasons. First,
+                  // it makes an incorrect date self-healing rather than permanent: this column
+                  // was create-only, so a bad value written once (by an earlier clamp, or a
+                  // portal revision to the listing) stayed forever, because nothing ever
+                  // rewrote it. Second, if the portal revises a listing's first-listed date,
+                  // the portal is the authority on it — not our stale copy.
+                  listedAt: parsed.listedAt,
                   scrapedAt: new Date(),
                 },
               })

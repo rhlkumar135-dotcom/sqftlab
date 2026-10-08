@@ -9,6 +9,7 @@
 
 import { prisma } from '../src/lib/db'
 import { findCommunityByName, invalidateCommunityCache } from '../src/lib/community-match'
+import { resolveListedAt } from '../src/lib/listing-dates'
 
 // Rotated per request. A single static UA across hundreds of requests is the
 // easiest possible fingerprint for a bot filter to latch onto.
@@ -116,7 +117,12 @@ function parseListing(property: any, source: string, purpose: string) {
   const agentName = property.agent?.name ?? null
   const agencyName = property.broker?.name ?? null
   const title = property.title ?? `${property.property_type ?? 'Property'} in ${districtName}`
-  const listedDate = property.listed_date ?? property.last_refreshed_at ?? new Date().toISOString()
+  // `last_refreshed_at` is deliberately NOT used as a fallback any more. It is a
+  // refresh/bump marker, not a first-listed date, so treating it as one mislabels a bumped
+  // listing as newly listed. `listed_date` was present on every listing sampled, and when it
+  // is genuinely absent the crawl moment is the honest value — see src/lib/listing-dates.ts,
+  // which also stops a future-dated portal value from being stored verbatim.
+  const listedAt = resolveListedAt(property.listed_date).listedAt
   const furnished = property.furnished === 'furnished' ? 'furnished' : property.furnished === 'semi_furnished' ? 'semi_furnished' : 'unfurnished'
   const completion = property.completion_status === 'off_plan' ? 'off_plan' : 'ready'
 
@@ -138,7 +144,7 @@ function parseListing(property: any, source: string, purpose: string) {
     imageUrl,
     latitude: lat,
     longitude: lon,
-    listedAt: new Date(listedDate),
+    listedAt,
     districtName,
     locationSlug: location.slug ?? districtName.toLowerCase().replace(/\s+/g, '-'),
   }
@@ -256,6 +262,9 @@ async function scrapeArea(area: { name: string; locationId: string; slug: string
               imageUrl: parsed.imageUrl,
               agentName: parsed.agentName,
               agencyName: parsed.agencyName,
+              // Refreshed for the same reason as the in-server upsert: a wrong date written
+              // once would otherwise be permanent, because this column was create-only.
+              listedAt: parsed.listedAt,
               scrapedAt: new Date(),
             },
           })
