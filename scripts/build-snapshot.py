@@ -43,6 +43,12 @@ ENDPOINTS = [
     "/api/sqftlab/market/analytics",
     "/api/sqftlab/predictions",
     "/api/sqftlab/intelligence",
+    # Provenance and freshness are both public by design. Without them baked, the
+    # static site answered 500 for these paths and the Methodology page fell back to
+    # whatever it happened to have — which is how it kept advertising DLD transaction
+    # counts that no longer existed after the synthetic rows were purged.
+    "/api/sqftlab/sources",
+    "/api/sqftlab/cron/status",
 ]
 
 # The forecast page is per-district, so a single path-level snapshot would serve

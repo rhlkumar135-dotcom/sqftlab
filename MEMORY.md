@@ -1196,3 +1196,54 @@ so it is **flagged, not silently rewritten**.
 newest scraped the same day. Published `www.sqftlab.com` (Railway + Cloudflare) answers
 `429 "rate limited"` at the edge — platform-side, not the app's JSON limiter.
 
+
+---
+
+## 2026-10-10 (later) — DLD open data is KEYLESS; transactions are captcha-gated
+
+**Discovery worth remembering.** `gateway.dubailand.gov.ae/open-data/<command>` (POST, JSON,
+`Origin: https://dubailand.gov.ae`) splits into two classes. Found by reading the portal's own
+`/scripts/publicData.js` + `apiConfig` for the command names and payload shape
+(`{...filter, P_TAKE, P_SKIP, P_SORT}`, dates as `MM/DD/YYYY`). Reproduce with
+`scripts/probe-dld.sh`.
+
+| Class | Commands | Result |
+|---|---|---|
+| **Open, no credential** | `carea-lookup`, `projects-lookup`, `ejari-property-types` | 437 areas · 4,215 projects · 83 types |
+| **reCAPTCHA-gated** | `transactions`, `rents`, `buildings`, `units`, `lands`, `brokers`, `developers`, `valuations`, `projects` | direct POST → **HTTP 500** |
+
+The gated ones go through `/umbraco/surface/CaptchaProxy/CallThenPost`; a dummy token returns
+`Invalid Captcha`. **Do not try to solve this** — it is a deliberate anti-bot control. Official
+sale prices therefore still require `DUBAI_PULSE_API_KEY`, and **Dubai Pulse registration is
+UAE-Pass-gated** (OTP to a UAE phone), so the account holder must request it. It is *not* an
+email signup — an agent cannot do it for the user.
+`gateway.dubailand.gov.ae/brokers/transactions` → `401 No API key found in request`.
+
+Now wired: `src/lib/dld-open.ts` → `dld_references` table (one model, `kind` = area/project/
+property_type) + `Community.dldAreaId` linked by normalised name match (16/44 matched).
+Runs as hourly cron step `dldReference`. It is a **registry, not a register — carries no prices**.
+Provenance distinguishes three states: `connected` / `key_needed` / `captcha_blocked`.
+
+### Two traps that cost real time this session
+
+1. **Shell `DATABASE_URL` is stale and wins over `.env`.** It points at
+   `/app/workspace/prisma/dev.db` (a stray 446KB DB), not the project's
+   `prisma/dev.db` (7.4MB). `prisma db push` silently applied to the wrong file, and with
+   the var *unset* it fell back to `file:./dev.db` and **created a new empty DB in the repo root**.
+   Always `export DATABASE_URL='file:/app/workspace/<projectId>/prisma/dev.db'` explicitly.
+2. **`shogo generate` reset `server.tsx` to the stock 45-line template** — not merely
+   relocated the region, but deleted it, during the schema change. `verify-server-routing`
+   went **1/8**. This file is regenerated more aggressively than its own header claims
+   ("will not be overwritten if it exists" — it is). `custom-routes.ts` survives; keep all
+   durable policy there.
+
+### Security fixed
+Five admin routes were open unauthenticated — `/alerts/scan`, `/alerts/notify` (outbound
+email to matched users ⇒ free spam relay), `/intelligence/run`, `/macro/refresh` (external
+provider calls from our IP), `/stream/test-publish` (injects events into every subscriber's
+stream). All now cron-secret gated; verified 401 unauth / 200 authed.
+
+### Live data state
+`0 transactions` (no key) · `7,553 listings` (PropertyFinder, real) · `4,735 DLD reference rows`
+(real, keyless) · `44 communities`. Trends/deals/intelligence correctly render empty rather
+than inventing numbers — that is the argument for the Dubai Pulse key.
