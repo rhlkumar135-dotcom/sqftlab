@@ -1079,6 +1079,16 @@ model NewsItem {
   author        String?
   imageUrl      String?  @map("image_url")
 
+  /// Which emirate this item is *about*: 'dubai' | 'abu_dhabi' | 'uae' | 'global'.
+  ///
+  /// Stored per item rather than inferred from the feed at read time, because a single
+  /// query returns a mix — "UAE property market" happily returns a Saadiyat Island story
+  /// — so the feed alone cannot answer "show me Abu Dhabi". Derived from the item's own
+  /// text first (see classifyEmirate), falling back to the feed's declared region only
+  /// when the text names no emirate. 'uae' means genuinely UAE-wide with no emirate named,
+  /// which is not the same as 'global' and must not be silently folded into either tab.
+  emirate       String   @default("uae")
+
   // Content
   rawExcerpt    String   @map("raw_excerpt")
   fullText      String?  @map("full_text")
@@ -1100,6 +1110,7 @@ model NewsItem {
   createdAt     DateTime @default(now()) @map("created_at")
 
   @@index([publishedAt])
+  @@index([emirate, publishedAt])
   @@index([aiSignalType])
   @@index([aiImpactArea])
   @@index([source])

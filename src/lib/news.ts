@@ -25,8 +25,17 @@
 import crypto from 'crypto'
 import Parser from 'rss-parser'
 import { prisma } from './db'
-import { NEWS_FEEDS, feedUrl, isRelevant, type NewsFeed } from './news-sources'
+import {
+  NEWS_FEEDS,
+  NEWS_WINDOW_DAYS,
+  feedUrl,
+  isRelevant,
+  classifyEmirate,
+  type NewsFeed,
+  type Emirate,
+} from './news-sources'
 import { resolveAiCredential, AiUnavailableError, AI_MODEL } from './ai-chat'
+import { cacheInvalidate } from './cache'
 
 /** The seven signal classes the brief defines. Kept as a const so the prompt, the
  *  route filter and the UI legend cannot drift apart. */
@@ -44,8 +53,15 @@ export type SignalType = (typeof SIGNAL_TYPES)[number]
 export const SENTIMENTS = ['positive', 'negative', 'neutral'] as const
 export type Sentiment = (typeof SENTIMENTS)[number]
 
-/** Items older than this are not news. Matches the brief. */
-export const MAX_ITEM_AGE_MS = 7 * 24 * 60 * 60 * 1000
+/**
+ * Items older than this are not news.
+ *
+ * Was 7 days, which made a "last 30 days" feed impossible by construction: the feed
+ * query is asked for 30 days (`when:30d`) but this filter threw away everything past
+ * the first week, so the corpus could never hold more than a handful of days. Now tied
+ * to the same window the query requests, so the two cannot drift apart.
+ */
+export const MAX_ITEM_AGE_MS = NEWS_WINDOW_DAYS * 24 * 60 * 60 * 1000
 /** Excerpt length stored on the row. */
 export const EXCERPT_CHARS = 500
 
@@ -279,17 +295,31 @@ export async function ingestFeed(feed: NewsFeed): Promise<FeedResult> {
             ? stripHtml((rawSource as { _: string })._)
             : feed.name
 
+      // Which emirate the story is actually about. Headline first, body as a weaker
+      // signal, and the feed's region only to separate UAE-wide from international.
+      const emirate: Emirate = classifyEmirate(headline, excerpt, feed.region)
+
       const contentHash = makeContentHash(url, publishedAt)
       const existing = await prisma.newsItem.findUnique({
         where: { contentHash },
-        select: { id: true, sourceName: true },
+        select: { id: true, sourceName: true, emirate: true },
       })
       if (existing) {
         // Self-heal rows written before `<source>` was declared on the parser: their
         // `sourceName` holds the feed's label instead of the publisher. One update per
         // already-seen article, and it converges after a single pass.
+        const repairs: { sourceName?: string; emirate?: string } = {}
         if (publisher !== feed.name && existing.sourceName === feed.name) {
-          await prisma.newsItem.update({ where: { id: existing.id }, data: { sourceName: publisher } })
+          repairs.sourceName = publisher
+        }
+        // Same idea for `emirate`, which every row predating this column defaults to
+        // 'uae'. Without this, re-ingesting would skip those rows forever and the Abu
+        // Dhabi tab would stay empty until the whole corpus aged out.
+        if (existing.emirate !== emirate) {
+          repairs.emirate = emirate
+        }
+        if (Object.keys(repairs).length > 0) {
+          await prisma.newsItem.update({ where: { id: existing.id }, data: repairs })
           result.repaired++
         }
         result.skipped++
@@ -303,6 +333,7 @@ export async function ingestFeed(feed: NewsFeed): Promise<FeedResult> {
           sourceUrl: url,
           headline: headline.slice(0, 500),
           publishedAt,
+          emirate,
           author: (item.creator ?? null) as string | null,
           imageUrl: (item.enclosure?.url ?? null) as string | null,
           rawExcerpt: excerpt,
@@ -337,7 +368,7 @@ export async function ingestAllNewsSources(): Promise<IngestSummary> {
     feeds.push(await ingestFeed(feed))
     await new Promise((r) => setTimeout(r, 1000))
   }
-  return {
+  const summary = {
     feeds,
     fetched: feeds.reduce((a, f) => a + f.fetched, 0),
     saved: feeds.reduce((a, f) => a + f.saved, 0),
@@ -348,6 +379,13 @@ export async function ingestAllNewsSources(): Promise<IngestSummary> {
     feedsOk: feeds.filter((f) => !f.error).length,
     feedsFailed: feeds.filter((f) => f.error).length,
   }
+  // The news caches hold counts derived from this table — per-emirate tab counts, the
+  // feed pages, the analytics breakdowns. Without this the tabs keep serving the pre-
+  // ingest numbers for the rest of their 15-minute TTL, so a reader who has just seen
+  // 300 articles land still sees "Abu Dhabi: 0". Writing data and leaving the cache
+  // stale is the same bug as not writing it.
+  cacheInvalidate('news:')
+  return summary
 }
 
 // ─── AI analysis ─────────────────────────────────────────────────────────────
@@ -622,6 +660,10 @@ export async function runNewsIngest(processBatch = 30): Promise<NewsCronResult> 
   const processStartedAt = Date.now()
   const processing = await processUnprocessedItems(processBatch)
   const processMs = Date.now() - processStartedAt
+  // Analysing items moves the sentiment, signal and collection breakdowns, which are all
+  // served from cache. Invalidate again here so the analysis is visible on the very next
+  // request rather than up to 15 minutes later.
+  if (processing.processed > 0) cacheInvalidate('news:')
   return {
     // The job succeeded if at least one feed answered — a single unreachable feed is
     // reported per feed rather than failing the whole tick.

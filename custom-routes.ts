@@ -24,7 +24,8 @@ import {
   runNewsIngest, generateDailyDigest, aiConfigured, SIGNAL_TYPES,
   decodeKeyFigures, decodeTopSignals, decodeStringArray,
 } from './src/lib/news'
-import { NEWS_FEEDS } from './src/lib/news-sources'
+import { NEWS_FEEDS, EMIRATES } from './src/lib/news-sources'
+import { buildNewsAnalytics } from './src/lib/news-analytics'
 import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
 import {
   getStripe, priceIdFor, missingStripeEnv, isPaidPlan, isBillingPeriod,
@@ -8329,6 +8330,7 @@ interface NewsRow {
   publishedAt: Date
   imageUrl: string | null
   rawExcerpt: string
+  emirate: string
   aiSummary: string | null
   aiSignalType: string | null
   aiImpactArea: string | null
@@ -8351,6 +8353,7 @@ function serialiseNewsItem(item: NewsRow) {
     publishedAt: item.publishedAt,
     imageUrl: item.imageUrl,
     rawExcerpt: item.rawExcerpt,
+    emirate: item.emirate,
     aiSummary: item.aiSummary,
     aiSignalType: item.aiSignalType,
     aiImpactArea: item.aiImpactArea,
@@ -8360,9 +8363,10 @@ function serialiseNewsItem(item: NewsRow) {
   }
 }
 
-// GET /sqftlab/news — paginated feed, filterable by signal, sentiment and area.
+// GET /sqftlab/news — paginated feed, filterable by emirate, signal, sentiment and area.
 // Public. Cached 15 minutes.
 app.get('/sqftlab/news', async (c) => {
+  const emirate = c.req.query('emirate') ?? ''
   const signal = c.req.query('signal') ?? ''
   const sentiment = c.req.query('sentiment') ?? ''
   const area = c.req.query('area') ?? ''
@@ -8373,16 +8377,18 @@ app.get('/sqftlab/news', async (c) => {
   // Validate against the known vocabularies rather than passing caller input into
   // the query. An unknown value is ignored, not turned into a filter that silently
   // matches nothing (which would look like "no news" instead of "bad filter").
+  const emirateFilter = (EMIRATES as readonly string[]).includes(emirate) ? emirate : ''
   const signalFilter = (SIGNAL_TYPES as readonly string[]).includes(signal) ? signal : ''
   const sentimentFilter = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : ''
   const areaFilter = area.trim().slice(0, 60)
 
-  const cacheKey = `news:feed:${signalFilter}:${sentimentFilter}:${areaFilter}:${page}`
+  const cacheKey = `news:feed:${emirateFilter}:${signalFilter}:${sentimentFilter}:${areaFilter}:${page}`
   const cached = cacheRead<unknown>(cacheKey)
   if (cached) return c.json(cached)
 
   const where = {
     aiProcessed: true,
+    ...(emirateFilter ? { emirate: emirateFilter } : {}),
     ...(signalFilter ? { aiSignalType: signalFilter } : {}),
     ...(sentimentFilter ? { aiSentiment: sentimentFilter } : {}),
     // SQLite's LIKE is case-insensitive for ASCII already; Prisma's `mode`
@@ -8398,7 +8404,7 @@ app.get('/sqftlab/news', async (c) => {
       skip: offset,
       select: {
         id: true, source: true, sourceName: true, sourceUrl: true, headline: true,
-        publishedAt: true, imageUrl: true, rawExcerpt: true,
+        publishedAt: true, imageUrl: true, rawExcerpt: true, emirate: true,
         aiSummary: true, aiSignalType: true, aiImpactArea: true,
         aiSentiment: true, aiKeyFigures: true,
       },
@@ -8413,6 +8419,68 @@ app.get('/sqftlab/news', async (c) => {
     pages: Math.max(1, Math.ceil(total / NEWS_PAGE_SIZE)),
     pageSize: NEWS_PAGE_SIZE,
   }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsFeed)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/emirates — how much coverage exists per emirate in the window.
+//
+// The tabs need real counts before anything is clicked, so a reader can see that Abu Dhabi
+// has coverage rather than having to open an empty tab to find out. Counts the *analysed*
+// corpus, because that is what the feed can actually show — an unanalysed item is not
+// visible in any tab, so counting it here would promise articles that never appear.
+app.get('/sqftlab/news/emirates', async (c) => {
+  const days = Math.min(Math.max(Number(c.req.query('days') ?? 30) || 30, 1), 120)
+  const cacheKey = `news:emirates:${days}`
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+  const grouped = await prisma.newsItem.groupBy({
+    by: ['emirate'],
+    where: { aiProcessed: true, publishedAt: { gte: since } },
+    _count: { _all: true },
+  })
+
+  const counts: Record<string, number> = { dubai: 0, abu_dhabi: 0, uae: 0, global: 0 }
+  let total = 0
+  for (const g of grouped) {
+    counts[g.emirate] = g._count._all
+    total += g._count._all
+  }
+
+  const payload = {
+    windowDays: days,
+    total,
+    emirates: [
+      { id: 'all', label: 'All UAE', count: total },
+      { id: 'dubai', label: 'Dubai', count: counts.dubai },
+      { id: 'abu_dhabi', label: 'Abu Dhabi', count: counts.abu_dhabi },
+      { id: 'uae', label: 'UAE-wide', count: counts.uae },
+      { id: 'global', label: 'International', count: counts.global },
+    ],
+  }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsFeed)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/analytics — collections and semantic analytics for the window.
+//
+// Public. `emirate=dubai|abu_dhabi|uae|global` scopes it; omitted means the whole UAE.
+// Every number is computed from columns already on the row, so this costs no model calls
+// and can be served on every page view.
+app.get('/sqftlab/news/analytics', async (c) => {
+  const emirateParam = c.req.query('emirate') ?? 'all'
+  const emirate = (EMIRATES as readonly string[]).includes(emirateParam)
+    ? (emirateParam as (typeof EMIRATES)[number])
+    : 'all'
+  const days = Math.min(Math.max(Number(c.req.query('days') ?? 30) || 30, 1), 120)
+
+  const cacheKey = `news:analytics:${emirate}:${days}`
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const payload = await buildNewsAnalytics({ emirate, days })
   cacheWrite(cacheKey, payload, CACHE_TTL.newsFeed)
   return c.json(payload)
 })

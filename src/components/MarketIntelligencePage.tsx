@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { SkeletonCard, SkeletonRows } from '@/components/Skeleton'
 import SentimentGauge from '@/components/SentimentGauge'
 import NewsCard, { SIGNAL_CONFIG, signalMeta, type NewsItemRow } from '@/components/NewsCard'
+import NewsAnalyticsPanel from '@/components/NewsAnalyticsPanel'
 
 /**
  * Day 19 — Market Intelligence Feed. PUBLIC: no session required, by design. This is
@@ -80,6 +81,9 @@ export default function MarketIntelligencePage({ onSignIn }: { onSignIn?: () => 
   const [signalFilter, setSignalFilter] = useState('')
   const [sentimentFilter, setSentimentFilter] = useState('')
   const [areaFilter, setAreaFilter] = useState('')
+  /** Emirate tab: 'all' | 'dubai' | 'abu_dhabi' | 'uae' | 'global'. */
+  const [emirate, setEmirate] = useState('all')
+  const [emirateCounts, setEmirateCounts] = useState<Array<{ id: string; label: string; count: number }>>([])
 
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
@@ -98,30 +102,36 @@ export default function MarketIntelligencePage({ onSignIn }: { onSignIn?: () => 
   }, [])
 
   const loadSidebar = useCallback(async () => {
-    const [d, h, s, src, st] = await Promise.all([
+    const [d, h, s, src, st, em] = await Promise.all([
       fetchJson<{ digest: Digest | null }>('/api/sqftlab/news/digest').catch(() => ({ digest: null })),
       fetchJson<{ history: Digest[] }>('/api/sqftlab/news/digest/history').catch(() => ({ history: [] })),
       fetchJson<{ signals: SignalCount[] }>('/api/sqftlab/news/signals').catch(() => ({ signals: [] })),
       fetchJson<SourceInfo>('/api/sqftlab/news/sources').catch(() => null),
       fetchJson<NewsStatus>('/api/sqftlab/news/status').catch(() => null),
+      // Tab counts come from the server rather than being derived from the current page,
+      // because the page holds 20 of ~300 items — counting those would label the Abu Dhabi
+      // tab with a number that has nothing to do with how many articles it contains.
+      fetchJson<{ emirates: Array<{ id: string; label: string; count: number }> }>('/api/sqftlab/news/emirates').catch(() => ({ emirates: [] })),
     ])
     setDigest(d.digest)
     setHistory(h.history)
     setSignals(s.signals)
     setSources(src)
     setStatus(st)
+    setEmirateCounts(em.emirates)
   }, [fetchJson])
 
   const loadFeed = useCallback(
     async (targetPage: number) => {
       const params = new URLSearchParams()
+      if (emirate && emirate !== 'all') params.set('emirate', emirate)
       if (signalFilter) params.set('signal', signalFilter)
       if (sentimentFilter) params.set('sentiment', sentimentFilter)
       if (areaFilter.trim()) params.set('area', areaFilter.trim())
       params.set('page', String(targetPage))
       return fetchJson<{ items: NewsItemRow[]; total: number }>(`/api/sqftlab/news?${params.toString()}`)
     },
-    [signalFilter, sentimentFilter, areaFilter, fetchJson],
+    [emirate, signalFilter, sentimentFilter, areaFilter, fetchJson],
   )
 
   // Sidebar is loaded once; the feed reloads whenever a filter changes.
@@ -291,6 +301,41 @@ export default function MarketIntelligencePage({ onSignIn }: { onSignIn?: () => 
       {/* ── filters ── */}
       <section className="glass-card p-3 sm:p-4 mb-6">
         <div className="flex flex-col gap-3">
+          {/* Emirate tabs. Scrolls horizontally at 390px rather than wrapping into a
+              jagged block or squeezing the labels — a tab strip is one of the few
+              patterns that reads better scrolled than wrapped. */}
+          <div className="-mx-1 overflow-x-auto">
+            <div className="flex items-center gap-1.5 px-1 min-w-max" role="tablist" aria-label="Filter news by emirate">
+              {(emirateCounts.length > 0
+                ? emirateCounts
+                : [
+                    { id: 'all', label: 'All UAE', count: -1 },
+                    { id: 'dubai', label: 'Dubai', count: -1 },
+                    { id: 'abu_dhabi', label: 'Abu Dhabi', count: -1 },
+                  ]
+              ).map((t) => {
+                const active = emirate === t.id
+                return (
+                  <button
+                    key={t.id}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setEmirate(t.id)}
+                    className="px-3 py-1.5 rounded-full text-[12px] font-semibold whitespace-nowrap"
+                    style={{
+                      background: active ? '#2563EB' : '#f1f5f9',
+                      color: active ? '#fff' : 'var(--ink-3)',
+                    }}
+                  >
+                    {t.label}
+                    {t.count >= 0 && (
+                      <span style={{ opacity: active ? 0.85 : 0.6 }}> · {t.count}</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold" style={{ color: 'var(--ink-5)' }}>Signal</span>
             {SIGNAL_FILTERS.map((s) => {
@@ -342,6 +387,12 @@ export default function MarketIntelligencePage({ onSignIn }: { onSignIn?: () => 
       {/* Stacks on a phone; two columns from lg. A pinned rail would be unusable at 390px. */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
+          {/* Scoped by the emirate tab, so the analysis always describes the coverage the
+              reader is currently looking at rather than the whole corpus behind it. */}
+          <div className="mb-4">
+            <NewsAnalyticsPanel emirate={emirate} />
+          </div>
+
           {error && (
             <div
               className="rounded-xl p-4 mb-4 text-sm"

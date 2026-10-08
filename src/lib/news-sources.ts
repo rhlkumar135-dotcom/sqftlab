@@ -160,10 +160,131 @@ export const NEWS_FEEDS: NewsFeed[] = [
 
 export type NewsFeedId = string
 
-/** Google News RSS endpoint. `hl`/`gl`/`ceid` pin it to the UAE English edition. */
+/**
+ * Google News RSS endpoint. `hl`/`gl`/`ceid` pin it to the UAE English edition.
+ *
+ * `when:30d` is not decoration. Without it the query returns whatever Google considers
+ * relevant, which measured at a 274-day span — and since the ingest discards anything
+ * older than the retention window, the effect was that a "last 30 days" feed was really
+ * a last-few-days feed. With it, the same query returned 67 items spanning 29 days.
+ * The operator is what makes the 30-day window real rather than nominal.
+ */
 export function feedUrl(query: string): string {
-  const q = encodeURIComponent(query)
+  const withWindow = /\bwhen:\d+[dhmy]\b/.test(query) ? query : `${query} when:30d`
+  const q = encodeURIComponent(withWindow)
   return `https://news.google.com/rss/search?q=${q}&hl=en-AE&gl=AE&ceid=AE:en`
+}
+
+/** How far back a feed is asked to reach, and how old a stored item may be. */
+export const NEWS_WINDOW_DAYS = 30
+
+// ─── emirate classification ──────────────────────────────────────────────────
+
+export type Emirate = 'dubai' | 'abu_dhabi' | 'uae' | 'global'
+
+export const EMIRATES: readonly Emirate[] = ['dubai', 'abu_dhabi', 'uae', 'global']
+
+/**
+ * Place and developer names that only appear when a story is about a specific emirate.
+ *
+ * Deliberately weighted toward names that are unambiguous. "Jumeirah" is excluded because
+ * it exists in both emirates (Jumeirah Beach vs Jumeirah at Saadiyat); "Al Reem" is
+ * included because the Abu Dhabi island is the only one that reaches property coverage.
+ * A wrong tag is worse than a missing one here — it puts the story in the wrong tab and
+ * the reader has no way to tell.
+ */
+const EMIRATE_SIGNALS: Record<'dubai' | 'abu_dhabi', string[]> = {
+  abu_dhabi: [
+    'abu dhabi', 'saadiyat', 'yas island', 'al reem', 'masdar', 'khalifa city',
+    'al raha', 'al maryah', 'hudayriyat', 'aldar', 'adrec', 'al ain', 'reem island',
+    'abudhabi',
+  ],
+  dubai: [
+    'dubai', 'jvc', 'jlt', 'jumeirah village', 'dubai marina', 'downtown dubai',
+    'business bay', 'palm jumeirah', 'difc', 'dubai hills', 'creek harbour',
+    'meydan', 'damac', 'emaar', 'dld', 'rera', 'expo city', 'dubai south',
+    'arabian ranches', 'town square', 'discovery gardens', 'sobha', 'dubailand',
+  ],
+}
+
+/** Feed region → emirate, used only when the text names neither emirate. */
+export function regionToEmirate(region: NewsFeed['region']): Emirate {
+  return region === 'abudhabi' ? 'abu_dhabi' : region === 'dubai' ? 'dubai' : region
+}
+
+/**
+ * Other markets. A story whose text names one of these and names no emirate is not UAE
+ * news, however it reached us — the feed query is a net, and it catches neighbouring
+ * markets constantly.
+ *
+ * Deliberately not a list of country names in general: entries are chosen because they
+ * actually turned up in this corpus mislabelled, plus obvious neighbours of the same
+ * kind. Ambiguous two-letter tokens ('uk', 'us') are excluded on purpose — as substrings
+ * they match far too much.
+ */
+const FOREIGN_MARKETS = [
+  'saudi', 'riyadh', 'jeddah', 'dammam', 'qatar', 'doha', 'kuwait', 'bahrain', 'manama',
+  'oman', 'muscat', 'egypt', 'cairo', 'kyiv', 'ukraine', 'russia', 'moscow',
+  'united kingdom', 'britain', 'london', 'africa', 'nigeria', 'kenya', 'india', 'mumbai',
+  'delhi', 'china', 'beijing', 'shanghai', 'singapore', 'hong kong', 'japan', 'tokyo',
+  'turkey', 'istanbul', 'pakistan', 'karachi', 'new york', 'miami', 'paris', 'germany',
+  'berlin', 'australia', 'sydney', 'canada', 'toronto', 'malaysia', 'thailand', 'indonesia',
+]
+
+function namesForeignMarket(haystack: string): boolean {
+  return FOREIGN_MARKETS.some((m) => haystack.includes(m))
+}
+
+function emirateMentions(haystack: string): { abuDhabi: number; dubai: number } {
+  let abuDhabi = 0
+  let dubai = 0
+  for (const s of EMIRATE_SIGNALS.abu_dhabi) abuDhabi += haystack.split(s).length - 1
+  for (const s of EMIRATE_SIGNALS.dubai) dubai += haystack.split(s).length - 1
+  return { abuDhabi, dubai }
+}
+
+/**
+ * Which emirate is this story about?
+ *
+ * The single rule that matters: **a specific emirate is only claimed when the story
+ * actually names it.** An earlier version fell back to the feed's declared region, and
+ * that was wrong in a way that was visible to readers — 161 of 320 stored items name no
+ * emirate at all, and the fallback was assigning 24 of them to Dubai and 19 to Abu Dhabi
+ * purely because of which query happened to surface them. That is how "Al Othaim reveals
+ * US $4.3bn Saudi real estate investment plans" ended up in the Abu Dhabi tab: it came
+ * from the Abu Dhabi feed and the feed's label was doing the work, not the article.
+ *
+ * Headline mentions outweigh body mentions three to one, because a passing reference in
+ * an excerpt ("...also has offices in Dubai") should not decide where a story about
+ * somewhere else is filed. A body-only claim needs at least two mentions to count.
+ *
+ * When nothing is named, the feed region still separates UAE-wide from international —
+ * that is a much weaker claim and the region can carry it — and a named foreign market
+ * settles it as international.
+ */
+export function classifyEmirate(
+  headline: string,
+  body = '',
+  feedRegion: NewsFeed['region'] = 'uae'
+): Emirate {
+  const head = emirateMentions(headline.toLowerCase())
+  const text = emirateMentions(body.toLowerCase())
+
+  if (head.abuDhabi > 0 || head.dubai > 0) {
+    const ad = head.abuDhabi * 3 + text.abuDhabi
+    const dx = head.dubai * 3 + text.dubai
+    if (ad === dx) return 'uae'
+    return ad > dx ? 'abu_dhabi' : 'dubai'
+  }
+
+  if (text.abuDhabi >= 2 || text.dubai >= 2) {
+    if (text.abuDhabi === text.dubai) return 'uae'
+    return text.abuDhabi > text.dubai ? 'abu_dhabi' : 'dubai'
+  }
+
+  const lowerBody = body.toLowerCase()
+  if (namesForeignMarket(headline.toLowerCase()) || namesForeignMarket(lowerBody)) return 'global'
+  return feedRegion === 'global' ? 'global' : 'uae'
 }
 
 /**
