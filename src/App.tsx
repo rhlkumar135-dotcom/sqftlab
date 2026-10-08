@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2, Network, ShieldCheck } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2, Network, ShieldCheck, Newspaper } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -26,6 +26,7 @@ import DealsNetworkPage from '@/components/DealsNetworkPage'
 import DealDetailPage from '@/components/DealDetailPage'
 import SignInPage from '@/components/SignInPage'
 import AdminPage from '@/components/AdminPage'
+import MarketIntelligencePage from '@/components/MarketIntelligencePage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { EmptyState } from '@/components/EmptyState'
 import { SkeletonRows } from '@/components/Skeleton'
@@ -300,7 +301,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys' | 'deal-network' | 'deal' | 'admin'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys' | 'deal-network' | 'deal' | 'admin' | 'news'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -342,6 +343,15 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   //
   // Single-segment and not prefixed `/api`, for the same proxy reason as `/keys` above.
   admin: '/admin',
+  // Day 19: the Market Intelligence Feed publishes a real URL because it is a public
+  // SEO surface — crawlers and shared links need one, and it is readable with no
+  // session at all.
+  //
+  // NOT `/intelligence`, which the brief asks for: that page id belongs to the
+  // Pro-tier intelligence report ("spec Part 8.3") and repointing it would have moved
+  // a paid feature's address. Single-segment, and not starting with `/api`, so it
+  // survives the edge proxy.
+  news: '/news',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -381,6 +391,9 @@ const NAV = [
   // Day 16. Deliberately labelled "Deal Network", not "Deals": the entry above it is the
   // Day 8 below-market scanner, and two nav items called "Deals" would be indistinguishable.
   { id: 'deal-network' as Page, label: 'Deal Network', icon: Network },
+  // Day 19. Public and signed-out-readable, positioned next to the other editorial
+  // surfaces rather than among the tools.
+  { id: 'news' as Page, label: 'Market Intelligence', icon: Newspaper },
 ]
 
 // Day 15 Task A — where the getting-started tour may appear. Excluded: the marketing and
@@ -3476,6 +3489,9 @@ function AppInner() {
       {page === 'analytics' && <MarketAnalytics setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'predictions' && <PricePredictions setPage={navigate} setSelectedCommunity={setSelectedCommunity} />}
       {page === 'intelligence' && <IntelligencePage setPage={navigate} />}
+      {/* Day 19 — public, no session required, so it renders for signed-out visitors
+          and crawlers exactly as it does for a signed-in user. */}
+      {page === 'news' && <MarketIntelligencePage onSignIn={() => navigate('signin')} />}
       {page === 'waitlist' && <WaitlistPage setPage={navigate} />}
       {page === 'glossary' && <Glossary />}
       {page === 'signin' && <SignInPage setPage={navigate} />}

@@ -39,6 +39,13 @@ export const CACHE_TTL = {
   capitalFlow: 6 * 60 * 60 * 1000,
   /** Rental yield. */
   yield: 12 * 60 * 60 * 1000,
+  /** Day 19 — news feed. Short: the ingest cron runs every 30 minutes and the
+   *  page promises freshness, so a long TTL would make it stale by design. */
+  newsFeed: 15 * 60 * 1000,
+  /** The daily digest changes once a day; the cron drops the key on regeneration. */
+  newsDigest: 60 * 60 * 1000,
+  /** Signal counts, 7-day window. */
+  newsSignals: 30 * 60 * 1000,
 } as const
 
 export function cacheRead<T>(key: string): T | null {

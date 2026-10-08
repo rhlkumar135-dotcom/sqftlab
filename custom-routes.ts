@@ -17,7 +17,12 @@ import {
 } from './src/lib/intelligence'
 import { fetchAllMacro, fetchExchangeRates } from './src/lib/macro'
 import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentScores } from './src/lib/score-engine'
-import { cacheRead, cacheWrite, CACHE_TTL } from './src/lib/cache'
+import { cacheRead, cacheWrite, cacheInvalidate, CACHE_TTL } from './src/lib/cache'
+import {
+  runNewsIngest, generateDailyDigest, aiConfigured, SIGNAL_TYPES,
+  decodeKeyFigures, decodeTopSignals, decodeStringArray,
+} from './src/lib/news'
+import { NEWS_FEEDS } from './src/lib/news-sources'
 import { PAYMENTS_ENABLED, paymentsBlocked } from './src/lib/payments-server'
 import {
   getStripe, priceIdFor, missingStripeEnv, isPaidPlan, isBillingPeriod,
@@ -1860,38 +1865,73 @@ const USER_AGENTS = [
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
 ]
 
+// Scrape targets.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// EVERY `lid` BELOW WAS WRONG AND HAS BEEN REPLACED WITH A VERIFIED ONE.
+//
+// The previous values did not match the areas they were labelled with. PropertyFinder
+// resolves `?l=` as a numeric location id, and the old ids pointed elsewhere:
+//
+//     l=31   labelled "Dubai Marina"   -> PropertyFinder says Al Twar
+//     l=544  labelled "JVC"            -> PropertyFinder says AG Tower
+//     l=6663..6671 (all eight AD ids)  -> resolve to NOTHING; PropertyFinder ignores
+//                                         the filter and returns all ~192k UAE
+//                                         listings, so Dubai villas were filed
+//                                         under Saadiyat Island
+//
+// The replacement ids were not guessed. They were harvested from PropertyFinder's own
+// listing metadata — every listing carries `location.path` whose segments are the
+// location ids aligned with `location.path_name`:
+//
+//     path = "1.31.461.12518", path_name = "Dubai, Al Twar, Al Twar 1"
+//                                            ↑      ↑
+//                                            |      area id 31
+//                                            emirate
+//
+// `scripts/resolve-lids.ts` does the harvest, then VERIFIES each id by fetching it and
+// reading back `pageProps.location.name`, which is the name PropertyFinder itself
+// resolves the id to. It is re-runnable, so the mapping can be re-derived rather than
+// re-guessed when a portal reorganises its areas.
+//
+// `pfName` is that verified resolved name. It is used to reject a listing whose
+// location does not belong to the area being scraped — defence in depth against the
+// exact class of bug above, because a silent scope failure is invisible otherwise.
+// ─────────────────────────────────────────────────────────────────────────────
 const DUBAI_AREAS = [
-  { name: 'Dubai Marina', lid: '31', slug: 'dubai-marina' },
-  { name: 'Downtown Dubai', lid: '56', slug: 'downtown-dubai' },
-  { name: 'Palm Jumeirah', lid: '63', slug: 'palm-jumeirah' },
-  { name: 'JVC', lid: '544', slug: 'jumeirah-village-circle' },
-  { name: 'Business Bay', lid: '53', slug: 'business-bay' },
-  { name: 'Dubai Hills Estate', lid: '1436', slug: 'dubai-hills-estate' },
-  { name: 'JLT', lid: '59', slug: 'jumeirah-lake-towers' },
-  { name: 'DIFC', lid: '55', slug: 'difc' },
-  { name: 'Dubai Creek Harbour', lid: '3476', slug: 'dubai-creek-harbour' },
-  { name: 'MBR City', lid: '2424', slug: 'mbr-city' },
-  { name: 'Al Barsha', lid: '40', slug: 'al-barsha' },
-  { name: 'Deira', lid: '49', slug: 'deira' },
-  { name: 'Bur Dubai', lid: '47', slug: 'bur-dubai' },
-  { name: 'Dubai Silicon Oasis', lid: '109', slug: 'dubai-silicon-oasis' },
-  { name: 'Dubai Sports City', lid: '103', slug: 'dubai-sports-city' },
-  { name: 'Motor City', lid: '102', slug: 'motor-city' },
-  { name: 'Discovery Gardens', lid: '58', slug: 'discovery-gardens' },
-  { name: 'Town Square', lid: '2100', slug: 'town-square' },
-  { name: 'Al Nahda', lid: '44', slug: 'al-nahda' },
-  { name: 'Dubailand', lid: '105', slug: 'dubailand' },
+  { name: 'Dubai Marina', lid: '50', slug: 'dubai-marina', pfName: 'Dubai Marina' },
+  { name: 'Downtown Dubai', lid: '41', slug: 'downtown-dubai', pfName: 'Downtown Dubai' },
+  { name: 'Palm Jumeirah', lid: '86', slug: 'palm-jumeirah', pfName: 'Palm Jumeirah' },
+  { name: 'JVC', lid: '73', slug: 'jumeirah-village-circle', pfName: 'Jumeirah Village Circle' },
+  { name: 'Business Bay', lid: '36', slug: 'business-bay', pfName: 'Business Bay' },
+  { name: 'Dubai Hills Estate', lid: '105', slug: 'dubai-hills-estate', pfName: 'Dubai Hills Estate' },
+  { name: 'JLT', lid: '71', slug: 'jumeirah-lake-towers', pfName: 'Jumeirah Lake Towers' },
+  { name: 'DIFC', lid: '39', slug: 'difc', pfName: 'DIFC' },
+  { name: 'Dubai Creek Harbour', lid: '48', slug: 'dubai-creek-harbour', pfName: 'Dubai Creek Harbour (The Lagoons)' },
+  { name: 'MBR City', lid: '104', slug: 'mbr-city', pfName: 'Mohammed Bin Rashid City' },
+  { name: 'Al Barsha', lid: '13', slug: 'al-barsha', pfName: 'Al Barsha' },
+  { name: 'Deira', lid: '38', slug: 'deira', pfName: 'Deira' },
+  { name: 'Bur Dubai', lid: '35', slug: 'bur-dubai', pfName: 'Bur Dubai' },
+  { name: 'Dubai Silicon Oasis', lid: '54', slug: 'dubai-silicon-oasis', pfName: 'Dubai Silicon Oasis' },
+  { name: 'Dubai Sports City', lid: '55', slug: 'dubai-sports-city', pfName: 'Dubai Sports City' },
+  { name: 'Motor City', lid: '80', slug: 'motor-city', pfName: 'Motor City' },
+  { name: 'Discovery Gardens', lid: '40', slug: 'discovery-gardens', pfName: 'Discovery Gardens' },
+  { name: 'Town Square', lid: '131', slug: 'town-square', pfName: 'Town Square' },
+  { name: 'Al Nahda', lid: '23', slug: 'al-nahda', pfName: 'Al Nahda' },
+  // PropertyFinder has no "Dubailand" area; the id below is the master community that
+  // listings there are actually filed under, so the display name says what the data is.
+  { name: 'Dubailand', lid: '123', slug: 'dubailand', pfName: 'Dubai Land Residence Complex' },
 ]
 
 const AD_AREAS = [
-  { name: 'Al Reem Island', lid: '6665', slug: 'al-reem-island' },
-  { name: 'Saadiyat Island', lid: '6666', slug: 'saadiyat-island' },
-  { name: 'Yas Island', lid: '6667', slug: 'yas-island' },
-  { name: 'Al Raha Beach', lid: '6668', slug: 'al-raha-beach' },
-  { name: 'Corniche', lid: '6663', slug: 'corniche' },
-  { name: 'Khalifa City', lid: '6670', slug: 'khalifa-city' },
-  { name: 'MBZ City', lid: '6671', slug: 'mbz-city' },
-  { name: 'Al Maryah Island', lid: '6669', slug: 'al-maryah-island' },
+  { name: 'Al Reem Island', lid: '279', slug: 'al-reem-island', pfName: 'Al Reem Island' },
+  { name: 'Saadiyat Island', lid: '310', slug: 'saadiyat-island', pfName: 'Saadiyat Island' },
+  { name: 'Yas Island', lid: '313', slug: 'yas-island', pfName: 'Yas Island' },
+  { name: 'Al Raha Beach', lid: '275', slug: 'al-raha-beach', pfName: 'Al Raha Beach' },
+  { name: 'Corniche', lid: '290', slug: 'corniche', pfName: 'Corniche Road' },
+  { name: 'Khalifa City', lid: '299', slug: 'khalifa-city', pfName: 'Khalifa City' },
+  { name: 'MBZ City', lid: '305', slug: 'mbz-city', pfName: 'Mohamed Bin Zayed City' },
+  { name: 'Al Maryah Island', lid: '283', slug: 'al-maryah-island', pfName: 'Al Maryah' },
 ]
 
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -1992,7 +2032,24 @@ export function pfParse(property: any, source: string, purpose: string) {
     listedAt: new Date(property.listed_date ?? Date.now()),
     districtName: loc.name ?? 'Unknown',
     locationSlug: loc.slug ?? (loc.name ?? 'unknown').toLowerCase().replace(/\s+/g, '-'),
-    sourceUrl: `https://www.propertyfinder.ae/en/property/${property.id ?? ''}.html`,
+    // `path_name` is the portal's own hierarchical location ("Dubai, Dubai Marina,
+    // Marina Promenade"). The scraper compares it against the target area to confirm a
+    // returned listing really belongs to the search that produced it — see the guard in
+    // the crawl loop. Without it a scope failure is invisible: the old `lid` values
+    // silently returned the whole UAE catalogue and every listing was filed under
+    // whichever area the loop happened to be on.
+    locationPathName: loc.path_name ?? null,
+    // PropertyFinder's own canonical link.
+    //
+    // This was hand-built as `https://www.propertyfinder.ae/en/property/<id>.html`,
+    // which is not a path the portal serves any more — on a live page `/en/property/`
+    // appears ZERO times while `/en/plp/` appears 42. Every stored source_url that was
+    // not null returned HTTP 404, and 77% were null outright, so no listing was
+    // clickable. `share_url` is the absolute link PropertyFinder renders on the card
+    // itself; `details_path` is its relative twin, used only as a fallback.
+    sourceUrl:
+      property.share_url ??
+      (property.details_path ? `https://www.propertyfinder.ae${property.details_path}` : null),
   }
 }
 
@@ -2050,6 +2107,11 @@ app.get('/sqftlab/scrape', async (c) => {
   let totalSaved = 0
   let saveFailures = 0
   let firstSaveError: string | null = null
+  // Listings the portal returned that do not belong to the area being scraped.
+  // Counted rather than silently dropped: a non-zero value here is the signal that a
+  // search has widened beyond its scope, which is exactly the failure the old `lid`
+  // values caused and which was previously invisible in the run output.
+  let offArea = 0
   const logs: string[] = []
 
   // Any row still marked 'running' when a new run starts belongs to a process
@@ -2110,12 +2172,30 @@ app.get('/sqftlab/scrape', async (c) => {
             try {
               const parsed = pfParse(p, 'propertyfinder', purpose)
               if (parsed.priceAed <= 0) continue
+
+              // Scope guard. A listing returned by this search must actually sit in the
+              // area being scraped. PropertyFinder pads a results page with listings from
+              // elsewhere, and — as the replaced `lid` values proved — a search can
+              // silently widen to the entire country. Comparing the portal's own
+              // `location.path_name` against the area catches both. Filing an off-area
+              // listing under the area being crawled IS the contamination bug, and it is
+              // invisible in the run output without this counter.
+              if (parsed.locationPathName && area.pfName) {
+                const parts = parsed.locationPathName.split(',').map((s: string) => s.trim())
+                const listingArea = parts[1] ?? ''
+                if (listingArea.toLowerCase() !== area.pfName.toLowerCase()) {
+                  offArea++
+                  continue
+                }
+              }
+
               // Attribute to the AREA being scraped, not `parsed.locationSlug`.
               // PropertyFinder's card carries the BUILDING's slug, so trusting it
               // created one community per building — a single run added 484 rows
               // like `jumeirah-lake-towers-jlt-cluster-e-global-lake-view`, every
               // one with zero listings and the wrong emirate. A listing returned
-              // by the "Dubai Marina" search belongs to Dubai Marina.
+              // by the "Dubai Marina" search belongs to Dubai Marina — and the guard
+              // above is what makes that statement true rather than assumed.
               const community = await ensureCommunity(area.name, area.slug, emirate)
               await prisma.listing.upsert({
                 where: { externalId: parsed.externalId },
@@ -2133,10 +2213,19 @@ app.get('/sqftlab/scrape', async (c) => {
                   listedAt: parsed.listedAt, isDeal: false,
                 },
                 update: {
+                  // `communityId` is updated ON PURPOSE. The upsert key is `externalId`,
+                  // and every other column was refreshed while this one was left alone —
+                  // so a listing first scraped under a wrong area kept that wrong
+                  // community forever. That is exactly why correcting the `lid` values
+                  // alone would NOT have repaired the existing rows: the next crawl would
+                  // have refreshed their price and title and left the wrong district in
+                  // place. With this line the next crawl re-attributes them.
+                  communityId: community.id,
                   priceAed: parsed.priceAed, pricePerSqft: parsed.pricePerSqft,
                   title: parsed.title, imageUrl: parsed.imageUrl,
                   sourceUrl: parsed.sourceUrl,
                   agentName: parsed.agentName, agencyName: parsed.agencyName,
+                  latitude: parsed.latitude, longitude: parsed.longitude,
                   scrapedAt: new Date(),
                 },
               })
@@ -8061,6 +8150,443 @@ app.post('/sqftlab/deal-briefs/:id/express', async (c) => {
 
   await trackEvent(c, 'deal_expression', { dealId: deal.id })
   return c.json({ ...expression, emailStatus }, 201)
+})
+
+// ─── Day 19 — Market Intelligence Feed ──────────────────────────────────────
+//
+// PUBLIC BY DESIGN. No auth, no tier gate on any GET below. The brief is explicit
+// that reading the feed requires no login, and that is also the right call for a
+// top-of-funnel surface: it is meant to be crawled, shared, and opened by
+// signed-out visitors who arrive from a search engine.
+//
+// Caching goes through src/lib/cache.ts rather than Redis. This deployment has no
+// Redis (the brief's `redis.setex` calls have no counterpart here), and the TTLs
+// are the same values the brief specifies. The caveat recorded in that module
+// applies: the store is PROCESS-LOCAL, so with more than one instance a write in
+// one process is invisible to the others until their entry expires.
+//
+// Nothing here fabricates content. When there are no articles the feed says so and
+// `/sqftlab/news/status` reports whether the ingest has ever run, rather than an
+// empty list that is indistinguishable from "everything is fine".
+
+const NEWS_PAGE_SIZE = 20
+const NEWS_SIGNAL_WINDOW_DAYS = 7
+
+/** A stored row, shaped for the wire. */
+interface NewsRow {
+  id: string
+  source: string
+  sourceName: string
+  sourceUrl: string
+  headline: string
+  publishedAt: Date
+  imageUrl: string | null
+  rawExcerpt: string
+  aiSummary: string | null
+  aiSignalType: string | null
+  aiImpactArea: string | null
+  aiSentiment: string | null
+  aiKeyFigures: string | null
+}
+
+/**
+ * Decode the TEXT-as-JSON columns so the client never has to know that
+ * `aiKeyFigures` is stored as text. Doing it here also means a malformed value is
+ * returned as null rather than crashing a render.
+ */
+function serialiseNewsItem(item: NewsRow) {
+  return {
+    id: item.id,
+    source: item.source,
+    sourceName: item.sourceName,
+    sourceUrl: item.sourceUrl,
+    headline: item.headline,
+    publishedAt: item.publishedAt,
+    imageUrl: item.imageUrl,
+    rawExcerpt: item.rawExcerpt,
+    aiSummary: item.aiSummary,
+    aiSignalType: item.aiSignalType,
+    aiImpactArea: item.aiImpactArea,
+    aiSentiment: item.aiSentiment,
+    aiKeyFigures: decodeKeyFigures(item.aiKeyFigures),
+    aiProcessed: item.aiSummary !== null,
+  }
+}
+
+// GET /sqftlab/news — paginated feed, filterable by signal, sentiment and area.
+// Public. Cached 15 minutes.
+app.get('/sqftlab/news', async (c) => {
+  const signal = c.req.query('signal') ?? ''
+  const sentiment = c.req.query('sentiment') ?? ''
+  const area = c.req.query('area') ?? ''
+  const pageRaw = Number.parseInt(c.req.query('page') ?? '1', 10)
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1
+  const offset = (page - 1) * NEWS_PAGE_SIZE
+
+  // Validate against the known vocabularies rather than passing caller input into
+  // the query. An unknown value is ignored, not turned into a filter that silently
+  // matches nothing (which would look like "no news" instead of "bad filter").
+  const signalFilter = (SIGNAL_TYPES as readonly string[]).includes(signal) ? signal : ''
+  const sentimentFilter = ['positive', 'negative', 'neutral'].includes(sentiment) ? sentiment : ''
+  const areaFilter = area.trim().slice(0, 60)
+
+  const cacheKey = `news:feed:${signalFilter}:${sentimentFilter}:${areaFilter}:${page}`
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const where = {
+    aiProcessed: true,
+    ...(signalFilter ? { aiSignalType: signalFilter } : {}),
+    ...(sentimentFilter ? { aiSentiment: sentimentFilter } : {}),
+    // SQLite's LIKE is case-insensitive for ASCII already; Prisma's `mode`
+    // modifier is PostgreSQL-only and would break on the sqlite provider.
+    ...(areaFilter ? { aiImpactArea: { contains: areaFilter } } : {}),
+  }
+
+  const [items, total] = await Promise.all([
+    prisma.newsItem.findMany({
+      where,
+      orderBy: { publishedAt: 'desc' },
+      take: NEWS_PAGE_SIZE,
+      skip: offset,
+      select: {
+        id: true, source: true, sourceName: true, sourceUrl: true, headline: true,
+        publishedAt: true, imageUrl: true, rawExcerpt: true,
+        aiSummary: true, aiSignalType: true, aiImpactArea: true,
+        aiSentiment: true, aiKeyFigures: true,
+      },
+    }),
+    prisma.newsItem.count({ where }),
+  ])
+
+  const payload = {
+    items: items.map(serialiseNewsItem),
+    total,
+    page,
+    pages: Math.max(1, Math.ceil(total / NEWS_PAGE_SIZE)),
+    pageSize: NEWS_PAGE_SIZE,
+  }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsFeed)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/digest — today's digest, else the most recent one. Public.
+app.get('/sqftlab/news/digest', async (c) => {
+  const cacheKey = 'news:digest:today'
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  // UAE "today" is UTC+4 — the digest is keyed on the UAE calendar day.
+  const uaeNow = new Date(Date.now() + 4 * 60 * 60 * 1000)
+  const todayDate = new Date(uaeNow.toISOString().split('T')[0])
+
+  const today = await prisma.intelligenceSummary.findUnique({ where: { date: todayDate } })
+  const digest = today ?? (await prisma.intelligenceSummary.findFirst({ orderBy: { date: 'desc' } }))
+
+  const payload = {
+    digest: digest
+      ? {
+          ...digest,
+          topSignals: decodeTopSignals(digest.topSignals),
+          areasInFocus: decodeStringArray(digest.areasInFocus),
+          sourcesUsed: decodeStringArray(digest.sourcesUsed),
+          isToday: today !== null,
+        }
+      : null,
+  }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsDigest)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/digest/history — last 7 digests. Public.
+app.get('/sqftlab/news/digest/history', async (c) => {
+  const cacheKey = 'news:digest:history'
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const rows = await prisma.intelligenceSummary.findMany({
+    orderBy: { date: 'desc' },
+    take: 7,
+  })
+  const history = rows.map((r) => ({
+    id: r.id,
+    date: r.date,
+    headline: r.headline,
+    summary: r.summary,
+    topSignals: decodeTopSignals(r.topSignals),
+    sentimentScore: r.sentimentScore,
+    areasInFocus: decodeStringArray(r.areasInFocus),
+    articlesScanned: r.articlesScanned,
+    sourcesUsed: decodeStringArray(r.sourcesUsed),
+  }))
+  const payload = { history }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsDigest)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/signals — 7-day signal breakdown. Public.
+app.get('/sqftlab/news/signals', async (c) => {
+  const cacheKey = 'news:signals'
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const since = new Date(Date.now() - NEWS_SIGNAL_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  const grouped = await prisma.newsItem.groupBy({
+    by: ['aiSignalType'],
+    where: { aiProcessed: true, publishedAt: { gte: since } },
+    _count: { id: true },
+  })
+
+  // Emit every known signal type, including zeros, so the chart's axis is stable
+  // and a category dropping to zero is visible rather than absent.
+  const counts = new Map(grouped.map((g) => [g.aiSignalType ?? 'other', g._count.id]))
+  const signals = SIGNAL_TYPES.map((type) => ({ type, count: counts.get(type) ?? 0 })).sort(
+    (a, b) => b.count - a.count,
+  )
+
+  const payload = { signals, period: `${NEWS_SIGNAL_WINDOW_DAYS}d`, since }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsSignals)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/sources — what is actually being ingested. Public.
+//
+// Reports each configured feed AND the publishers really seen in the stored rows,
+// because those are different questions and only the second one tells a reader
+// whether the feed has content. A configured-but-empty feed is shown as such.
+app.get('/sqftlab/news/sources', async (c) => {
+  const cacheKey = 'news:sources'
+  const cached = cacheRead<unknown>(cacheKey)
+  if (cached) return c.json(cached)
+
+  const [byPublisher, byFeed, total, latest] = await Promise.all([
+    prisma.newsItem.groupBy({ by: ['sourceName'], _count: { id: true } }),
+    prisma.newsItem.groupBy({ by: ['source'], _count: { id: true } }),
+    prisma.newsItem.count(),
+    prisma.newsItem.findFirst({ orderBy: { publishedAt: 'desc' }, select: { publishedAt: true } }),
+  ])
+
+  const feedCounts = new Map(byFeed.map((f) => [f.source, f._count.id]))
+  const payload = {
+    total,
+    latestPublishedAt: latest?.publishedAt ?? null,
+    feeds: NEWS_FEEDS.map((f) => ({
+      id: f.id,
+      name: f.name,
+      region: f.region,
+      category: f.category,
+      stored: feedCounts.get(f.id) ?? 0,
+    })),
+    publishers: byPublisher
+      .map((p) => ({ name: p.sourceName, count: p._count.id }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12),
+  }
+  cacheWrite(cacheKey, payload, CACHE_TTL.newsSignals)
+  return c.json(payload)
+})
+
+// GET /sqftlab/news/status — has the ingest ever run, and can the AI layer run?
+// Public on purpose: it is the honest answer to "why is the feed empty", and it
+// exposes no content. Mirrors /sqftlab/cron/status.
+app.get('/sqftlab/news/status', async (c) => {
+  const [total, processed, pending, lastRun] = await Promise.all([
+    prisma.newsItem.count(),
+    prisma.newsItem.count({ where: { aiProcessed: true } }),
+    prisma.newsItem.count({ where: { aiProcessed: false } }),
+    prisma.cronRun.findFirst({ where: { job: NEWS_INGEST_JOB }, orderBy: { startedAt: 'desc' } }),
+  ])
+  return c.json({
+    aiConfigured: aiConfigured(),
+    feeds: NEWS_FEEDS.length,
+    items: { total, processed, pending },
+    lastIngestAt: lastRun?.startedAt ?? null,
+    lastIngestStatus: lastRun?.status ?? null,
+  })
+})
+
+// ─── Day 19 cron endpoints ───────────────────────────────────────────────────
+//
+// Scheduled the same way the hourly job is: an external scheduler calls these over
+// HTTP. Nothing is scheduled in-process — the brief's `cron.schedule(...)` has no
+// counterpart in this deployment, and a timer inside a server that restarts on
+// every deploy would silently stop.
+
+const NEWS_INGEST_JOB = 'news-ingest'
+const DAILY_DIGEST_JOB = 'daily-digest'
+/** Processed per tick. Bounded so one tick cannot run for minutes. */
+const NEWS_PROCESS_BATCH = 30
+
+/** Same step shape `runHourlyRefresh` writes, so `/sqftlab/cron/status` renders
+ *  these runs identically to the hourly job. */
+interface CronStep {
+  step: string
+  status: 'ok' | 'failed' | 'skipped'
+  ms: number
+  detail?: string
+  error?: string
+}
+
+/** Close a CronRun with the vocabulary the column actually uses. */
+async function closeCronRun(runId: string, startedAt: number, steps: CronStep[], errorMsg: string | null) {
+  const okCount = steps.filter((s) => s.status === 'ok').length
+  const failCount = steps.filter((s) => s.status === 'failed').length
+  const status = failCount === 0 ? 'success' : okCount > 0 ? 'partial' : 'error'
+  await prisma.cronRun.update({
+    where: { id: runId },
+    data: {
+      status,
+      steps: JSON.stringify(steps),
+      okCount,
+      failCount,
+      durationMs: Date.now() - startedAt,
+      finishedAt: new Date(),
+      errorMsg,
+    },
+  })
+}
+
+const newsIngestHandler = async (c: Context) => {
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
+  const startedAt = Date.now()
+  const run = await prisma.cronRun.create({ data: { job: NEWS_INGEST_JOB, status: 'running' } })
+  try {
+    const result = await runNewsIngest(NEWS_PROCESS_BATCH)
+
+    // One step per feed as well as the model pass, so a tick where six feeds answered
+    // and two were unreachable is legible from the run record rather than a single
+    // opaque "failed".
+    const steps: CronStep[] = [
+      {
+        step: 'ingest',
+        status: result.ingest.feedsFailed === NEWS_FEEDS.length ? 'failed' : 'ok',
+        ms: result.ingestMs,
+        detail: `feedsOk=${result.ingest.feedsOk}/${NEWS_FEEDS.length} fetched=${result.ingest.fetched} saved=${result.ingest.saved} filtered=${result.ingest.filtered} skipped=${result.ingest.skipped}`,
+        ...(result.ingest.feedsFailed === NEWS_FEEDS.length
+          ? { error: result.ingest.feeds.map((f) => `${f.feedId}:${f.error ?? 'error'}`).join('; ') }
+          : {}),
+      },
+      {
+        step: 'aiProcess',
+        status: result.processing.skippedNoCredential
+          ? 'skipped'
+          : result.processing.failed > 0
+            ? 'failed'
+            : 'ok',
+        ms: result.processMs,
+        detail: result.processing.skippedNoCredential
+          ? 'no AI credential configured — items stay queued'
+          : `attempted=${result.processing.attempted} processed=${result.processing.processed} failed=${result.processing.failed}`,
+      },
+    ]
+
+    await closeCronRun(run.id, startedAt, steps, steps.find((s) => s.status === 'failed')?.error ?? null)
+
+    // New articles exist, so every derived cache is stale by definition rather than
+    // by the clock.
+    cacheInvalidate('news:feed:')
+    cacheInvalidate('news:signals')
+    cacheInvalidate('news:sources')
+
+    return c.json(result, result.ok ? 200 : 207)
+  } catch (e) {
+    await closeCronRun(run.id, startedAt, [
+      { step: 'ingest', status: 'failed', ms: Date.now() - startedAt, error: e instanceof Error ? e.message : String(e) },
+    ], e instanceof Error ? e.message : String(e))
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500)
+  }
+}
+
+const dailyDigestHandler = async (c: Context) => {
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
+  const startedAt = Date.now()
+  const run = await prisma.cronRun.create({ data: { job: DAILY_DIGEST_JOB, status: 'running' } })
+  try {
+    const result = await generateDailyDigest()
+    await closeCronRun(
+      run.id,
+      startedAt,
+      [
+        {
+          step: 'digest',
+          // "already generated" and "not enough articles" are not failures — they are
+          // the job doing its job, and marking them failed would train a monitor to
+          // ignore this job's alerts.
+          status: result.generated ? 'ok' : 'skipped',
+          ms: Date.now() - startedAt,
+          detail: result.generated ? `date=${result.date} articles=${result.articlesScanned}` : `reason=${result.reason}`,
+        },
+      ],
+      null,
+    )
+    if (result.generated) cacheInvalidate('news:digest')
+    return c.json(result)
+  } catch (e) {
+    await closeCronRun(run.id, startedAt, [
+      { step: 'digest', status: 'failed', ms: Date.now() - startedAt, error: e instanceof Error ? e.message : String(e) },
+    ], e instanceof Error ? e.message : String(e))
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500)
+  }
+}
+
+app.get('/sqftlab/cron/news-ingest', newsIngestHandler)
+app.post('/sqftlab/cron/news-ingest', newsIngestHandler)
+app.get('/sqftlab/cron/daily-digest', dailyDigestHandler)
+app.post('/sqftlab/cron/daily-digest', dailyDigestHandler)
+
+// POST /sqftlab/news/trigger-ingest — manual trigger.
+//
+// Fire-and-forget, and that is the point rather than a shortcut: a full tick with
+// new articles to analyse takes ~70s because the model is called per article. Held
+// open, that request exceeds any sensible HTTP/proxy timeout and the caller sees a
+// dropped connection while the work carries on — the worst of both worlds, since
+// they cannot tell "still running" from "failed". So this returns immediately and
+// the outcome lands in `CronRun`, readable from /sqftlab/cron/status.
+//
+// Gated to institutional, per the brief — every READ route above is public, but
+// triggering ingest spends real money on model calls, so it is not.
+app.post('/sqftlab/news/trigger-ingest', async (c) => {
+  const blocked = requireTier(c, 'institutional', 'Manual news ingest trigger')
+  if (blocked) return blocked
+
+  const run = await prisma.cronRun.create({ data: { job: NEWS_INGEST_JOB, status: 'running' } })
+  const startedAt = Date.now()
+
+  void (async () => {
+    try {
+      const result = await runNewsIngest(NEWS_PROCESS_BATCH)
+      await closeCronRun(
+        run.id,
+        startedAt,
+        [
+          {
+            step: 'ingest',
+            status: result.ingest.feedsFailed === NEWS_FEEDS.length ? 'failed' : 'ok',
+            ms: result.ingestMs,
+            detail: `feedsOk=${result.ingest.feedsOk}/${NEWS_FEEDS.length} fetched=${result.ingest.fetched} saved=${result.ingest.saved} filtered=${result.ingest.filtered}`,
+          },
+          {
+            step: 'aiProcess',
+            status: result.processing.skippedNoCredential ? 'skipped' : 'ok',
+            ms: result.processMs,
+            detail: result.processing.skippedNoCredential
+              ? 'no AI credential configured'
+              : `attempted=${result.processing.attempted} processed=${result.processing.processed} failed=${result.processing.failed}`,
+          },
+        ],
+        null,
+      )
+      cacheInvalidate('news:feed:')
+      cacheInvalidate('news:signals')
+      cacheInvalidate('news:sources')
+    } catch (e) {
+      await closeCronRun(run.id, startedAt, [
+        { step: 'ingest', status: 'failed', ms: Date.now() - startedAt, error: e instanceof Error ? e.message : String(e) },
+      ], e instanceof Error ? e.message : String(e))
+    }
+  })()
+
+  return c.json({ triggered: true, runId: run.id, message: 'Ingest started in background; poll /sqftlab/cron/status' }, 202)
 })
 
 // Catch-all — must be registered LAST so every real route wins.

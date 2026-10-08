@@ -47,6 +47,18 @@ body {
 @keyframes score-draw { from { stroke-dashoffset: 314; } to { stroke-dashoffset: var(--target-offset); } }
 
 ::selection { background: rgba(37,99,235,0.14); color: var(--ink); }
+
+/* The LIVE badge's pulse. Defined once here rather than inline, so the animation is
+   not re-declared per render. */
+@keyframes sqftlab-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.live-dot { animation: sqftlab-pulse 2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(37,99,235,0.22); border-radius: 2px; }

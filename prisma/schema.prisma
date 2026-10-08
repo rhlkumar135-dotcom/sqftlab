@@ -1042,3 +1042,88 @@ model DldReference {
   @@index([kind])
   @@map("dld_references")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Day 19 — Market Intelligence Feed.
+//
+// Two deviations from the brief, both forced by this deployment rather than
+// chosen:
+//
+//  · `Json` and `String[]` are PostgreSQL column types. This schema is SQLite in
+//    development and is swapped to PostgreSQL only at deploy time
+//    (scripts/railway-setup.sh), so it has to be valid under BOTH providers. Every
+//    array and object field below is therefore `String` holding JSON text, which is
+//    the established convention here (see the port note on the Day 1 block above and
+//    `User.whatsappAreas`). `src/lib/news.ts` owns the encode/decode so no caller
+//    hand-rolls JSON.parse.
+//
+//  · `@db.Text` is dropped for the same reason — it is a PostgreSQL native-type
+//    modifier and Prisma rejects it on the sqlite provider.
+//
+// `contentHash` is what makes re-ingesting idempotent, and it is central to the
+// brief: the same article seen on two consecutive 30-minute ticks must not create
+// two rows.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model NewsItem {
+  id            String   @id @default(cuid())
+
+  // Provenance. `source` is the ingest feed that found it; `sourceName` is the
+  // actual publisher, which is what a reader recognises.
+  source        String
+  sourceName    String   @map("source_name")
+  sourceUrl     String   @map("source_url")
+  headline      String
+  publishedAt   DateTime @map("published_at")
+  author        String?
+  imageUrl      String?  @map("image_url")
+
+  // Content
+  rawExcerpt    String   @map("raw_excerpt")
+  fullText      String?  @map("full_text")
+
+  // AI intelligence layer. Null on every field until the processing pass runs, so
+  // an item that has not been analysed is visibly un-analysed rather than defaulting
+  // to a plausible-looking "neutral / other".
+  aiSummary     String?  @map("ai_summary")
+  aiSignalType  String?  @map("ai_signal_type")
+  aiImpactArea  String?  @map("ai_impact_area")
+  aiSentiment   String?  @map("ai_sentiment")
+  /// JSON text: { value, pct, units }
+  aiKeyFigures  String?  @map("ai_key_figures")
+  aiProcessed   Boolean  @default(false) @map("ai_processed")
+  aiProcessedAt DateTime? @map("ai_processed_at")
+
+  /// MD5 of sourceUrl + publishedAt. Unique — this is the dedup key.
+  contentHash   String   @unique @map("content_hash")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([publishedAt])
+  @@index([aiSignalType])
+  @@index([aiImpactArea])
+  @@index([source])
+  @@map("news_items")
+}
+
+/// One AI-written daily digest. `date` is the UAE calendar day (UTC+4), stored as
+/// midnight UTC of that day — unique, so regenerating the same day updates rather
+/// than duplicating.
+model IntelligenceSummary {
+  id              String   @id @default(cuid())
+  date            DateTime @unique
+
+  headline        String
+  summary         String
+  /// JSON text: Array<{ type, headline, impact }>
+  topSignals      String   @map("top_signals")
+  sentimentScore  Float?   @map("sentiment_score")
+  /// JSON text: string[]
+  areasInFocus    String   @default("[]") @map("areas_in_focus")
+  articlesScanned Int      @default(0) @map("articles_scanned")
+  /// JSON text: string[]
+  sourcesUsed     String   @default("[]") @map("sources_used")
+  generatedAt     DateTime @default(now()) @map("generated_at")
+
+  @@index([date])
+  @@map("intelligence_summaries")
+}
