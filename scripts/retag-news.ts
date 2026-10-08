@@ -9,10 +9,8 @@
  * be judged rather than trusted.
  */
 import { prisma } from '../src/lib/db'
-import { classifyEmirate, NEWS_FEEDS } from '../src/lib/news-sources'
+import { classifyEmirate } from '../src/lib/news-sources'
 import { cacheInvalidate } from '../src/lib/cache'
-
-const regionOfFeed = (id: string) => NEWS_FEEDS.find((f) => f.id === id)?.region ?? 'uae'
 
 async function main() {
   const items = await prisma.newsItem.findMany({
@@ -26,7 +24,7 @@ async function main() {
 
   for (const it of items) {
     before[it.emirate] = (before[it.emirate] ?? 0) + 1
-    const next = classifyEmirate(it.headline, it.rawExcerpt, regionOfFeed(it.source))
+    const next = classifyEmirate(it.headline, it.rawExcerpt)
     after[next] = (after[next] ?? 0) + 1
     if (next !== it.emirate) {
       await prisma.newsItem.update({ where: { id: it.id }, data: { emirate: next } })

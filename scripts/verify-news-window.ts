@@ -47,36 +47,64 @@ async function main() {
   // previously filed under an emirate purely because of which feed query returned it.
   console.log('classifier — regressions found in the live tabs')
   check(
-    'Saudi story from the Abu Dhabi feed is NOT abu_dhabi',
+    'Saudi story is NOT abu_dhabi',
     classifyEmirate(
       'Al Othaim reveals US $4.3bn Saudi real estate investment plans',
-      'Al Othaim reveals US $4.3bn Saudi real estate investment plans',
-      'abudhabi'
+      'Al Othaim reveals US $4.3bn Saudi real estate investment plans'
     ) === 'global'
   )
   check(
-    'Africa story from the Dubai feed is NOT dubai',
-    classifyEmirate('Africa Launches AfCRA to Strengthen Capital Access', '', 'dubai') === 'global'
+    'Africa story is NOT dubai',
+    classifyEmirate('Africa Launches AfCRA to Strengthen Capital Access', '') === 'global'
   )
   check(
     'Kyiv story is NOT dubai',
-    classifyEmirate('Company halts three residential complexes in Kyiv', '', 'dubai') === 'global'
+    classifyEmirate('Company halts three residential complexes in Kyiv', '') === 'global'
+  )
+  check('Ajman story is UAE-wide, not abu_dhabi', classifyEmirate('Al Zorah outlines project pipeline in Ajman', '') === 'uae')
+  check('Sharjah story is UAE-wide, not dubai', classifyEmirate('Sharjah rents rise across key communities', '') === 'uae')
+
+  // The UAE-wide bucket was the catch-all and a second browser pass found it 46% on-topic,
+  // full of US mortgage-rate reports from the "UAE economy mortgage" feed.
+  console.log('classifier — the UAE-wide catch-all')
+  check('US mortgage story is NOT uae-wide', classifyEmirate('US Mortgage Rates Hit Three-Year High', '') === 'global')
+  check(
+    'US 30-year mortgage story is NOT uae-wide',
+    classifyEmirate('US 30-year mortgage rate hits highest in nearly three years', '') === 'global'
   )
   check(
-    'Ajman story from the Abu Dhabi feed is NOT abu_dhabi',
-    classifyEmirate('Al Zorah outlines project pipeline in Ajman', '', 'abudhabi') === 'uae'
+    'Federal Reserve story is NOT uae-wide',
+    classifyEmirate('Trump targets Federal Reserve over mortgage rates', '') === 'global'
+  )
+  check('Türkiye (accented) is NOT uae-wide', classifyEmirate('Türkiye property sales to foreigners rise', '') === 'global')
+  check('Italy is NOT uae-wide', classifyEmirate('Italy housing market cools sharply', '') === 'global')
+  check(
+    'an emirate-free, UAE-free story is international, not UAE-wide',
+    classifyEmirate('Developer launches new residential tower', '') === 'global'
   )
   check(
-    'Sharjah story is NOT dubai',
-    classifyEmirate('Sharjah rents rise across key communities', '', 'dubai') === 'uae'
+    'a UAE signal without an emirate is UAE-wide',
+    classifyEmirate('Dirham peg keeps Gulf property attractive', '') === 'uae'
+  )
+  check(
+    'a UAE headline mentioning a foreign market stays UAE-wide',
+    classifyEmirate('UAE Real Estate Is Back in the Spotlight as Buyer Activity Builds', '') === 'uae'
+  )
+  check(
+    'a Dubai area named without the word Dubai still counts',
+    classifyEmirate('Villa in The World Islands sold for Dhs79 million', '') === 'dubai'
+  )
+  check(
+    'lowercase "us" is not read as the United States',
+    classifyEmirate('What Dubai landlords want you to know, let us explain', '') === 'dubai'
   )
   check(
     'a passing body mention does not claim the emirate',
-    classifyEmirate('Etihad Rail puts UAE property market on a new track', 'The developer also has offices in Dubai.', 'uae') === 'uae'
+    classifyEmirate('Etihad Rail puts UAE property market on a new track', 'The developer also has offices in Dubai.') === 'uae'
   )
   check(
     'a headline mention does claim it',
-    classifyEmirate('Dubai property buyers get keys months ahead of time', '', 'uae') === 'dubai'
+    classifyEmirate('Dubai property buyers get keys months ahead of time', '') === 'dubai'
   )
 
   console.log('\ntab counts')

@@ -204,71 +204,119 @@ const EMIRATE_SIGNALS: Record<'dubai' | 'abu_dhabi', string[]> = {
     'business bay', 'palm jumeirah', 'difc', 'dubai hills', 'creek harbour',
     'meydan', 'damac', 'emaar', 'dld', 'rera', 'expo city', 'dubai south',
     'arabian ranches', 'town square', 'discovery gardens', 'sobha', 'dubailand',
+    'world islands', 'the palm', 'deira', 'bur dubai', 'dubai creek', 'maritime city',
   ],
 }
 
-/** Feed region → emirate, used only when the text names neither emirate. */
-export function regionToEmirate(region: NewsFeed['region']): Emirate {
-  return region === 'abudhabi' ? 'abu_dhabi' : region === 'dubai' ? 'dubai' : region
-}
+/**
+ * Case-sensitive foreign markers. These are acronyms, so they are matched against the
+ * original text with word boundaries rather than the lowercased text: "let us know" must
+ * not read as the United States, and a substring test for 'us' would.
+ */
+const FOREIGN_ACRONYMS = ['US', 'U.S.', 'USA', 'UK', 'U.K.']
 
 /**
- * Other markets. A story whose text names one of these and names no emirate is not UAE
- * news, however it reached us — the feed query is a net, and it catches neighbouring
- * markets constantly.
+ * Other markets. A story whose text names one of these — and names no emirate — is not UAE
+ * news, however it reached us: the feed query is a net and it catches neighbouring markets
+ * constantly.
  *
- * Deliberately not a list of country names in general: entries are chosen because they
- * actually turned up in this corpus mislabelled, plus obvious neighbours of the same
- * kind. Ambiguous two-letter tokens ('uk', 'us') are excluded on purpose — as substrings
- * they match far too much.
+ * This list is driven by what actually appeared mislabelled in the corpus rather than by
+ * geography in the abstract. The decisive entry is 'us': the "UAE economy mortgage" feed
+ * matches on the word "mortgage" and was returning US mortgage-rate reports by the dozen,
+ * which then fell through to the UAE-wide bucket because they name no emirate. Italy and
+ * Türkiye turned up the same way.
+ *
+ * Terms are matched with word boundaries, so 'oman' does not fire inside "Romania" and
+ * 'india' does not fire inside an unrelated longer word.
  */
 const FOREIGN_MARKETS = [
-  'saudi', 'riyadh', 'jeddah', 'dammam', 'qatar', 'doha', 'kuwait', 'bahrain', 'manama',
-  'oman', 'muscat', 'egypt', 'cairo', 'kyiv', 'ukraine', 'russia', 'moscow',
-  'united kingdom', 'britain', 'london', 'africa', 'nigeria', 'kenya', 'india', 'mumbai',
-  'delhi', 'china', 'beijing', 'shanghai', 'singapore', 'hong kong', 'japan', 'tokyo',
-  'turkey', 'istanbul', 'pakistan', 'karachi', 'new york', 'miami', 'paris', 'germany',
-  'berlin', 'australia', 'sydney', 'canada', 'toronto', 'malaysia', 'thailand', 'indonesia',
+  'saudi', 'saudi arabia', 'riyadh', 'jeddah', 'dammam', 'qatar', 'doha', 'kuwait',
+  'bahrain', 'manama', 'oman', 'muscat', 'jordan', 'amman', 'lebanon', 'beirut', 'iraq',
+  'baghdad', 'iran', 'tehran', 'israel', 'tel aviv', 'egypt', 'cairo', 'morocco',
+  'tunisia', 'turkey', 'turkiye', 'istanbul', 'cyprus', 'georgia', 'azerbaijan',
+  'armenia', 'kazakhstan',
+  'britain', 'london', 'england', 'scotland', 'ireland', 'dublin', 'italy', 'rome',
+  'milan', 'spain', 'madrid', 'barcelona', 'portugal', 'lisbon', 'greece', 'athens',
+  'germany', 'berlin', 'france', 'paris', 'netherlands', 'amsterdam', 'belgium',
+  'switzerland', 'zurich', 'sweden', 'norway', 'denmark', 'poland', 'warsaw', 'russia',
+  'moscow', 'kyiv', 'ukraine', 'belarus',
+  'america', 'american', 'new york', 'miami', 'chicago', 'boston', 'seattle', 'dallas',
+  'houston', 'texas', 'california', 'los angeles', 'san francisco', 'washington',
+  'atlanta', 'canada', 'toronto', 'vancouver', 'montreal', 'brazil', 'mexico',
+  'india', 'mumbai', 'delhi', 'pakistan', 'karachi', 'bangladesh', 'sri lanka', 'nepal',
+  'china', 'beijing', 'shanghai', 'hong kong', 'singapore', 'japan', 'tokyo', 'korea',
+  'seoul', 'taiwan', 'vietnam', 'thailand', 'malaysia', 'indonesia', 'philippines',
+  'manila', 'australia', 'sydney', 'melbourne', 'new zealand', 'africa', 'nigeria',
+  'kenya', 'ghana', 'south africa', 'ethiopia', 'federal reserve', 'wall street',
 ]
 
+/**
+ * Evidence that a story is about the UAE at all. Required before an item may be filed as
+ * UAE-wide — the bucket was previously the catch-all for anything that named no emirate,
+ * which is exactly how US mortgage-rate reports ended up in a UAE property feed.
+ */
+const UAE_SIGNALS = [
+  'uae', 'u.a.e', 'united arab emirates', 'emirates', 'gulf', 'sharjah', 'ajman',
+  'ras al khaimah', 'fujairah', 'umm al quwain', 'umm al-quwain', 'al ain', 'jebel ali',
+  'adgm', 'dirham', 'dirhams', 'aed', 'dhs', 'deira', 'jumeirah', 'khalifa',
+]
+
+/** Fold accents so "Türkiye" matches 'turkiye' — the corpus carries both spellings. */
+function normalise(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+function hasWord(haystack: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(haystack)
+}
+
 function namesForeignMarket(haystack: string): boolean {
-  return FOREIGN_MARKETS.some((m) => haystack.includes(m))
+  const norm = normalise(haystack)
+  if (FOREIGN_MARKETS.some((m) => hasWord(norm, m))) return true
+  // Acronyms are checked against the original casing, so "let us know" is not "US".
+  return FOREIGN_ACRONYMS.some((a) => new RegExp(`(^|[^A-Za-z0-9])${a.replace(/\./g, '\\.')}([^A-Za-z0-9]|$)`).test(haystack))
+}
+
+function namesUae(haystack: string): boolean {
+  const norm = normalise(haystack)
+  return UAE_SIGNALS.some((s) => hasWord(norm, s))
 }
 
 function emirateMentions(haystack: string): { abuDhabi: number; dubai: number } {
+  const norm = normalise(haystack)
   let abuDhabi = 0
   let dubai = 0
-  for (const s of EMIRATE_SIGNALS.abu_dhabi) abuDhabi += haystack.split(s).length - 1
-  for (const s of EMIRATE_SIGNALS.dubai) dubai += haystack.split(s).length - 1
+  for (const s of EMIRATE_SIGNALS.abu_dhabi) abuDhabi += norm.split(s).length - 1
+  for (const s of EMIRATE_SIGNALS.dubai) dubai += norm.split(s).length - 1
   return { abuDhabi, dubai }
 }
 
 /**
  * Which emirate is this story about?
  *
- * The single rule that matters: **a specific emirate is only claimed when the story
- * actually names it.** An earlier version fell back to the feed's declared region, and
- * that was wrong in a way that was visible to readers — 161 of 320 stored items name no
- * emirate at all, and the fallback was assigning 24 of them to Dubai and 19 to Abu Dhabi
- * purely because of which query happened to surface them. That is how "Al Othaim reveals
- * US $4.3bn Saudi real estate investment plans" ended up in the Abu Dhabi tab: it came
- * from the Abu Dhabi feed and the feed's label was doing the work, not the article.
+ * The rule that matters: **a specific emirate is only claimed when the story names it, and
+ * "UAE-wide" is only claimed when the story names the UAE.** Both halves are load-bearing.
  *
- * Headline mentions outweigh body mentions three to one, because a passing reference in
- * an excerpt ("...also has offices in Dubai") should not decide where a story about
- * somewhere else is filed. A body-only claim needs at least two mentions to count.
+ * An earlier version fell back to the feed's declared region, and that was visible to
+ * readers: 161 of 320 stored items name no emirate at all, so the fallback was filing
+ * stories by *which query surfaced them* — "Al Othaim reveals US $4.3bn Saudi real estate
+ * investment plans" landed in the Abu Dhabi tab, and an Africa capital-markets piece and a
+ * Kyiv residential story landed in Dubai's.
  *
- * When nothing is named, the feed region still separates UAE-wide from international —
- * that is a much weaker claim and the region can carry it — and a named foreign market
- * settles it as international.
+ * Removing that fallback fixed the emirate tabs but exposed the next hole: the UAE-wide
+ * bucket became the catch-all, and a browser pass found it was 46% on-topic — dominated by
+ * US mortgage-rate reports pulled in by the "UAE economy mortgage" feed, which matches on
+ * the word "mortgage". So the same discipline now applies there: no UAE signal in the text
+ * means the item is international, not UAE-wide.
+ *
+ * Headline mentions outweigh body mentions three to one, because a passing reference in an
+ * excerpt should not decide where a story about somewhere else is filed. A body-only claim
+ * needs at least two mentions.
  */
-export function classifyEmirate(
-  headline: string,
-  body = '',
-  feedRegion: NewsFeed['region'] = 'uae'
-): Emirate {
-  const head = emirateMentions(headline.toLowerCase())
-  const text = emirateMentions(body.toLowerCase())
+export function classifyEmirate(headline: string, body = ''): Emirate {
+  const head = emirateMentions(headline)
+  const text = emirateMentions(body)
 
   if (head.abuDhabi > 0 || head.dubai > 0) {
     const ad = head.abuDhabi * 3 + text.abuDhabi
@@ -282,9 +330,14 @@ export function classifyEmirate(
     return text.abuDhabi > text.dubai ? 'abu_dhabi' : 'dubai'
   }
 
-  const lowerBody = body.toLowerCase()
-  if (namesForeignMarket(headline.toLowerCase()) || namesForeignMarket(lowerBody)) return 'global'
-  return feedRegion === 'global' ? 'global' : 'uae'
+  // Nothing named an emirate. The headline decides first, exactly as it does above: a
+  // story whose headline says "UAE" is UAE news even if it mentions a foreign market in
+  // passing, and only when the headline is silent does the body get a say. Getting this
+  // order wrong sent "UAE Real Estate Is Back in the Spotlight" to International.
+  if (namesUae(headline)) return 'uae'
+  if (namesForeignMarket(headline)) return 'global'
+  if (namesUae(body)) return 'uae'
+  return 'global'
 }
 
 /**

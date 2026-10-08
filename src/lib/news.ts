@@ -296,8 +296,8 @@ export async function ingestFeed(feed: NewsFeed): Promise<FeedResult> {
             : feed.name
 
       // Which emirate the story is actually about. Headline first, body as a weaker
-      // signal, and the feed's region only to separate UAE-wide from international.
-      const emirate: Emirate = classifyEmirate(headline, excerpt, feed.region)
+      // signal — the tag must be evidenced by the article, never by which feed found it.
+      const emirate: Emirate = classifyEmirate(headline, excerpt)
 
       const contentHash = makeContentHash(url, publishedAt)
       const existing = await prisma.newsItem.findUnique({
