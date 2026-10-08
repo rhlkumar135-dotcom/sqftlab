@@ -1335,3 +1335,53 @@ areas; `Al Maryah Island` returned nothing on this run.
 **Production still needs the same rebuild**: `www.sqftlab.com` returns 429 to this
 sandbox, so it was never reachable to verify. Clearing production listings and
 running `GET /api/sqftlab/scrape?secret=$CRON_SECRET` once will converge it.
+
+## AI assistant — grounded in the live listing inventory, not the empty register
+
+**Symptom:** the assistant answered "I don't have transaction data loaded" to *every*
+question, on every topic.
+
+**Root cause:** `buildMarketContext` built the model's entire context from
+`prisma.transaction`, which holds **0 rows** — the DLD register has never been ingested
+on this deployment. So `dataAvailable: false` on every request, and the prompt ordered
+the model to refuse to quote figures. The data had been there all along in `listings`:
+3,409 rows scraped the same day, each priced, sized and attributed to a district.
+
+**Fix:** `src/lib/ai-chat.ts` builds an `AssistantContext` from the live inventory —
+totals by purpose, overall asking PSF and rent, freshness (`max(scrapedAt)`), a district
+breakdown, and the district the *question* names. `buildLiveContext(message)` does
+longest-match retrieval against community name and slug. The register block is kept and
+fills in by itself if the register ever has rows, rather than being swapped back.
+
+**Two correctness rules that are not optional here:**
+
+- **Asking price ≠ transacted price.** These are PropertyFinder listing prices. The
+  prompt labels them "asking prices" and forbids presenting one as a completed sale, and
+  the register is a separate block. The widget shows a "Live listings · <date>" chip when
+  an answer was grounded, replacing the old register-based notice.
+- **Implausible yields are withheld.** `refreshCommunityStats` derives yield as
+  `avgAnnualRent / (psf × 1000)`, assuming a ~1,000 sqft unit. Where rent stock is not
+  comparable to sale stock the figure is impossible (Al Barsha ~20%, Arabian Ranches
+  ~26%). Only yields in the 2–12% band reach the model.
+
+**Two bugs my own tests caught — both real, both fixed:**
+
+- A question naming a district we do *not* cover but which is a prefix of one we do
+  ("Al Barsha South") was answered with the parent's numbers. Word boundaries do not
+  prevent this: `" al barsha "` **is** a substring of `" al barsha south "`. A
+  sub-district qualifier (south/north/1st/…) after the match now drops it, so the
+  assistant says it has no coverage — which is true.
+- A district with both sale and rent listings was emitted **twice** in the coverage list
+  (it is in both source maps), crowding out districts that had no duplicate.
+
+**Verification:** `verify-day13` **112/112** (109/1 before the matcher fix) ·
+`verify-day17-routing` 101/101 · `verify-server-routing` 8/8 · tsc 0 errors outside the
+pre-existing `src/generated/` noise. Live endpoint: "average PSF in Dubai Marina" returned
+`dataBacked: true, sources: ["listings"], focus: "Dubai Marina"` and quoted AED 2,421/sqft;
+every figure in the reply was then confirmed present in the dumped system prompt (including
+the 2,126 UAE-wide average the model cited) — nothing invented.
+
+**Still open, same root cause, different feature:** `/api/sqftlab/public/market-pulse` and
+the Market Pulse page are *also* built on `prisma.transaction`, so they render zeros with a
+"register is empty" note. Grounding them in listings was deliberately **not** part of this
+change — the request was about the assistant. Do not treat the pulse as working.

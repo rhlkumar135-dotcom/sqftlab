@@ -24,6 +24,7 @@ const { default: app } = await import('../custom-routes')
 const {
   normalizeHistory,
   buildSystemPrompt,
+  buildLiveContext,
   aiDailyLimitFor,
   aiTierIsUnlimited,
   resolveAiCredential,
@@ -121,32 +122,83 @@ console.log('\n── pure rules: tier ladder (elite is not silently demoted) �
   check('even the top tier has a finite reported ceiling', AI_DAILY_LIMITS.enterprise < Number.MAX_SAFE_INTEGER)
 }
 
-console.log('\n── pure rules: the system prompt must not invite invention ──')
+console.log('\n── pure rules: the prompt must ground answers in live data ──')
 {
-  const empty = buildSystemPrompt({
-    dataAvailable: false,
-    transactions: 0,
-    avgPsfAed: null,
-    volumeAed: 0,
-    topCommunities: [],
-    days: 30,
-  })
-  check('empty register is stated outright', /no market data is currently loaded/i.test(empty))
-  check('empty register forbids quoting figures', /do not state or estimate any price/i.test(empty))
-  check('empty register does not claim a transaction count', !/Transactions: 0/.test(empty))
+  // The state this deployment was actually in: the register is empty. That used to
+  // produce a context with nothing in it, so the assistant refused every question —
+  // including the many the live listing inventory can answer.
+  const base = {
+    listingsAvailable: false,
+    asOf: null,
+    listingCount: 0,
+    saleCount: 0,
+    rentCount: 0,
+    districtsCovered: 0,
+    overallSalePsfAed: null,
+    overallRentAnnualAed: null,
+    topDistricts: [],
+    focus: null,
+    register: { available: false, days: 30, transactions: 0, avgPsfAed: null },
+  }
 
-  const populated = buildSystemPrompt({
-    dataAvailable: true,
-    transactions: 42,
-    avgPsfAed: 1850,
-    volumeAed: 120_000_000,
-    topCommunities: [{ name: 'Dubai Marina', count: 12 }],
-    days: 30,
+  const nothing = buildSystemPrompt(base)
+  check('a deployment with no data at all says so', /no market data is currently loaded/i.test(nothing))
+  check('a deployment with no data forbids quoting figures', /do not state or estimate any price/i.test(nothing))
+
+  const withListings = buildSystemPrompt({
+    ...base,
+    listingsAvailable: true,
+    asOf: '2026-10-08T13:58:38.239Z',
+    listingCount: 3409,
+    saleCount: 1460,
+    rentCount: 1949,
+    districtsCovered: 44,
+    overallSalePsfAed: 1572,
+    overallRentAnnualAed: 118000,
+    topDistricts: [
+      {
+        name: 'Dubai Marina', emirate: 'Dubai', saleListings: 64, salePsfAed: 2421,
+        rentListings: 81, rentAnnualAed: 132000, priceFromAed: null, priceToAed: null,
+        bedsLabel: null, grossYieldPct: 6.1, neighbourhoodScore: 82,
+      },
+      {
+        name: 'Al Reem Island', emirate: 'Abu Dhabi', saleListings: 66, salePsfAed: 1701,
+        rentListings: 70, rentAnnualAed: 95000, priceFromAed: null, priceToAed: null,
+        bedsLabel: null, grossYieldPct: null, neighbourhoodScore: 80,
+      },
+    ],
   })
-  check('populated register quotes the real PSF', /AED 1,?850/.test(populated))
-  check('populated register quotes the real count', /Transactions: 42/.test(populated))
-  check('populated register names the top community', /Dubai Marina/.test(populated))
-  check('citation is conditional on there being data', !/no market data is currently loaded/i.test(populated))
+  check('live listings are stated outright', /Live listing data/i.test(withListings))
+  check('the inventory size is quoted', /3,409/.test(withListings))
+  check('coverage spans both emirates', /Dubai Marina/.test(withListings) && /Al Reem Island/.test(withListings))
+  check('a district PSF is quoted from live listings', /AED 2,421\/sqft/.test(withListings))
+  check('the asking-price basis is labelled, not hidden', /asking prices/i.test(withListings))
+  check('asking prices may not be passed off as sales', /Never present an asking price as a completed transaction/i.test(withListings))
+  check('the age of the data is stated', /2026-10-08/.test(withListings))
+  check('an empty register is declared rather than left implied', /register holds no rows/i.test(withListings))
+  check('an empty register must not yield a DLD figure', /Do not state or estimate a registered sale volume/i.test(withListings))
+  check('the emptied-register case does not invite invention', !/Transactions: 0/.test(withListings))
+
+  const focused = buildSystemPrompt({
+    ...base,
+    listingsAvailable: true,
+    asOf: '2026-10-08T13:58:38.239Z',
+    listingCount: 3409, saleCount: 1460, rentCount: 1949, districtsCovered: 44,
+    topDistricts: [],
+    focus: {
+      name: 'Dubai Marina', emirate: 'Dubai', saleListings: 64, salePsfAed: 2421,
+      rentListings: 81, rentAnnualAed: 132000, priceFromAed: 850000, priceToAed: 17636465,
+      bedsLabel: '1–4 bed', grossYieldPct: 6.1, neighbourhoodScore: 82,
+    },
+    register: { available: true, days: 30, transactions: 42, avgPsfAed: 1850 },
+  })
+  check('a named district produces a focus block', /The reader asked about Dubai Marina/i.test(focused))
+  check('the focus block carries the district PSF', /AED 2,421/.test(focused))
+  check('the focus block carries the asking range', /850,000 to AED 17,636,465/.test(focused))
+  check('the focus block carries the bed mix', /1–4 bed/.test(focused))
+  check('a non-empty register is quoted as registered sales', /Registered sales/.test(focused) && /42/.test(focused))
+  check('registered sales stay separated from asking prices', /Registered sales \(government register/.test(focused))
+  check('a populated context never claims there is no data', !/no market data is currently loaded/i.test(focused))
 }
 
 console.log('\n── pure rules: credential resolution is honest about absence ──')
@@ -258,6 +310,84 @@ console.log('\n── live: a delivered answer is counted, a failed one is not �
   }
 }
 
+console.log('\n── live: the context is built from the live inventory ──')
+{
+  const inventory = await prisma.listing.count()
+  check('there is live inventory to answer from', inventory > 0, inventory)
+
+  const ctx = await buildLiveContext("What's the average price per square foot in Dubai Marina?")
+  check('live listing data is reported as available', ctx.listingsAvailable === true)
+  check('the inventory size is reported', ctx.listingCount === inventory, { reported: ctx.listingCount, inventory })
+  check('freshness is reported rather than assumed', typeof ctx.asOf === 'string', ctx.asOf)
+  check('the district named in the question is found', ctx.focus?.name === 'Dubai Marina', ctx.focus?.name)
+
+  const slugged = await buildLiveContext('What is the price per sqft in dubai-marina?')
+  check('a slug-form district name resolves to the same district', slugged.focus?.name === 'Dubai Marina', slugged.focus?.name)
+  check(
+    'the focused district carries a live PSF',
+    typeof ctx.focus?.salePsfAed === 'number' && ctx.focus.salePsfAed > 0,
+    ctx.focus?.salePsfAed,
+  )
+  check('the focused district carries a live listing count', (ctx.focus?.saleListings ?? 0) > 0, ctx.focus?.saleListings)
+  check(
+    'coverage spans both emirates',
+    ctx.topDistricts.some((d) => d.emirate === 'Dubai') && ctx.topDistricts.some((d) => d.emirate === 'Abu Dhabi'),
+    ctx.topDistricts.map((d) => `${d.name}/${d.emirate}`),
+  )
+
+  // A district the question does not name must not be invented.
+  const unfocused = await buildLiveContext('Which districts do you cover?')
+  check('a question naming no district yields no focus', unfocused.focus === null, unfocused.focus?.name)
+
+  // A shorter community name is a prefix of a longer one, so first-match would answer
+  // about the wrong district.
+  const prefixed = await buildLiveContext('Tell me about Al Barsha South')
+  check('a longer district name is not truncated to a shorter one', prefixed.focus?.name !== 'Al Barsha', prefixed.focus?.name)
+
+  // The register is empty on this deployment, and must be reported as such.
+  check('an empty register is reported as unavailable', ctx.register.available === false, ctx.register.transactions)
+
+  // Yields outside the plausible band are withheld rather than handed to the model.
+  const yields = ctx.topDistricts.map((d) => d.grossYieldPct).filter((y): y is number => y !== null)
+  check('no implausible yield reaches the model', yields.every((y) => y >= 2 && y <= 12), yields)
+
+  // A district with both sale and rent listings appears in both source maps; listing it
+  // twice spent context and crowded out districts that had no duplicate.
+  const names = ctx.topDistricts.map((d) => d.name)
+  check('no district is listed twice in the coverage', new Set(names).size === names.length, names)
+}
+
+console.log('\n── live: a district question is answered from live data ──')
+{
+  await prisma.aiChatMessage.deleteMany({ where: { sessionId: ANON_KEY } })
+  const asked = await req('/sqftlab/ai/chat', {
+    method: 'POST',
+    body: { message: "What's the average price per square foot in Dubai Marina?" },
+  })
+
+  if (asked.status === 200) {
+    check('the answer is flagged as data-backed', asked.body.dataBacked === true, asked.body.dataBacked)
+    check(
+      'the answer names its live source',
+      Array.isArray(asked.body.sources) && asked.body.sources.includes('listings'),
+      asked.body.sources,
+    )
+    check('the answer reports the age of the inventory', typeof asked.body.asOf === 'string', asked.body.asOf)
+    check('the answer reports the district it answered from', asked.body.focus === 'Dubai Marina', asked.body.focus)
+    // The defect this whole change exists to fix: the refusal that used to greet every
+    // question because the context was built from an empty table.
+    check(
+      'the reply is not a no-data refusal',
+      !/no (market|transaction) data/i.test(asked.body.reply ?? ''),
+      (asked.body.reply ?? '').slice(0, 140),
+    )
+  } else {
+    check('a district question answers with a documented status', [502, 503].includes(asked.status), asked.status)
+  }
+
+  await prisma.aiChatMessage.deleteMany({ where: { sessionId: ANON_KEY } })
+}
+
 console.log('\n── live: public Market Pulse ──')
 {
   const pulse = await req('/sqftlab/public/market-pulse')
@@ -296,7 +426,12 @@ console.log('\n── client wiring ──')
   // comment explaining why it is not used.
   check('the widget never sends a caller-supplied session id', !/['"`]X-Session-Id['"`]\s*:/.test(widget))
   check('the widget does not use a browser alert', !/\balert\(/.test(widget))
-  check('the widget surfaces a register-less answer as general guidance', /dataBacked/.test(widget) && /not quoting the register/i.test(widget))
+  check(
+    'the widget surfaces a data-less answer as general guidance',
+    /dataBacked/.test(widget) && /not quoting sqftLab data/i.test(widget),
+  )
+  check('the widget shows when an answer came from live listings', /Live listings/.test(widget))
+  check('the widget does not promise transaction-register answers', !/cite the transaction register/i.test(widget))
 
   check('the pulse page states why its call is unauthenticated', page.includes('bare-fetch-ok'))
   // Day 15 E1 replaced this page's hand-rolled `document.title = …` effect with the shared

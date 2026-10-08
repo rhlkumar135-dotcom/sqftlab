@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Info, Send, Sparkles, X } from 'lucide-react'
+import { Bot, Info, Radio, Send, Sparkles, X } from 'lucide-react'
 import { authedFetch } from '@/lib/session'
 
 /**
@@ -48,6 +48,12 @@ interface ChatResponse {
   unlimited?: boolean
   model?: string
   dataBacked?: boolean
+  /** Which sources backed the answer: 'listings' and/or 'register'. */
+  sources?: string[]
+  /** When the listing inventory was collected. */
+  asOf?: string | null
+  /** The district the question named, when the server recognised one. */
+  focus?: string | null
   error?: string
   detail?: string
   code?: string
@@ -56,10 +62,18 @@ interface ChatResponse {
 }
 
 const SUGGESTIONS = [
-  'What should I compare when valuing a Dubai apartment?',
-  'Explain price per square foot vs. total price.',
-  'How do service charges differ between towers?',
+  "What's the average price per square foot in Dubai Marina?",
+  'How do asking prices compare between Dubai and Abu Dhabi?',
+  'Which districts have the most listings for sale right now?',
 ]
+
+/** "8 Oct" — the reader needs the age of the data, not a timestamp. */
+function asOfLabel(iso: string | null | undefined): string | null {
+  if (typeof iso !== 'string' || iso === '') return null
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+}
 
 export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pricing') => void }) {
   const [open, setOpen] = useState(false)
@@ -71,6 +85,7 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
   const [unlimited, setUnlimited] = useState(false)
   const [configured, setConfigured] = useState(true)
   const [dataBacked, setDataBacked] = useState<boolean | null>(null)
+  const [grounded, setGrounded] = useState<{ asOf: string | null; focus: string | null } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scroller = useRef<HTMLDivElement | null>(null)
@@ -151,9 +166,15 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
         setLimit(typeof body.limit === 'number' ? body.limit : null)
         setUnlimited(body.unlimited === true)
         setDataBacked(body.dataBacked === true)
-        if (body.dataBacked === false) {
+        if (body.dataBacked === true) {
+          setGrounded({
+            asOf: typeof body.asOf === 'string' ? body.asOf : null,
+            focus: typeof body.focus === 'string' ? body.focus : null,
+          })
+        } else {
+          setGrounded(null)
           setNotice(
-            'No transaction data is loaded on this deployment, so this answer is general guidance — it is not quoting the register.',
+            'No live market data is loaded on this deployment, so this answer is general guidance — it is not quoting sqftLab data.',
           )
         }
       } catch {
@@ -217,6 +238,19 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
                 <div className="text-[13px] font-semibold" style={{ color: 'var(--ink)' }}>
                   Market assistant
                 </div>
+                {dataBacked === true && grounded !== null && (
+                  <div
+                    className="text-[11px] flex items-center gap-1"
+                    style={{ color: 'var(--b600)' }}
+                  >
+                    <Radio size={10} />
+                    <span>
+                      Live listings
+                      {asOfLabel(grounded.asOf) === null ? '' : ` · ${asOfLabel(grounded.asOf)}`}
+                      {grounded.focus === null ? '' : ` · ${grounded.focus}`}
+                    </span>
+                  </div>
+                )}
                 {quotaLabel && (
                   <div className="text-[11px]" style={{ color: 'var(--ink-5)' }}>
                     {quotaLabel}
@@ -240,8 +274,9 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
             {turns.length === 0 && (
               <div className="space-y-3">
                 <p className="text-[13px] leading-relaxed" style={{ color: 'var(--ink-4)' }}>
-                  Ask about Dubai market data, valuation methods, or how to read the numbers
-                  in sqftLab. Answers cite the transaction register when it is loaded.
+                  Ask about Dubai and Abu Dhabi market data. When a question names a district,
+                  the answer quotes sqftLab's live listings for it — asking prices, not
+                  completed sales.
                 </p>
                 <div className="space-y-2">
                   {SUGGESTIONS.map((s) => (

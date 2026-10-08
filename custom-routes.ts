@@ -59,7 +59,7 @@ import {
 import {
   AI_HISTORY_PAGE, AI_MAX_MESSAGE_CHARS, AI_MODEL, MARKET_CONTEXT_DAYS,
   aiDailyLimitFor, aiTierIsUnlimited,
-  buildMarketContext, buildSystemPrompt, generateAssistantReply,
+  buildLiveContext, buildSystemPrompt, generateAssistantReply,
   normalizeHistory, resolveAiCredential,
 } from './src/lib/ai-chat'
 
@@ -6988,7 +6988,10 @@ app.post('/sqftlab/ai/chat', async (c) => {
     )
   }
 
-  const ctx = await buildMarketContext(MARKET_CONTEXT_DAYS)
+  // The question decides the context: when it names a district, that district's live block
+  // is what the model answers from, rather than the UAE-wide aggregate.
+  const ctx = await buildLiveContext(message)
+  const dataBacked = ctx.listingsAvailable || ctx.register.available
 
   let reply: string
   let tokensUsed: number
@@ -7024,7 +7027,14 @@ app.post('/sqftlab/ai/chat', async (c) => {
     ],
   })
 
-  await trackEvent(c, 'ai_chat', { tier, model: AI_MODEL, tokensUsed, dataBacked: ctx.dataAvailable })
+  await trackEvent(c, 'ai_chat', {
+    tier,
+    model: AI_MODEL,
+    tokensUsed,
+    dataBacked,
+    sources: ctx.listingsAvailable ? (ctx.register.available ? 'listings+register' : 'listings') : 'register',
+    focus: ctx.focus?.name ?? null,
+  })
 
   return c.json({
     reply,
@@ -7032,8 +7042,17 @@ app.post('/sqftlab/ai/chat', async (c) => {
     limit,
     unlimited,
     model: AI_MODEL,
-    /** False when the register is empty, so the UI can say why answers are general. */
-    dataBacked: ctx.dataAvailable,
+    /** True when live data stood behind this answer, so the UI can say it is grounded. */
+    dataBacked,
+    /** Which sources backed the answer. */
+    sources: [
+      ...(ctx.listingsAvailable ? ['listings'] : []),
+      ...(ctx.register.available ? ['register'] : []),
+    ],
+    /** When the listing inventory was collected, so the UI can state its age. */
+    asOf: ctx.asOf,
+    /** The district the question named, when one was recognised. */
+    focus: ctx.focus?.name ?? null,
     resetAt,
   })
 })

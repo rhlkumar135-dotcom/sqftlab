@@ -147,120 +147,422 @@ export function normalizeHistory(raw: unknown): AiTurn[] {
   return out.slice(-AI_CONTEXT_WINDOW_MESSAGES)
 }
 
-export interface MarketContext {
-  /** True when the register holds at least one sale in the window. */
-  dataAvailable: boolean
-  transactions: number
-  avgPsfAed: number | null
-  volumeAed: number
-  topCommunities: Array<{ name: string; count: number }>
-  days: number
+/** Live listing coverage for one district, as the model is allowed to see it. */
+export interface DistrictStat {
+  name: string
+  emirate: string
+  saleListings: number
+  salePsfAed: number | null
+  rentListings: number
+  rentAnnualAed: number | null
+  priceFromAed: number | null
+  priceToAed: number | null
+  bedsLabel: string | null
+  grossYieldPct: number | null
+  neighbourhoodScore: number | null
 }
 
 /**
- * Summarise the sale register for the model.
+ * Everything the assistant is allowed to treat as fact.
  *
- * With no rows this returns `dataAvailable: false` and the prompt says so, because the
- * alternative — feeding the model "0 transactions / AED 0" — produces either nonsense
- * or invention, and invention in a market-numbers product is the one failure mode this
- * codebase consistently refuses.
+ * This replaces the brief's register-only context, and the reason is a data fact rather
+ * than a design preference: `transactions` holds no rows on this deployment, because the
+ * DLD register has never been ingested. A context built only from it is therefore empty
+ * on every single request, and the assistant answers "no market data is loaded" to every
+ * question — including the many this app *can* answer from data it genuinely holds.
+ *
+ * The live inventory is the real asset here: thousands of listings collected daily,
+ * each priced, sized and attributed to a district. So the listing inventory is the
+ * primary source and the register block stays alongside it, filling in by itself the
+ * moment the register has rows rather than being swapped back in.
  */
-export async function buildMarketContext(days = MARKET_CONTEXT_DAYS): Promise<MarketContext> {
-  const since = new Date()
-  since.setDate(since.getDate() - days)
+export interface AssistantContext {
+  /** True when there is live listing inventory to answer from. */
+  listingsAvailable: boolean
+  /** When the inventory was last collected (ISO). */
+  asOf: string | null
+  listingCount: number
+  saleCount: number
+  rentCount: number
+  districtsCovered: number
+  overallSalePsfAed: number | null
+  overallRentAnnualAed: number | null
+  topDistricts: DistrictStat[]
+  /** The district the question named, if any — the model answers from this block. */
+  focus: DistrictStat | null
+  /** Registered government sales, when the register holds any. */
+  register: { available: boolean; days: number; transactions: number; avgPsfAed: number | null }
+}
 
-  const saleWindow = {
-    transactionType: { in: [...SALE_TXN_TYPES] },
-    transactionDate: { gte: since },
+/**
+ * A community yield above this is withheld from the model.
+ *
+ * `refreshCommunityStats` derives yield as `avgAnnualRent / (psf × 1000)` — an assumed
+ * ~1,000 sqft unit. Where a district's rent stock is not comparable to its sale stock
+ * (commercial units, whole floors, short-lets) that assumption breaks and the figure
+ * comes out impossible: Al Barsha reports ~20% and Arabian Ranches ~26% against a Dubai
+ * norm of 4–8%. A model instructed to quote its context will quote whatever is placed in
+ * it, so an implausible yield is withheld rather than handed over to be repeated as fact.
+ */
+const YIELD_MIN_PCT = 2
+const YIELD_MAX_PCT = 12
+
+function plausibleYieldPct(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const rounded = Math.round(value * 100) / 100
+  return rounded >= YIELD_MIN_PCT && rounded <= YIELD_MAX_PCT ? rounded : null
+}
+
+function positiveOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null
+}
+
+function bedsLabelFor(min: number | null, max: number | null): string | null {
+  if (min === null || max === null) return null
+  return min === max ? `${min} bed` : `${min}–${max} bed`
+}
+
+interface CommunityRow {
+  id: string
+  slug: string
+  nameEn: string
+  emirate: string
+  medianAedSqft: number
+  grossYieldPct: number
+  neighbourhoodScore: number
+}
+
+/**
+ * Sub-district qualifiers.
+ *
+ * UAE districts are routinely split as "Al Barsha 1/2/3" or "Al Barsha South", where the
+ * child is a district in its own right. This registry holds the parent only, so a question
+ * naming the child would otherwise be answered with the parent's numbers — word-boundary
+ * matching does not prevent this, because " al barsha " is a substring of " al barsha south ".
+ * When one of these words follows the matched name, the match is dropped and the assistant
+ * says it has no listing coverage, which is true, instead of answering about the wrong place.
+ */
+const SUBDISTRICT_QUALIFIERS = new Set([
+  'south', 'north', 'east', 'west', 'central',
+  'first', 'second', 'third', 'fourth',
+  '1st', '2nd', '3rd', '4th',
+])
+
+/**
+ * Find the district the question is about.
+ *
+ * Matching is done on the community's own name and slug so a question phrased
+ * "Dubai Marina", "dubai-marina" or "marina" resolves to the same row. The longest
+ * matching name wins, so a district whose name contains another's is preferred over it.
+ */
+function findFocus(message: string, communities: CommunityRow[]): CommunityRow | null {
+  const words = message.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean)
+  const haystack = ` ${words.join(' ')} `
+
+  let best: CommunityRow | null = null
+  let bestLength = 0
+  for (const row of communities) {
+    for (const needle of [row.nameEn, row.slug]) {
+      const target = needle.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+      if (target.length < 4) continue
+      const at = haystack.indexOf(` ${target} `)
+      if (at === -1) continue
+      // The word immediately after the match decides whether the reader named a longer
+      // place — "Al Barsha South" is not "Al Barsha".
+      const after = haystack.slice(at + target.length + 2).split(' ')[0] ?? ''
+      if (SUBDISTRICT_QUALIFIERS.has(after)) continue
+      if (target.length > bestLength) {
+        best = row
+        bestLength = target.length
+      }
+    }
   }
+  return best
+}
 
-  const [agg, grouped] = await Promise.all([
-    prisma.transaction.aggregate({
-      where: { ...saleWindow, pricePerSqft: { gt: 100 } },
+/**
+ * Build the market context from the data this deployment actually holds.
+ *
+ * Queries are one batch: the listing inventory is small enough that aggregate reads are
+ * cheap, and the district breakdown is a single groupBy rather than a query per district.
+ * Only the focused district costs extra reads, and only when a question names one.
+ */
+export async function buildLiveContext(message = ''): Promise<AssistantContext> {
+  const since = new Date()
+  since.setDate(since.getDate() - MARKET_CONTEXT_DAYS)
+
+  const [
+    byPurpose,
+    saleAgg,
+    rentAgg,
+    freshness,
+    saleByCommunity,
+    rentByCommunity,
+    communities,
+    registerAgg,
+  ] = await Promise.all([
+    prisma.listing.groupBy({ by: ['purpose'], _count: { id: true } }),
+    prisma.listing.aggregate({
+      where: { purpose: 'sale', pricePerSqft: { gt: 0 } },
       _avg: { pricePerSqft: true },
-      _count: { id: true },
-      _sum: { priceAed: true },
     }),
-    // Grouped by the FK, not an `area` string — there is no such column, and grouping
-    // by a free-text district name would split one community across naming variants.
-    prisma.transaction.groupBy({
+    prisma.listing.aggregate({
+      where: { purpose: 'rent', priceAed: { gt: 0 } },
+      _avg: { priceAed: true },
+    }),
+    // Freshness is reported, not assumed: an old scrape is a materially different
+    // answer from today's, and the reader cannot tell them apart unless it is stated.
+    prisma.listing.aggregate({ _max: { scrapedAt: true } }),
+    prisma.listing.groupBy({
       by: ['communityId'],
-      where: saleWindow,
+      where: { purpose: 'sale' },
       _count: { id: true },
+      _avg: { pricePerSqft: true },
       orderBy: { _count: { id: 'desc' } },
-      take: 5,
+      take: 60,
+    }),
+    prisma.listing.groupBy({
+      by: ['communityId'],
+      where: { purpose: 'rent' },
+      _count: { id: true },
+      _avg: { priceAed: true },
+    }),
+    prisma.community.findMany({
+      select: {
+        id: true,
+        slug: true,
+        nameEn: true,
+        emirate: true,
+        medianAedSqft: true,
+        grossYieldPct: true,
+        neighbourhoodScore: true,
+      },
+    }),
+    prisma.transaction.aggregate({
+      where: {
+        transactionType: { in: [...SALE_TXN_TYPES] },
+        transactionDate: { gte: since },
+        pricePerSqft: { gt: 100 },
+      },
+      _count: { id: true },
+      _avg: { pricePerSqft: true },
     }),
   ])
 
-  // One lookup for every name rather than a query per group.
-  const names = await prisma.community.findMany({
-    where: { id: { in: grouped.map((g) => g.communityId) } },
-    select: { id: true, nameEn: true },
-  })
-  const nameById = new Map(names.map((n) => [n.id, n.nameEn]))
+  const communityById = new Map(communities.map((c) => [c.id, c as CommunityRow]))
+  const saleMap = new Map(saleByCommunity.map((g) => [g.communityId, g]))
+  const rentMap = new Map(rentByCommunity.map((g) => [g.communityId, g]))
 
-  const transactions = agg._count.id
+  const statFor = (row: CommunityRow): DistrictStat => {
+    const sale = saleMap.get(row.id)
+    const rent = rentMap.get(row.id)
+    return {
+      name: row.nameEn,
+      emirate: row.emirate === 'abu_dhabi' ? 'Abu Dhabi' : row.emirate === 'dubai' ? 'Dubai' : row.emirate,
+      saleListings: sale?._count.id ?? 0,
+      // A district with no sale listings has no PSF. 0 would be read as "free".
+      salePsfAed: positiveOrNull(sale?._avg.pricePerSqft) ?? null,
+      rentListings: rent?._count.id ?? 0,
+      rentAnnualAed: positiveOrNull(rent?._avg.priceAed) ?? null,
+      priceFromAed: null,
+      priceToAed: null,
+      bedsLabel: null,
+      grossYieldPct: plausibleYieldPct(row.grossYieldPct),
+      neighbourhoodScore: row.neighbourhoodScore > 0 ? row.neighbourhoodScore : null,
+    }
+  }
+
+  // Deduped by id: a district with both sale and rent listings appears in both maps, and
+  // without the Set it was listed twice — crowding out districts that had no duplicate.
+  const covered = [...new Set([...saleMap.keys(), ...rentMap.keys()])]
+    .map((id) => communityById.get(id))
+    .filter((c): c is CommunityRow => c !== undefined)
+  const stats = covered.map(statFor)
+
+  // Both emirates are represented rather than the busiest districts overall, which on
+  // this data are all Dubai — the reader asking about Abu Dhabi would otherwise get a
+  // context with no Abu Dhabi district in it.
+  const byCount = (a: DistrictStat, b: DistrictStat) =>
+    b.saleListings + b.rentListings - (a.saleListings + a.rentListings)
+  const topDistricts = [
+    ...stats.filter((s) => s.emirate === 'Dubai').sort(byCount).slice(0, 5),
+    ...stats.filter((s) => s.emirate === 'Abu Dhabi').sort(byCount).slice(0, 5),
+    ...stats.filter((s) => s.emirate !== 'Dubai' && s.emirate !== 'Abu Dhabi').sort(byCount).slice(0, 3),
+  ]
+
+  let focus: DistrictStat | null = null
+  const focusRow = message === '' ? null : findFocus(message, communities as CommunityRow[])
+  if (focusRow) {
+    const [saleRange, rentFocus] = await Promise.all([
+      prisma.listing.aggregate({
+        where: { communityId: focusRow.id, purpose: 'sale', priceAed: { gt: 0 } },
+        _min: { priceAed: true, beds: true },
+        _max: { priceAed: true, beds: true },
+        _avg: { pricePerSqft: true },
+        _count: { id: true },
+      }),
+      prisma.listing.aggregate({
+        where: { communityId: focusRow.id, purpose: 'rent', priceAed: { gt: 0 } },
+        _avg: { priceAed: true },
+        _min: { priceAed: true },
+        _max: { priceAed: true },
+        _count: { id: true },
+      }),
+    ])
+    focus = {
+      ...statFor(focusRow),
+      saleListings: saleRange._count.id,
+      salePsfAed: positiveOrNull(saleRange._avg.pricePerSqft),
+      priceFromAed: positiveOrNull(saleRange._min.priceAed),
+      priceToAed: positiveOrNull(saleRange._max.priceAed),
+      bedsLabel: bedsLabelFor(saleRange._min.beds, saleRange._max.beds),
+      rentListings: rentFocus._count.id,
+      rentAnnualAed: positiveOrNull(rentFocus._avg.priceAed),
+    }
+  }
+
+  const saleCount = byPurpose.find((g) => g.purpose === 'sale')?._count.id ?? 0
+  const rentCount = byPurpose.find((g) => g.purpose === 'rent')?._count.id ?? 0
+  const listingCount = byPurpose.reduce((sum, g) => sum + g._count.id, 0)
+  const registerCount = registerAgg._count.id
+
   return {
-    dataAvailable: transactions > 0,
-    transactions,
-    avgPsfAed: agg._avg.pricePerSqft === null ? null : Math.round(agg._avg.pricePerSqft),
-    volumeAed: agg._sum.priceAed ?? 0,
-    topCommunities: grouped.map((g) => ({
-      name: nameById.get(g.communityId) ?? g.communityId,
-      count: g._count.id,
-    })),
-    days,
+    listingsAvailable: listingCount > 0,
+    asOf: freshness._max.scrapedAt ? freshness._max.scrapedAt.toISOString() : null,
+    listingCount,
+    saleCount,
+    rentCount,
+    districtsCovered: communityById.size,
+    overallSalePsfAed: positiveOrNull(saleAgg._avg.pricePerSqft),
+    overallRentAnnualAed: positiveOrNull(rentAgg._avg.priceAed),
+    topDistricts,
+    focus,
+    register: {
+      available: registerCount > 0,
+      days: MARKET_CONTEXT_DAYS,
+      transactions: registerCount,
+      avgPsfAed: positiveOrNull(registerAgg._avg.pricePerSqft),
+    },
   }
 }
 
 /**
  * The system prompt.
  *
- * The brief's version instructs the model to "always cite DLD data" and gives it a
- * context block regardless of whether that block contains anything. With an empty
- * register those two instructions conflict, and the model resolves the conflict by
- * inventing figures. So the empty case is stated outright and the citation rule is
- * made conditional on there being something to cite.
+ * The brief's version instructs the model to "always cite DLD data" and hands it a context
+ * block whether or not that block holds anything. Two things had to change. The empty case
+ * is now stated outright rather than implied, because a context of zeros invites the model
+ * to narrate a market that does not exist. And the data is labelled by kind: this
+ * deployment's figures are *asking* prices from live listings, not completed sales, and a
+ * product that reports the first as the second is wrong in the way that matters most to an
+ * investor. The register block is kept separate for the same reason.
  */
-export function buildSystemPrompt(ctx: MarketContext): string {
+export function buildSystemPrompt(ctx: AssistantContext): string {
   const rules = [
-    'You are sqftLab\'s AI market assistant for UAE real estate, specialising in Dubai.',
+    "You are sqftLab's AI market assistant for UAE real estate — Dubai and Abu Dhabi.",
     'You help investors, brokers and developers understand the property market.',
     '',
     'Guidelines:',
     '- Be concise but thorough — your reader is a professional.',
     '- You cannot give financial advice. You can share market data and explain what it means.',
-    '- Never invent a price, a rent, a transaction count or a trend. If you do not have the',
-    '  figure, say you do not have it and suggest what the reader could check instead.',
+    '- Never invent a price, a rent, a transaction count or a trend. If a figure is not in',
+    '  the data below, say you do not have it and suggest what the reader could check instead.',
+    '- When you quote a figure, say which kind it is: an asking price from a current listing,',
+    '  or a registered sale. Never present an asking price as a completed transaction.',
   ]
 
-  if (ctx.dataAvailable) {
-    const areas = ctx.topCommunities
-      .map((a) => `${a.name} (${a.count} transactions)`)
-      .join(', ')
+  if (!ctx.listingsAvailable && !ctx.register.available) {
     return [
       ...rules,
-      '- Quote only the figures in the market data below, and attribute them to the sqftLab',
-      '  transaction register.',
       '',
-      `Market data — sales registered in the last ${ctx.days} days:`,
-      `- Transactions: ${ctx.transactions}`,
-      `- Average price per sqft: AED ${ctx.avgPsfAed?.toLocaleString() ?? 'unknown'}`,
-      `- Total value: AED ${ctx.volumeAed.toLocaleString()}`,
-      `- Most active communities: ${areas || 'none'}`,
+      'IMPORTANT — no market data is currently loaded. This deployment holds no listings and',
+      'no registered sales, so you have NO figures for this market.',
+      'Do not state or estimate any price, PSF, rent, volume, transaction count or ranking,',
+      'and do not attribute any figure to sqftLab or to DLD. If asked for numbers, say plainly',
+      'that no data is loaded yet, and offer to explain methodology, definitions or what the',
+      'reader should compare once it is.',
     ].join('\n')
   }
 
-  return [
-    ...rules,
-    '',
-    `IMPORTANT — no market data is currently loaded. The sqftLab transaction register holds`,
-    `no sales in the last ${ctx.days} days, so you have NO figures for this market.`,
-    'Do not state or estimate any price, PSF, volume, transaction count or ranking, and do',
-    'not attribute any figure to sqftLab or to DLD. If asked for numbers, say plainly that',
-    'no transaction data is loaded yet, and offer to explain methodology, definitions or',
-    'what the reader should compare once it is.',
-  ].join('\n')
+  const lines = [...rules]
+
+  if (ctx.listingsAvailable) {
+    const asOf = ctx.asOf === null ? 'an unknown date' : ctx.asOf.slice(0, 10)
+    lines.push(
+      '- Quote only the figures in the data below, and attribute them to sqftLab.',
+      '',
+      `Live listing data (asking prices, collected ${asOf}):`,
+      `- Active listings: ${ctx.listingCount.toLocaleString()} (${ctx.saleCount.toLocaleString()} for sale, ${ctx.rentCount.toLocaleString()} for rent) across ${ctx.districtsCovered} districts`,
+    )
+    if (ctx.overallSalePsfAed !== null) {
+      lines.push(`- Average asking price per sqft, sale listings: AED ${ctx.overallSalePsfAed.toLocaleString()}`)
+    }
+    if (ctx.overallRentAnnualAed !== null) {
+      lines.push(`- Average asking annual rent, rent listings: AED ${ctx.overallRentAnnualAed.toLocaleString()}`)
+    }
+    lines.push('- District coverage:')
+    for (const d of ctx.topDistricts) {
+      const sale =
+        d.saleListings > 0
+          ? `${d.saleListings} for sale${d.salePsfAed === null ? '' : ` at AED ${d.salePsfAed.toLocaleString()}/sqft`}`
+          : 'no sale listings'
+      const rent =
+        d.rentListings > 0
+          ? `${d.rentListings} for rent${d.rentAnnualAed === null ? '' : ` at AED ${d.rentAnnualAed.toLocaleString()}/yr`}`
+          : 'no rent listings'
+      const yieldBit = d.grossYieldPct === null ? '' : `, gross yield ${d.grossYieldPct}%`
+      lines.push(`  · ${d.name} (${d.emirate}) — ${sale}; ${rent}${yieldBit}`)
+    }
+
+    if (ctx.focus) {
+      const f = ctx.focus
+      lines.push('', `The reader asked about ${f.name} (${f.emirate}) — answer from this block:`)
+      lines.push(`- Active listings: ${f.saleListings} for sale, ${f.rentListings} for rent`)
+      if (f.salePsfAed !== null) {
+        lines.push(`- Asking price per sqft (sale): AED ${f.salePsfAed.toLocaleString()}`)
+      }
+      if (f.priceFromAed !== null && f.priceToAed !== null) {
+        const beds = f.bedsLabel === null ? '' : ` — ${f.bedsLabel}`
+        lines.push(
+          `- Sale asking range: AED ${f.priceFromAed.toLocaleString()} to AED ${f.priceToAed.toLocaleString()}${beds}`,
+        )
+      }
+      if (f.rentAnnualAed !== null) {
+        lines.push(`- Typical asking annual rent: AED ${f.rentAnnualAed.toLocaleString()}`)
+      }
+      if (f.grossYieldPct !== null) lines.push(`- Community profile: gross yield ${f.grossYieldPct}%`)
+      if (f.neighbourhoodScore !== null) {
+        lines.push(`- Neighbourhood score: ${f.neighbourhoodScore}/100`)
+      }
+    } else {
+      lines.push(
+        '',
+        'If the reader asks about a district that is not listed above, say sqftLab has no',
+        'listing coverage for it rather than estimating from the districts that are covered.',
+      )
+    }
+  } else {
+    lines.push('- No live listings are loaded, so you cannot quote asking prices.')
+  }
+
+  if (ctx.register.available) {
+    lines.push(
+      '',
+      `Registered sales (government register, last ${ctx.register.days} days):`,
+      `- Transactions: ${ctx.register.transactions.toLocaleString()}`,
+      ctx.register.avgPsfAed === null
+        ? '- Average price per sqft: unavailable'
+        : `- Average price per sqft: AED ${ctx.register.avgPsfAed.toLocaleString()}`,
+    )
+  } else {
+    lines.push(
+      '',
+      'The government transaction register holds no rows on this deployment, so you have no',
+      'registered sale figures. Do not state or estimate a registered sale volume or price.',
+    )
+  }
+
+  return lines.join('\n')
 }
 
 export class AiUnavailableError extends Error {
