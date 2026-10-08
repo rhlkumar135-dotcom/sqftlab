@@ -7,6 +7,7 @@ import { detectDeals, SALE_TXN_TYPES } from './deals'
 import { computeAllInvestmentScores } from './score-engine'
 import { cacheInvalidate } from './cache'
 import { dldConfigured, syncDLDTransactions } from './dld'
+import { syncDldReference } from './dld-open'
 import { adrecConfigured, syncADRECTransactions } from './adrec'
 import { revalueAllHoldings } from './portfolio-jobs'
 import { sendWhatsappDigests } from './whatsapp-jobs'
@@ -190,6 +191,19 @@ export async function runHourlyRefresh(): Promise<RefreshResult> {
     }
     const r = await syncADRECTransactions()
     return `${r.imported} imported, ${r.skipped} unmappable (${r.pages} pages)`
+  })
+
+  // The keyless half of DLD. Unlike dldSync this needs no credential, so it is a
+  // live government source rather than a skipped one — the area, project and
+  // Ejari property-type registries refresh every hour. It carries no prices.
+  await step('dldReference', async () => {
+    const r = await syncDldReference()
+    return (
+      `${r.areas} areas, ${r.projects} projects, ${r.propertyTypes} property types ` +
+      `(${r.linkedCommunities} communities linked to their official DLD area` +
+      (r.newlyLinked ? `, ${r.newlyLinked} new` : '') +
+      ')'
+    )
   })
 
   await step('macro', async () => {

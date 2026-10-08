@@ -129,6 +129,9 @@ model Community {
   scoreRetail         Int      @default(0) @map("score_retail")
   scoreParks          Int      @default(0) @map("score_parks")
   scoreWorship        Int      @default(0) @map("score_worship")
+  /// Official DLD administrative area (AREA_ID from the government layer), set
+  /// when this community name matches one in the DLD area registry.
+  dldAreaId           String?  @map("dld_area_id")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   transactions   Transaction[]
@@ -1000,4 +1003,24 @@ model DealExpression {
 
   @@unique([dealId, userId])
   @@map("deal_expressions")
+}
+
+/// Reference data pulled from the DLD open-data gateway (keyless commands only).
+///
+/// This is real government data: the administrative area registry, the project
+/// registry and the Ejari property-type list. It carries no prices — DLD's
+/// transaction and rent records are captcha-gated (see src/lib/dld-open.ts) — so
+/// nothing here may be used to assert a price. Prices come from the transaction
+/// register (./dld.ts, needs DUBAI_PULSE_API_KEY) or from listing asking prices.
+model DldReference {
+  id         String   @id @default(cuid())
+  kind       String // area | project | property_type
+  externalId String   @map("external_id")
+  nameEn     String   @map("name_en")
+  nameAr     String?  @map("name_ar")
+  fetchedAt  DateTime @default(now()) @map("fetched_at")
+
+  @@unique([kind, externalId])
+  @@index([kind])
+  @@map("dld_references")
 }

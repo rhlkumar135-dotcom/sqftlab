@@ -18,6 +18,12 @@ const check = (name: string, ok: boolean, detail: string) => {
   else { fail++; console.log(`  ✗ ${name} — ${detail}`) }
 }
 
+// /stream/test-publish injects synthetic events into every subscriber's stream, so
+// it is cron-secret gated. The legacy literal is only a fallback for local runs
+// where CRON_SECRET is unset; it is accepted by the server for that reason.
+const CRON_SECRET = process.env.CRON_SECRET ?? 'sqftlab-cron-2026'
+const secretQuery = `secret=${encodeURIComponent(CRON_SECRET)}`
+
 async function main() {
   console.log('\n═══ SSE stream ═══')
 
@@ -53,8 +59,13 @@ async function main() {
 
   // Give the handler a moment to emit `init`, then publish.
   await new Promise((r) => setTimeout(r, 400))
-  const pub = await app.request('/sqftlab/stream/test-publish', { method: 'POST' })
+  const pub = await app.request(`/sqftlab/stream/test-publish?${secretQuery}`, { method: 'POST' })
   check('test-publish 200', pub.status === 200, `got ${pub.status}`)
+
+  // The gating itself is asserted separately: an unauthenticated call must be
+  // refused outright, not merely ignored.
+  const unauth = await app.request('/sqftlab/stream/test-publish', { method: 'POST' })
+  check('test-publish refuses an unauthenticated caller', unauth.status === 401, `got ${unauth.status}`)
 
   await Promise.race([pump, new Promise((r) => setTimeout(r, 4000))])
   await reader.cancel().catch(() => {})

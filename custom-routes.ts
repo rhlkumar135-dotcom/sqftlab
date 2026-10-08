@@ -24,6 +24,7 @@ import {
   subscriptionPeriodEnd, customerIdOf, normalizeStripeStatus, PAID_PLANS, BILLING_PERIODS,
 } from './src/lib/stripe'
 import { dldConfigured } from './src/lib/dld'
+import { dldReferenceCounts } from './src/lib/dld-open'
 import { adrecConfigured } from './src/lib/adrec'
 import { auditEnv } from './src/lib/env-audit'
 import {
@@ -3775,12 +3776,17 @@ app.delete('/sqftlab/alerts/:id', async (c) => {
 // POST /sqftlab/alerts/scan — run the engine on demand (the scraper cron also
 // calls this after each listing upsert).
 app.post('/sqftlab/alerts/scan', async (c) => {
+  // Writes alert matches for every user with an active rule, so it is a repeated
+  // write an anonymous caller must not be able to drive.
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
   const scan = await scanDealAlerts()
   return c.json({ ok: true, scan })
 })
 
 // POST /sqftlab/alerts/notify — deliver unseen matches by email.
 app.post('/sqftlab/alerts/notify', async (c) => {
+  // Sends outbound email to matched users. Unguarded, this was a free spam relay.
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
   const result = await notifyPendingMatches()
   return c.json({ ok: true, notify: result })
 })
@@ -4664,21 +4670,57 @@ app.get('/sqftlab/sources', async (c) => {
 
   // "Available to fetch" is a different question from "has been fetched" — the
   // record counts answer the second, this answers the first.
+  //
+  // The three statuses are deliberately distinct, because collapsing them is how a
+  // dashboard ends up claiming data it does not have:
+  //   connected  — reachable now and delivering rows
+  //   key_needed — reachable, but the provider requires a credential we do not hold
+  //   blocked    — reachable, but behind an anti-bot control that needs a human
+  const dldRefs = await dldReferenceCounts()
+  const dldRefTotal = Object.values(dldRefs).reduce((a, b) => a + b, 0)
+
   const available = [
-    { name: 'PropertyFinder', kind: 'listings', requiresCredentials: false, envVar: null, connected: listingRows.some((r) => r.name === 'propertyfinder') },
-    { name: 'DLD (Dubai Pulse)', kind: 'transactions', requiresCredentials: true, envVar: 'DUBAI_PULSE_API_KEY', connected: txnRows.some((r) => r.name === 'dld') },
-    { name: 'ADREC (Abu Dhabi)', kind: 'transactions', requiresCredentials: true, envVar: 'ADREC_API_URL', connected: txnRows.some((r) => r.name === 'adrec') },
+    { name: 'PropertyFinder', kind: 'listings', requiresCredentials: false, envVar: null, connected: listingRows.some((r) => r.name === 'propertyfinder'), note: 'Public listings; keyless scrape.' },
+    {
+      name: 'DLD open data (area + project registry)',
+      kind: 'reference',
+      requiresCredentials: false,
+      envVar: null,
+      connected: dldRefTotal > 0,
+      records: dldRefTotal,
+      note: 'Keyless government gateway. Reference registers only — carries no prices. DLD transaction and rent records on the same gateway are captcha-protected and cannot be fetched automatically.',
+    },
+    {
+      name: 'DLD (Dubai Pulse) transaction register',
+      kind: 'transactions',
+      requiresCredentials: true,
+      envVar: 'DUBAI_PULSE_API_KEY',
+      connected: txnRows.some((r) => r.name === 'dld'),
+      note: 'The only source of official sale prices. Dubai Pulse issues the key via UAE Pass, so it must be obtained by the account holder, not the platform.',
+    },
+    {
+      name: 'ADREC (Abu Dhabi)',
+      kind: 'transactions',
+      requiresCredentials: true,
+      envVar: 'ADREC_API_URL',
+      connected: txnRows.some((r) => r.name === 'adrec'),
+      note: 'ADREC grants access by subscription request; there is no self-serve signup.',
+    },
   ]
 
   return c.json({
     available,
     delivering: [...listingRows, ...txnRows],
+    referenceCounts: dldRefs,
     note: 'Counts are recorded rows only. Nothing here is estimated or generated.',
   })
 })
 
 // ─── Pipeline control (manual trigger; the hourly cron calls this too) ──────
 app.post('/sqftlab/intelligence/run', async (c) => {
+  // Recomputes and writes the whole intelligence layer (RPI, buildings, supply)
+  // and publishes to every connected SSE client.
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
   try {
     const result = await runIntelligencePipeline()
 
@@ -4710,6 +4752,8 @@ app.post('/sqftlab/intelligence/run', async (c) => {
 // Fire the broadcast path without recomputing, so the client can be exercised
 // against a live stream even when nothing has changed on disk.
 app.post('/sqftlab/stream/test-publish', async (c) => {
+  // Injects synthetic events into the live stream every client is subscribed to.
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
   // Track what was actually published. The previous version returned a fixed
   // list including 'deal:new' regardless of whether a deal existed, so a caller
   // watching the stream for an event the response promised would wait forever.
@@ -4778,6 +4822,9 @@ app.get('/sqftlab/intelligence/status', async (c) => {
 
 // ─── Macro ingestion (spec Part 3.2 free sources) ───────────────────────────
 app.post('/sqftlab/macro/refresh', async (c) => {
+  // Hits several external macro providers; unguarded it was an open proxy that
+  // could burn their rate limits from our IP.
+  if (!cronAuthorized(c)) return c.json({ error: 'unauthorized' }, 401)
   try {
     const result = await fetchAllMacro()
     return c.json({ ...result, fetchedAt: new Date().toISOString() })
