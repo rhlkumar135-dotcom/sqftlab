@@ -542,7 +542,12 @@ export function buildSystemPrompt(
     if (ctx.overallRentAnnualAed !== null) {
       lines.push(`- Average asking annual rent, rent listings: AED ${ctx.overallRentAnnualAed.toLocaleString()}`)
     }
-    lines.push('- District coverage:')
+    // The distinction matters: this list is the ten largest, while the total covered is
+    // larger. Without it the model said "covers 44 districts" and then listed ten, which
+    // reads as a contradiction even though both figures are correct.
+    lines.push(
+      `- District coverage — the ${ctx.topDistricts.length} largest by listing count, out of ${ctx.districtsCovered} covered in total:`,
+    )
     for (const d of ctx.topDistricts) {
       const sale =
         d.saleListings > 0

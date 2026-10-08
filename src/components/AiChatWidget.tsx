@@ -375,7 +375,7 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
               />
               <span>
                 {engine.mode === 'deterministic'
-                  ? `Computed from sqftLab's live database${engine.label === null ? '' : ` · ${engine.label}`}`
+                  ? "Computed from sqftLab's live database"
                   : `Written by ${engine.label ?? 'a language model'}; every figure traced back to sqftLab data`}
                 {provenance?.note ? ` — ${provenance.note}` : ''}
                 {provenance !== null && provenance.unsupported.length > 0

@@ -1488,3 +1488,51 @@ in instead of sharing a showcase portfolio.
 `verify-day13` 112/112 · `verify-day17-routing` 101/101 · `verify-server-routing` 8/8 ·
 `verify-scheduler` 22/22 · `verify-live-data` 16/1 (the demo row) · tsc 0 errors outside
 pre-existing `src/generated/` noise.
+
+## AI assistant: free-first providers and grounding (2026-10-08)
+
+### The model layer
+`src/lib/llm-providers.ts` resolves the provider. One OpenAI-compatible `fetch` client
+fronts all of them — verified against the gateway's own `/api/ai/v1/chat/completions`, so
+the AI SDK is no longer on the critical path. `auto` (default) walks **Groq → OpenRouter →
+Gemini → a local `AI_BASE_URL`**, then the platform gateway (only while
+`AI_ALLOW_GATEWAY_FALLBACK` is not `false`), then offline. Naming a provider that is not
+configured goes **offline**, never to a different (billed) one.
+
+Probed live: the platform gateway serves **only frontier models** (Claude Opus 5.5, GPT-6,
+…). There is no free model on it, and the pod's `RUNTIME_AUTH_SECRET` (`wrt_v1_…`) is
+rejected by it — only `AI_PROXY_TOKENS` works. So "free" requires a free provider key; the
+three that need no card are Groq, OpenRouter (`:free` models) and Google AI Studio.
+
+### The grounding layer
+`src/lib/ai-grounding.ts` holds three defences, matched to the three ways a confident wrong
+answer gets produced:
+1. `validateAnswer` — every number in the finished answer must correspond to an evidence
+   value (2% rounding tolerance; years and structural integers exempt). Districts named in
+   the answer must have been in the evidence.
+2. `detectUncoveredPlace` + the refusal gate — a question naming a district we hold nothing
+   for is **refused before any model is called**. This is the case a model gets wrong most
+   convincingly, because the surrounding prose is right.
+3. `deterministicAnswer` — replies rendered straight from Prisma, so there is no step at
+   which a figure can be invented. Runs when no provider is configured, when one fails, and
+   when two consecutive model drafts fail validation.
+
+`buildSystemPrompt(ctx, evidence)` renders the evidence with **ids** and states a contract
+forbidding derived arithmetic (sums, growth rates, conversions) — a model told to quote
+exactly, then checked on it, rather than asked politely not to invent.
+
+A failing draft is repaired once with the offending figures named; if it fails again the
+answer is replaced by the computed one. Both outcomes are disclosed in `note`, never hidden.
+The widget shows which engine answered (green shield) and surfaces any unverified figure.
+
+Verified by `scripts/verify-ai-grounding.ts` — **57/57**, hermetic (stubbed HTTP transport,
+no paid calls). The 503 for an unconfigured deployment is gone; the assistant always answers.
+
+### Known: the shared assistant transcript
+`DEMO_ACCOUNT_AUTOLOGIN` means every anonymous visitor is `demo@sqftlab.com`, and
+`/sqftlab/ai/chat/history` keys on the resolved user id — so all guests **share one AI
+transcript** and each can read the others' questions. Pre-existing, not from the AI work.
+Fix is the same switch: `DEMO_ACCOUNT_AUTOLOGIN=false`.
+
+### Regression set (additions)
+`verify-ai-grounding` 57/57 · tsc 105 (unchanged baseline, all in `src/generated/`).
