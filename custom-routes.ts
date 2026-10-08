@@ -5238,8 +5238,17 @@ async function establishSession(
   // Task C3 — attribute the anonymous session to this user.
   const guestId = c.get('guestId')
   if (guestId) {
+    // An UPSERT, not an update. The guest row is written by the guest middleware on
+    // its own schedule, so on a first-ever visit — the exact moment sign-in happens —
+    // it may not exist yet. `update` then threw "No record was found for an update"
+    // on every such sign-in: caught, so never user-visible, but it filled the log
+    // with a Prisma error about an expected condition.
     await prisma.guestSession
-      .update({ where: { id: guestId }, data: { convertedAt: new Date(), convertedUserId: user.id } })
+      .upsert({
+        where: { id: guestId },
+        create: { id: guestId, convertedAt: new Date(), convertedUserId: user.id, lastSeenAt: new Date() },
+        update: { convertedAt: new Date(), convertedUserId: user.id },
+      })
       .catch(() => {})
     await prisma.user.update({ where: { id: user.id }, data: { guestId } }).catch(() => {})
     await prisma.userEvent
