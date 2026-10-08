@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode, type FormEvent } from 'react'
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter, ZAxis, ReferenceLine } from 'recharts'
-import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2, Network } from 'lucide-react'
+import { MapPin, TrendingUp, TrendingDown, Search, Bell, Briefcase, BarChart3, Calculator, Building, Bookmark, Zap, Crown, Menu, X, ExternalLink, Image as ImageIcon, ChevronDown, Download, Check, Table2, Lock, Scale, Building2, Globe, Activity, KeyRound, FileCode2, Network, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { PAYMENTS_ENABLED, handlePaymentAttempt } from '@/lib/payments'
 import { ToastProvider } from '@/components/Toast'
@@ -25,13 +25,14 @@ import ApiKeysPage from '@/components/ApiKeysPage'
 import DealsNetworkPage from '@/components/DealsNetworkPage'
 import DealDetailPage from '@/components/DealDetailPage'
 import SignInPage from '@/components/SignInPage'
+import AdminPage from '@/components/AdminPage'
 import { useLiveMarket, LiveBadge, type LiveMarket } from '@/components/LiveStream'
 import { EmptyState } from '@/components/EmptyState'
 import { SkeletonRows } from '@/components/Skeleton'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import OnboardingBanner, { type OnboardingTarget } from '@/components/OnboardingBanner'
 import { getRiskFlags } from '@/lib/verdict'
-import { ensureSession } from '@/lib/session'
+import { ensureSession, sessionHeaders } from '@/lib/session'
 import { usePageMeta } from '@/lib/seo'
 import SNAPSHOT from '@/data/snapshot.json'
 // Leaflet's stylesheet, bundled rather than pulled from unpkg. The map controls,
@@ -119,6 +120,17 @@ function useCurrency() { return useContext(CurrencyContext) }
 const AED = (n: number) => `AED ${n.toLocaleString()}`
 const PCT = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}%`
 
+/**
+ * Does this community have a sale price to show?
+ *
+ * Zero is not a price. A district whose listings are all rentals has no sale PSF,
+ * and rendering "AED 0 /sqft" reads as a market that has collapsed rather than a
+ * measurement that does not exist. Two Abu Dhabi districts (Al Khalidiyah,
+ * Corniche Area) are in exactly that state: 111 and 124 live rental listings,
+ * no sale listings, so their PSF is legitimately absent — and must read as absent.
+ */
+const hasSalePsf = (v: number | null | undefined): boolean => (v ?? 0) > 0
+
 // A missing measurement is not a zero. "AED 0/sqft" and "0 txns" read as observed
 // facts, when on this deployment they mean "no government transaction feed is
 // connected" — the QA run flagged exactly that. Anything transaction-derived, and
@@ -162,11 +174,14 @@ function bakedFallback<T>(url: string): T | undefined {
 
 async function safeFetch<T>(url: string, fallback: T): Promise<T> {
   try {
-    // Present an identity first: account-scoped routes answer 401 without one.
-    // ensureSession() caches after the first call, so this is not an extra
-    // round-trip per request.
-    const userId = await ensureSession()
-    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
+    // Trigger the identity bootstrap first so the session cookie is in place —
+    // account-scoped routes answer 401 without it. ensureSession() caches after the
+    // first call, so this is not an extra round-trip per request.
+    //
+    // The resolved id is deliberately NOT sent anywhere: identity travels in the
+    // cookie, and a caller-supplied id is no longer accepted as proof of it.
+    await ensureSession()
+    const r = await fetch(url, { credentials: 'same-origin', headers: sessionHeaders() })
     if (r.ok) return await r.json() as T
     // 401/403 are answers about access, not outages. Substituting other data for
     // them is what produced the fabricated portfolio, so return the caller's own
@@ -184,8 +199,8 @@ async function safeFetch<T>(url: string, fallback: T): Promise<T> {
  */
 async function loadResource<T>(url: string, initial: T): Promise<{ data: T; status: number | null }> {
   try {
-    const userId = await ensureSession()
-    const r = await fetch(url, userId ? { headers: { Authorization: `Bearer ${userId}` } } : undefined)
+    await ensureSession()
+    const r = await fetch(url, { credentials: 'same-origin', headers: sessionHeaders() })
     if (r.ok) {
       const body = await r.json().catch(() => null)
       if (body && typeof body === 'object') return { data: body as T, status: 200 }
@@ -285,7 +300,7 @@ function applyBakedFilter(url: string, baked: unknown): unknown {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys' | 'deal-network' | 'deal'
+type Page = 'landing' | 'dashboard' | 'community' | 'listings' | 'markets' | 'portfolio' | 'watchlist' | 'deals' | 'alerts' | 'pricing' | 'yield' | 'mortgage' | 'about' | 'property' | 'analytics' | 'predictions' | 'intelligence' | 'waitlist' | 'glossary' | 'signin' | 'cma' | 'capital-flow' | 'buildings' | 'building' | 'export' | 'market-pulse' | 'docs' | 'api-keys' | 'deal-network' | 'deal' | 'admin'
 
 // The pages that publish a real URL. Anything absent here is in-app only: navigating
 // to it deliberately leaves the address bar alone, which is how the app has always
@@ -321,6 +336,12 @@ const PAGE_PATHS: Partial<Record<Page, string>> = {
   // below-market listing scan, which also owns the API path `/sqftlab/deals`. The two
   // features share a name but not a resource, so only the URL is handed over here.
   'deal-network': '/deals',
+  // The operator console. Reached from the Admin button in the nav, and published as a
+  // URL so it survives a reload — the console holds a session, and a reload that dropped
+  // the operator back on the landing page would be a strange place to land.
+  //
+  // Single-segment and not prefixed `/api`, for the same proxy reason as `/keys` above.
+  admin: '/admin',
 }
 
 // Day 10: `/buildings/<slug>` is the first route in this app that carries a
@@ -444,6 +465,13 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
             <span className="live-dot" />
             <span className="text-[9px]" style={{ fontFamily: 'var(--font-data)' }}>Live</span>
           </div>
+          <button onClick={() => setPage('admin')} className="px-3 py-1.5 rounded-full text-xs font-semibold transition-all shrink-0 inline-flex items-center gap-1.5"
+            style={page === 'admin'
+              ? { background: 'var(--b600)', color: '#fff' }
+              : { color: 'var(--ink-3)', border: '1px solid var(--line)' }}
+            title="Operator console">
+            <ShieldCheck size={13} /> Admin
+          </button>
           <button onClick={() => setPage('signin')} className="px-3 py-1.5 rounded-full text-xs font-semibold transition-all shrink-0"
             style={{ color: 'var(--ink-3)', border: '1px solid var(--line)' }}>
             Sign in
@@ -474,6 +502,11 @@ function Nav({ page, setPage, live }: { page: Page; setPage: (p: Page) => void; 
               <n.icon size={16} /><span>{n.label}</span>
             </button>
           ))}
+          <button onClick={() => { setPage('admin'); setMobileOpen(false) }}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-[10px] text-sm"
+            style={{ color: page === 'admin' ? 'var(--b600)' : 'var(--ink-4)', background: page === 'admin' ? 'rgba(37,99,235,0.08)' : 'transparent' }}>
+            <ShieldCheck size={16} /><span>Admin</span>
+          </button>
         </div>
       )}
     </motion.nav>
@@ -785,7 +818,7 @@ function HeatmapDashboard({ setPage, setSelectedCommunity }: { setPage: (p: Page
           ? (v < 0 ? 'var(--down)' : t < 0.5 ? 'var(--b500)' : 'var(--up)')
           : t < 0.33 ? 'var(--up)' : t < 0.66 ? 'var(--b500)' : 'var(--b800)'
         const circle = L.circleMarker([c.latitude, c.longitude], { radius: r, fillColor: color, fillOpacity: 0.7, color: '#fff', weight: 2 }).addTo(map)
-        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">AED ${c.medianAedSqft.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
+        circle.bindTooltip(`<div style="font-family:Plus Jakarta Sans;font-size:12px;min-width:190px"><div style="font-weight:600;font-size:13px;margin-bottom:2px">${c.nameEn}</div><div style="color:var(--ink-4);text-transform:capitalize;margin-bottom:6px">${c.emirate.replace('_', ' ')}</div><div style="margin-bottom:8px;padding:4px 6px;border-radius:6px;background:rgba(37,99,235,0.08)"><span style="font-weight:700;font-size:13px;color:var(--ink);font-family:JetBrains Mono,monospace">${def.format(v)}</span><span style="color:var(--ink-5);font-size:10px"> ${def.label}</span></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><div><div style="font-weight:700;color:var(--ink)">${hasSalePsf(c.medianAedSqft) ? `AED ${c.medianAedSqft.toLocaleString()}` : DASH}</div><div style="color:var(--ink-5);font-size:10px">per sqft</div></div><div><div style="font-weight:700;color:var(--up)">${c.grossYieldPct}%</div><div style="color:var(--ink-5);font-size:10px">yield</div></div><div><div style="font-weight:600;color:${c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)'}">${PCT(c.priceChange30d)}</div><div style="color:var(--ink-5);font-size:10px">30d change</div></div><div><div style="font-weight:600">${c.totalTransactions.toLocaleString()}</div><div style="color:var(--ink-5);font-size:10px">volume</div></div><div><div style="font-weight:600">${c.dealCount ?? 0}</div><div style="color:var(--ink-5);font-size:10px">deals</div></div><div><div style="font-weight:600">${c.neighbourhoodScore}</div><div style="color:var(--ink-5);font-size:10px">score</div></div></div></div>`, { className: 'sqftlab-tooltip' })
         circle.on('click', () => { setSelectedCommunity(c.slug); setPage('community') })
       })
       // Refit to what is actually on screen. The view used to be pinned to a
@@ -966,7 +999,18 @@ function CommunityDetail({ slug, setPage }: { slug: string; setPage: (p: Page) =
             </div>
           </div>
           <div className="text-right">
-            <div className="text-3xl font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(community.medianAedSqft)}<span className="text-sm font-normal" style={{ color: 'rgba(255,255,255,0.5)' }}> /sqft</span></div>
+            {hasSalePsf(community.medianAedSqft) ? (
+              <div className="text-3xl font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(community.medianAedSqft)}<span className="text-sm font-normal" style={{ color: 'rgba(255,255,255,0.5)' }}> /sqft</span></div>
+            ) : community.medianAnnualRentAed > 0 ? (
+              // Rental-only district: show the measurement it does have, and say which
+              // one it is. Never a zero standing in for an absent sale price.
+              <>
+                <div className="text-3xl font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(community.medianAnnualRentAed)}<span className="text-sm font-normal" style={{ color: 'rgba(255,255,255,0.5)' }}> /yr</span></div>
+                <div className="text-[10px] mt-0.5" style={{ color: 'rgba(255,255,255,0.6)' }}>median rent · no sale data</div>
+              </>
+            ) : (
+              <div className="text-sm font-semibold" style={{ color: 'rgba(255,255,255,0.7)' }}>No sale data</div>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6 pt-4 border-t border-white/10 text-white">
@@ -1469,7 +1513,7 @@ function Watchlist({ setPage, setSelectedCommunity }: { setPage: (p: Page) => vo
                   <div className="text-sm font-bold" style={{ fontFamily: 'var(--font-data)', color: c.priceChange30d >= 0 ? 'var(--up)' : 'var(--down)' }}>{PCT(c.priceChange30d)}</div>
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-xs">
-                  <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{format(c.medianAedSqft)}</div><div style={{ color: 'var(--ink-5)' }}>AED/sqft</div></div>
+                  <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{hasSalePsf(c.medianAedSqft) ? format(c.medianAedSqft) : DASH}</div><div style={{ color: 'var(--ink-5)' }}>AED/sqft</div></div>
                   <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)', color: 'var(--up)' }}>{c.grossYieldPct}%</div><div style={{ color: 'var(--ink-5)' }}>Yield</div></div>
                   <div><div className="font-bold" style={{ fontFamily: 'var(--font-data)' }}>{c.transactionCount30d}</div><div style={{ color: 'var(--ink-5)' }}>Txns</div></div>
                 </div>
@@ -1649,13 +1693,11 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
     setError(null)
     setNotice(null)
     try {
-      const uid = await ensureSession()
+      await ensureSession()
       const res = await fetch('/api/sqftlab/alerts', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(uid ? { Authorization: `Bearer ${uid}` } : {}),
-        },
+        credentials: 'same-origin',
+        headers: sessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: form.name || null,
           district: form.district,
@@ -1688,10 +1730,11 @@ function AlertsPage({ setPage, setSelectedListing }: { setPage: (p: Page) => voi
     setError(null)
     setNotice(null)
     try {
-      const uid = await ensureSession()
+      await ensureSession()
       const res = await fetch(`/api/sqftlab/alerts/${id}`, {
         method: 'DELETE',
-        ...(uid ? { headers: { Authorization: `Bearer ${uid}` } } : {}),
+        credentials: 'same-origin',
+        headers: sessionHeaders(),
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) setError(body.error || `Delete failed (${res.status})`)
@@ -2412,7 +2455,7 @@ function MarketAnalytics({ setPage, setSelectedCommunity }: { setPage: (p: Page)
                 </div>
                 <div className="text-right">
                   <span className="text-sm font-bold" style={{ color: 'var(--up)', fontFamily: 'var(--font-data)' }}>+{c.priceChange30d as number}%</span>
-                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{format(c.medianAedSqft as number)}/sqft</span>
+                  <span className="text-xs block" style={{ color: 'var(--ink-5)' }}>{hasSalePsf(c.medianAedSqft as number) ? `${format(c.medianAedSqft as number)}/sqft` : 'no sale data'}</span>
                 </div>
               </button>
             ))}
@@ -3436,6 +3479,10 @@ function AppInner() {
       {page === 'waitlist' && <WaitlistPage setPage={navigate} />}
       {page === 'glossary' && <Glossary />}
       {page === 'signin' && <SignInPage setPage={navigate} />}
+      {/* The operator console. It is not gated here — the API refuses the data to any
+          caller that is not an administrator, and the component renders a login form
+          until then. A client-side gate would only be theatre. */}
+      {page === 'admin' && <AdminPage setPage={navigate} />}
       {/* Day 13 Task C — the assistant is mounted once at the shell level, not per page,
           so the conversation survives navigation instead of resetting on every route
           change. */}

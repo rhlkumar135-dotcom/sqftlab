@@ -28,10 +28,21 @@ async function req(path: string, init?: RequestInit) {
   return { status: res.status, body, headers: res.headers }
 }
 
-// A real user id, fetched the same way the browser does.
+// A real session, established the way the browser gets one: `/me` issues the
+// cookie, and every account-scoped route resolves identity from it.
+//
+// This previously sent `Authorization: Bearer <userId>` — a caller-supplied id the
+// server took at face value. That is deliberately no longer accepted: a user id is
+// not a credential. The test has to hold a real session to prove anything, so a
+// run that fails here means the cookie path is broken, not that the test is stale.
 const me = await req('/api/sqftlab/me')
 const userId: string | undefined = me.body?.user?.id
-const auth = { Authorization: `Bearer ${userId}` }
+const sessionCookie = (me.headers.get('set-cookie') ?? '')
+  .split(/,(?=[^;,\s]+=)/)
+  .map((s) => s.trim())
+  .find((s) => s.startsWith('next-auth.session-token=')) ?? ''
+const auth = { Cookie: sessionCookie }
+check('session cookie issued by /me', sessionCookie.length > 20, sessionCookie ? 'present' : 'MISSING')
 
 console.log(`\n# FIX-03 — auth (identity from the request, not a constant)`)
 {

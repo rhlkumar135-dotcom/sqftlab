@@ -73,6 +73,24 @@ model User {
   // Guest → registered attribution
   guestId String? @map("guest_id")
 
+  // Credentials. Null for accounts that only ever signed in through an OAuth
+  // provider or a magic link — the column being nullable is what lets those
+  // accounts exist at all, so it is not a "not yet set" placeholder.
+  //
+  // Stores a scrypt digest in the self-describing form `scrypt$N$r$p$salt$hash`,
+  // so the cost parameters travel with the hash and can be raised later without
+  // invalidating existing passwords.
+  passwordHash String? @map("password_hash")
+
+  // Administrative access. A SEPARATE flag from `role`, which is the self-declared
+  // job title collected during onboarding ("investor", "agent") — conflating the
+  // two would let any visitor grant themselves the admin panel by picking a role
+  // in the sign-up wizard.
+  //
+  // Every admin route checks this AND that the caller holds a live session row, so
+  // holding a valid session for a non-admin account grants nothing.
+  isAdmin Boolean @default(false) @map("is_admin")
+
   // Meta
   lastLoginAt      DateTime? @map("last_login_at")
   lastActiveAt     DateTime? @map("last_active_at")

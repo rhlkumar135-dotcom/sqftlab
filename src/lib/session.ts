@@ -1,33 +1,102 @@
 // Session bootstrap for the browser.
 //
-// Account-scoped API routes (portfolio, watchlist, alerts) now resolve the caller
-// from the request instead of reading a hardcoded server-side user id, and answer
-// 401 when there is none. `/api/sqftlab/me` is the identity bootstrap: it returns
-// the current account, which the client then presents as a bearer token.
+// IDENTITY IS AN OPAQUE SESSION TOKEN, issued by the server and verified against
+// its `sessions` table. The browser presents it two ways:
 //
-// This is identification, not authentication — the server takes the value at face
-// value, so it is not a security boundary. It exists so the app has a per-caller
-// identity to send instead of every visitor sharing one global account.
+//   1. an HttpOnly cookie — the default, and the better one;
+//   2. an `X-Sqftlab-Session` header.
+//
+// Why both. The managed preview edge strips `Set-Cookie` from proxied API
+// responses — measured: a sign-in through `*.preview.shogo.ai` returns a correct
+// `{ ok: true }` body and exactly one `set-cookie`, the edge's own. The app's
+// cookie never reaches the browser, so on that origin the cookie can never be
+// established and every account-scoped call is anonymous. The header is the same
+// secret travelling a route the edge does not rewrite.
+//
+// This is NOT the removed `Authorization: Bearer <userId>` bypass. That was a
+// caller-supplied *identity* the server believed. This is a 32-byte random value
+// the server minted and can look up; holding it IS the session. It lives in
+// sessionStorage, so it dies with the tab and never outlives a browser restart.
 
+const STORAGE_KEY = 'sqftlab.session'
+
+function readStored(): string | null {
+  try {
+    return sessionStorage.getItem(STORAGE_KEY)
+  } catch {
+    // Storage can be unavailable (sandboxed iframe, some privacy modes). The
+    // in-memory value still works for the life of the page load.
+    return null
+  }
+}
+
+function persist(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(STORAGE_KEY, token)
+    else sessionStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* see readStored */
+  }
+}
+
+let sessionToken: string | null = readStored()
 let cachedUserId: string | null = null
 let inflight: Promise<string | null> | null = null
 
+/** The identity the server resolved on this page load, once `ensureSession` has run. */
 export function getCachedUserId(): string | null {
   return cachedUserId
 }
 
+/**
+ * Adopt a token returned by a sign-in response.
+ *
+ * Call this with `null` on sign-out so nothing keeps presenting the old session.
+ */
+export function setSessionToken(token: string | null): void {
+  sessionToken = token
+  persist(token)
+  // Any identity resolved under the previous token is now wrong.
+  cachedUserId = null
+  inflight = null
+}
+
+/**
+ * Request headers carrying this session.
+ *
+ * Every `/api/sqftlab/*` call should go through this (or through `authedFetch`).
+ * A plain `fetch` still sends the cookie where cookies survive, but on the
+ * preview origin that is exactly what does not survive.
+ */
+export function sessionHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init)
+  if (sessionToken) headers.set('X-Sqftlab-Session', sessionToken)
+  return headers
+}
+
+/**
+ * Ensure this browser has a session, and return the account it resolved to.
+ *
+ * Returns null when the server has no account to give (signed out, or no demo
+ * account configured) — callers should treat null as "expect 401" rather than as
+ * an error.
+ */
 export function ensureSession(): Promise<string | null> {
   if (cachedUserId) return Promise.resolve(cachedUserId)
   if (!inflight) {
-    // Raw fetch on purpose: safeFetch() awaits this, so routing it back through
-    // safeFetch would recurse.
-    // bare-fetch-ok: this IS the identity bootstrap. It has no identity to present yet,
-    // and routing it through authedFetch would await itself.
-    inflight = fetch('/api/sqftlab/me')
+    // Raw fetch on purpose: authedFetch() awaits this, so routing it back through
+    // authedFetch would recurse.
+    inflight = fetch('/api/sqftlab/me', { credentials: 'same-origin', headers: sessionHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((body: unknown) => {
-        const user = (body as { user?: { id?: string } } | null)?.user
-        cachedUserId = user?.id ?? null
+        const parsed = body as { user?: { id?: string }; sessionToken?: string } | null
+        // The server echoes the token it resolved, which is how a browser behind a
+        // cookie-stripping edge learns it in the first place.
+        if (parsed?.sessionToken && parsed.sessionToken !== sessionToken) {
+          sessionToken = parsed.sessionToken
+          persist(sessionToken)
+        }
+        cachedUserId = parsed?.user?.id ?? null
         return cachedUserId
       })
       .catch(() => null)
@@ -35,21 +104,21 @@ export function ensureSession(): Promise<string | null> {
   return inflight
 }
 
+/** Drop the cached identity without discarding the token (kept for callers that need it). */
+export function resetSession(): void {
+  cachedUserId = null
+  inflight = null
+}
+
 /**
- * `fetch` with the caller's identity attached.
+ * `fetch` with the caller's session attached.
  *
- * Account-scoped routes resolve the caller FROM THE REQUEST, so a browser sending a
- * plain `fetch` arrives as a guest and is answered 401/403 no matter who is looking at
- * the screen. That is how the portfolio page came to show a "needs a Pro plan" paywall
- * to the very account that owns the holdings, and how an Enterprise user would have been
- * refused by the PDF export button.
- *
- * `ensureSession()` caches after its first call, so presenting the identity costs no
- * extra round-trip. Use this for anything under `/api/sqftlab/*` that is not public.
+ * `credentials: 'same-origin'` is explicit rather than assumed: it is the browser
+ * default for same-origin URLs, but the whole point of this helper is the
+ * session, and a future edit that made the URL absolute would silently break
+ * every account-scoped call if the intent were left implicit.
  */
 export async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const userId = await ensureSession()
-  const headers = new Headers(init.headers)
-  if (userId) headers.set('Authorization', `Bearer ${userId}`)
-  return fetch(url, { ...init, headers })
+  await ensureSession()
+  return fetch(url, { ...init, credentials: 'same-origin', headers: sessionHeaders(init.headers) })
 }

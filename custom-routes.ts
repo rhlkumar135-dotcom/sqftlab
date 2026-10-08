@@ -26,6 +26,7 @@ import {
 import { dldConfigured } from './src/lib/dld'
 import { dldReferenceCounts } from './src/lib/dld-open'
 import { adrecConfigured } from './src/lib/adrec'
+import { hashPassword, verifyPassword, passwordProblem, isValidEmail } from './src/lib/passwords'
 import { auditEnv } from './src/lib/env-audit'
 import {
   computeCma, MIN_COMPS, COMP_WINDOW_DAYS, SIZE_TOLERANCE, CMA_CONDITIONS,
@@ -281,7 +282,7 @@ function readCachedTier(userId: string): CallerTier | null {
 }
 
 app.use('*', async (c, next) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) {
     c.set('tier', 'guest')
     await next()
@@ -389,7 +390,7 @@ app.use('/sqftlab/*', async (c, next) => {
   }
 
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   // Who gets which bucket.
   //
   // The guest middleware mints an id for any request arriving without one, so
@@ -499,7 +500,7 @@ function upgradeRequired(c: Context) {
 /** Fire-and-forget analytics. Never let tracking break a request. */
 async function trackEvent(c: Context, eventType: string, data?: Record<string, unknown>): Promise<void> {
   try {
-    const userId = getUserId(c)
+    const userId = await getUserId(c)
     const guestId = (c.get('guestId') as string | undefined) ?? null
     await prisma.userEvent.create({
       data: {
@@ -1323,7 +1324,7 @@ app.post('/sqftlab/cma', async (c) => {
   // an anonymous request is told it must sign in (401), not that it needs a bigger
   // plan (403). A 403 to a guest would imply a login alone unlocks an Enterprise
   // tool, which is false, and Day 6's checklist asks for both statuses.
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const blocked = requireTier(c, 'enterprise', 'CMA Tool')
@@ -1483,7 +1484,7 @@ const REPORT_EXPECTED: Record<string, string> = {
 app.post('/sqftlab/report/property', async (c) => {
   // Identity before entitlement, matching the CMA route: an anonymous caller is told
   // to sign in (401), not told to upgrade (403). Day 7's checklist asks for both.
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const blocked = requireTier(c, 'enterprise', 'PDF Report')
@@ -2307,24 +2308,95 @@ app.get('/sqftlab/scrape/status', async (c) => {
 
 // ─── Identity ────────────────────────────────────────────────────────────────
 
-// Account-scoped routes resolve the caller from the request. This replaces the
-// old hardcoded demo-user constant, which meant every visitor was served the
-// same person's portfolio, watchlist and alerts regardless of who they were.
+// Account-scoped routes resolve the caller from the request.
 //
-// NOTE: this is *identification*, not authentication. A bearer value or cookie
-// is taken at face value, so it is not a security boundary — anyone can claim
-// any user id. Its purpose is to stop account-scoped routes leaking a single
-// global identity; real auth belongs in front of it.
-function getUserId(c: Context): string | null {
-  const auth = c.req.header('Authorization')
-  if (auth?.startsWith('Bearer ')) return auth.slice(7).trim() || null
+// AUTHENTICATION, not identification. An earlier revision returned whatever id
+// the caller presented — a bearer value or a cookie were both taken at face
+// value, so `Authorization: Bearer <any-user-id>` was a complete authentication
+// bypass. That is why this is now an opaque-token check against the `sessions`
+// table: the only way to be user X is to hold a token that a real sign-in wrote
+// for X. Nothing else is accepted; there is no value a caller can guess.
+//
+// `Authorization` is deliberately NOT read here. The `/v1` middleware owns that
+// header and resolves its own API keys (see the `/v1/*` block); reading it as a
+// user id would reintroduce exactly the bypass above.
+//
+// The token is immutable for its lifetime, so answers are cached briefly rather
+// than re-queried on every request. The TTL is short so that signing out or
+// revoking a session takes effect promptly instead of lingering for the life of
+// the process.
+
+const SESSION_TOKENS = new Map<string, { userId: string | null; expiresAt: number }>()
+const SESSION_CACHE_TTL_MS = 30_000
+
+/** Drop a cached session token — call this on sign-out so it stops resolving. */
+export function invalidateSession(sessionToken: string): void {
+  SESSION_TOKENS.delete(sessionToken)
+}
+
+/** The cookie establishSession() issues. */
+const SESSION_COOKIE = 'next-auth.session-token'
+
+/**
+ * Header form of the same session token.
+ *
+ * The managed preview edge (Envoy in front of Cloudflare) STRIPS `Set-Cookie`
+ * from proxied API responses — measured: signing in through
+ * `*.preview.shogo.ai` returns a correct `{ ok: true }` body and exactly one
+ * `set-cookie`, the edge's own `__cflb`. The app's cookie never reaches the
+ * browser, so on that origin a cookie can never be established and every
+ * account-scoped call is an anonymous one.
+ *
+ * So the token is also accepted from a header. This is NOT the removed bypass:
+ * `Authorization: Bearer <user-id>` was a caller-supplied *identity*, whereas
+ * this is an opaque 32-byte secret that must exist in the `sessions` table.
+ * Holding it IS the proof of the session — the same thing the cookie proves.
+ *
+ * A distinct header name is used deliberately: `Authorization` belongs to the
+ * `/v1` API-key middleware, and sharing it would make two different credentials
+ * look interchangeable.
+ */
+const SESSION_HEADER = 'x-sqftlab-session'
+
+/**
+ * Auth responses carry a live session token, so nothing on the path — browser,
+ * proxy or CDN — may store them. A cached sign-in response would hand one
+ * visitor's session to the next.
+ */
+function noStore(c: Context): void {
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+  c.header('Pragma', 'no-cache')
+}
+
+function readSessionToken(c: Context): string | null {
+  const header = c.req.header(SESSION_HEADER)
+  if (header && header.trim()) return header.trim()
   const cookie = c.req.header('Cookie') ?? ''
-  // `next-auth.session-token` is the cookie name establishSession() issues.
-  // Bare `session` stays accepted as a fallback for earlier links.
   const match =
     cookie.match(/(?:^|;\s*)(?:__Secure-)?next-auth\.session-token=([^;]+)/) ??
     cookie.match(/(?:^|;\s*)session=([^;]+)/)
   return match ? decodeURIComponent(match[1]) : null
+}
+
+async function resolveSessionToken(sessionToken: string): Promise<string | null> {
+  if (!sessionToken) return null
+  const hit = SESSION_TOKENS.get(sessionToken)
+  if (hit && hit.expiresAt > Date.now()) return hit.userId
+
+  // A lookup failure must read as "not signed in", never as an auth success.
+  const row = await prisma.session
+    .findUnique({ where: { sessionToken }, select: { userId: true, expires: true } })
+    .catch(() => null)
+  const userId = row && row.expires > new Date() ? row.userId : null
+
+  if (SESSION_TOKENS.size > 5_000) SESSION_TOKENS.clear()
+  SESSION_TOKENS.set(sessionToken, { userId, expiresAt: Date.now() + SESSION_CACHE_TTL_MS })
+  return userId
+}
+
+async function getUserId(c: Context): Promise<string | null> {
+  const token = readSessionToken(c)
+  return token ? resolveSessionToken(token) : null
 }
 
 // The seeded demo account, resolved by email (falling back to the oldest user)
@@ -2439,7 +2511,7 @@ function serialiseHolding(p: PortfolioRowLike) {
 app.get('/sqftlab/portfolio', async (c) => {
   const blocked = requireTier(c, 'pro', 'Portfolio')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const rows = await prisma.portfolio.findMany({
@@ -2536,7 +2608,7 @@ const PORTFOLIO_EXPECTED: Record<string, string> = {
 app.post('/sqftlab/portfolio', async (c) => {
   const blocked = requireTier(c, 'pro', 'Portfolio')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
@@ -2665,7 +2737,7 @@ app.post('/sqftlab/portfolio', async (c) => {
 app.delete('/sqftlab/portfolio/:id', async (c) => {
   const blocked = requireTier(c, 'pro', 'Portfolio')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   // Scoped by userId inside the DELETE rather than fetched first and authorised after:
@@ -2681,7 +2753,7 @@ app.delete('/sqftlab/portfolio/:id', async (c) => {
 // ─── Watchlist ───────────────────────────────────────────────────────────────
 
 app.get('/sqftlab/watchlist', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const items = await prisma.watchlist.findMany({
@@ -2853,7 +2925,7 @@ app.get('/sqftlab/listings/:id', async (c) => {
 // /sqftlab/alerts, so these stay reachable at their own path rather than
 // shadowing the new CRUD routes.
 app.get('/sqftlab/alert-rules', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const alerts = await prisma.alert.findMany({
@@ -3552,12 +3624,48 @@ app.get('/sqftlab/forecast', async (c) => {
 // ─── TASK 12 — Deal alert CRUD + engine ──────────────────────────────────────
 
 // Identity bootstrap. `/me` answers "who is this?", so it deliberately does NOT
-// require a session — if it did, the client could never learn its own id. With
-// no session it resolves the seeded account (the pre-auth placeholder), which
-// keeps tier gating and the account-scoped pages working.
+// require a session — if it did, the client could never learn its own id.
+//
+// With no session it signs the visitor in to the shared DEMO account and issues a
+// real session row, so the demo experience is a genuine authenticated session
+// rather than an unverified id. That distinction matters: an unverified id was
+// exactly what let anyone become anyone. A demo visitor is now a real caller with
+// a real session, just for an account that is deliberately not privileged.
+//
+// Set DEMO_ACCOUNT_AUTOLOGIN=false to disable it — then an anonymous visitor stays
+// anonymous and the account-scoped pages show their sign-in prompt.
 app.get('/sqftlab/me', async (c) => {
-  const userId = getUserId(c) ?? (await seededUserId())
-  if (!userId) return c.json({ error: 'No user account configured' }, 404)
+  const demoAutologin = process.env.DEMO_ACCOUNT_AUTOLOGIN !== 'false'
+  // A visitor who pressed Sign out stays signed out; without this the demo
+  // auto-login would silently undo it on the very next page load.
+  const signedOut = /(?:^|;\s*)sqftlab_signed_out=1/.test(c.req.header('Cookie') ?? '')
+
+  let userId = await getUserId(c)
+  // The token to hand back in the body. On an origin whose edge strips Set-Cookie,
+  // this is how the client learns its session at all.
+  let issuedToken: string | null = readSessionToken(c)
+
+  if (!userId && demoAutologin && !signedOut) {
+    const demoId = await seededUserId()
+    if (demoId) {
+      // Reuse the cached demo token while it still resolves; mint a new one only
+      // when it has expired or been revoked.
+      if (!demoSessionToken || !(await resolveSessionToken(demoSessionToken))) {
+        const demo = await prisma.user.findUnique({ where: { id: demoId }, select: { id: true, email: true } })
+        if (demo) demoSessionToken = await establishSession(c, demo, { registeredVia: 'demo', track: false })
+      } else {
+        setSessionCookie(c, demoSessionToken)
+      }
+      issuedToken = demoSessionToken
+      // Read back through the resolver so a failed write cannot look like a
+      // successful sign-in.
+      userId = demoSessionToken ? await resolveSessionToken(demoSessionToken) : null
+    }
+  }
+
+  noStore(c)
+
+  if (!userId) return c.json({ authenticated: false, tier: 'guest', user: null })
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -3567,14 +3675,21 @@ app.get('/sqftlab/me', async (c) => {
       // Day 15 — the onboarding banner reads the TOUR flag, not `onboardingCompleted`.
       // Both are returned so the client can tell the sign-up wizard apart from the tour.
       tourCompleted: true, tourSteps: true,
+      // The client renders the admin entry point from this, so it must not have to
+      // guess. It is a *hint* only — every admin route re-checks it server-side.
+      isAdmin: true,
     },
   })
-  if (!user) return c.json({ error: 'No user account configured' }, 404)
+  if (!user) return c.json({ authenticated: false, tier: 'guest', user: null })
 
   // `tier` is kept in the response because the client reads it; the DB field is
   // `subscriptionTier` (Task A3). Both names are returned so neither breaks.
   const { subscriptionTier, ...rest } = user
-  return c.json({ user: { ...rest, tier: subscriptionTier, subscriptionTier } })
+  return c.json({
+    authenticated: true,
+    user: { ...rest, tier: subscriptionTier, subscriptionTier },
+    sessionToken: issuedToken,
+  })
 })
 
 // ─── Alert allowance (Day 12 Task B) ─────────────────────────────────────────
@@ -3601,7 +3716,7 @@ function alertLimitFor(tier: CallerTier | undefined): number {
 
 // GET /sqftlab/alerts — the caller's ACTIVE watches, each with its recent matches.
 app.get('/sqftlab/alerts', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'free'
@@ -3638,7 +3753,7 @@ app.get('/sqftlab/alerts', async (c) => {
 })
 
 app.get('/sqftlab/alerts/matches', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const matches = await recentMatches(userId)
@@ -3659,7 +3774,7 @@ app.get('/sqftlab/alerts/matches', async (c) => {
 app.get('/sqftlab/alerts/:id/matches', async (c) => {
   const blocked = requireTier(c, 'pro', 'Watchlist alerts')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const id = c.req.param('id')
@@ -3686,7 +3801,7 @@ app.get('/sqftlab/alerts/:id/matches', async (c) => {
 app.post('/sqftlab/alerts', async (c) => {
   const blocked = requireTier(c, 'pro', 'Watchlist alerts')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
@@ -3762,7 +3877,7 @@ app.post('/sqftlab/alerts', async (c) => {
 // with a hard delete. Inactive alerts are excluded from the list and skipped by
 // the scan, so they stop costing anything.
 app.delete('/sqftlab/alerts/:id', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const id = c.req.param('id')
@@ -3833,7 +3948,7 @@ app.post('/sqftlab/subscribe', async (c) => {
   const blocked = paymentsBlocked(c)
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized', signInUrl: '/signin' }, 401)
 
   let body: Record<string, unknown>
@@ -4020,7 +4135,7 @@ app.post('/webhooks/stripe', handleStripeWebhook)
 
 // GET /sqftlab/users/me — the caller with their subscription state.
 app.get('/sqftlab/users/me', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const user = await prisma.user.findUnique({
@@ -4316,7 +4431,7 @@ app.post('/sqftlab/developer/position', async (c) => {
   const blocked = requireTier(c, 'enterprise', 'Developer Positioning')
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   // `readJsonBody` rather than the brief's bare `await c.req.json()`, which throws
@@ -4716,6 +4831,106 @@ app.get('/sqftlab/sources', async (c) => {
   })
 })
 
+/**
+ * Per-emirate coverage: the top tracked districts in Dubai and in Abu Dhabi, with
+ * the provenance of each district's price.
+ *
+ * This exists because "we cover the market" is not a claim the record counts on
+ * `/sources` can support on their own — 7,553 listings do not tell you WHICH
+ * districts they are, and two emirates' worth of coverage can look identical to
+ * one emirate's in an aggregate.
+ *
+ * Every row carries `psfSource`, and a district whose listings are all rentals
+ * reports `saleData: false` rather than a zero. That distinction is the point:
+ * it separates "this district is quiet" from "this district has no sale feed".
+ */
+app.get('/sqftlab/coverage', async (c) => {
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 10) || 10, 1), 50)
+  const emirateFilter = (c.req.query('emirate') ?? '').trim().toLowerCase()
+
+  const [communities, listingAgg] = await Promise.all([
+    prisma.community.findMany({
+      where: emirateFilter ? { emirate: emirateFilter } : undefined,
+      select: {
+        slug: true, nameEn: true, emirate: true,
+        medianAedSqft: true, medianAnnualRentAed: true, grossYieldPct: true,
+        psfSource: true, totalTransactions: true, neighbourhoodScore: true,
+      },
+    }),
+    prisma.listing.groupBy({
+      by: ['communityId', 'purpose'],
+      _count: { _all: true },
+    }),
+  ])
+
+  // Keyed by community id on the way in, by slug on the way out. Built once: the
+  // first version rescanned every entry per community, which is O(n²) for no reason.
+  const allCommunities = await prisma.community.findMany({ select: { id: true, slug: true } })
+  const idToSlug = new Map(allCommunities.map((r) => [r.id, r.slug]))
+
+  const listingsBySlug = new Map<string, { sale: number; rent: number }>()
+  for (const row of listingAgg) {
+    const slug = idToSlug.get(row.communityId)
+    if (!slug) continue
+    const entry = listingsBySlug.get(slug) ?? { sale: 0, rent: 0 }
+    if (row.purpose === 'rent') entry.rent += row._count._all
+    else entry.sale += row._count._all
+    listingsBySlug.set(slug, entry)
+  }
+
+  const byEmirate = new Map<string, typeof communities>()
+  for (const cm of communities) {
+    const list = byEmirate.get(cm.emirate) ?? []
+    list.push(cm)
+    byEmirate.set(cm.emirate, list)
+  }
+
+  const emirates = [...byEmirate.entries()].map(([emirate, list]) => {
+    // Ranked by sale price where there is one; districts with no sale price sort
+    // last rather than first, so a missing measurement never looks like the
+    // cheapest market in the emirate.
+    const ranked = [...list].sort((a, b) => {
+      const av = a.medianAedSqft > 0 ? a.medianAedSqft : -1
+      const bv = b.medianAedSqft > 0 ? b.medianAedSqft : -1
+      if (bv !== av) return bv - av
+      return (b.medianAnnualRentAed ?? 0) - (a.medianAnnualRentAed ?? 0)
+    })
+
+    const top = ranked.slice(0, limit).map((cm, i) => {
+      const counts = listingsBySlug.get(cm.slug) ?? { sale: 0, rent: 0 }
+      return {
+        rank: i + 1,
+        slug: cm.slug,
+        name: cm.nameEn,
+        medianAedSqft: cm.medianAedSqft > 0 ? cm.medianAedSqft : null,
+        saleData: cm.medianAedSqft > 0,
+        medianAnnualRentAed: cm.medianAnnualRentAed > 0 ? cm.medianAnnualRentAed : null,
+        grossYieldPct: cm.grossYieldPct > 0 ? cm.grossYieldPct : null,
+        psfSource: cm.psfSource,
+        transactions: cm.totalTransactions,
+        neighbourhoodScore: cm.neighbourhoodScore,
+        listings: counts,
+      }
+    })
+
+    return {
+      emirate,
+      tracked: list.length,
+      withSalePrice: list.filter((x) => x.medianAedSqft > 0).length,
+      saleListings: list.reduce((n, cm) => n + (listingsBySlug.get(cm.slug)?.sale ?? 0), 0),
+      rentListings: list.reduce((n, cm) => n + (listingsBySlug.get(cm.slug)?.rent ?? 0), 0),
+      top,
+    }
+  })
+
+  return c.json({
+    limit,
+    emirates,
+    note:
+      'A district with `saleData: false` has live rental listings but no sale listings, so it has no sale price per sqft. It is not a zero — it is an absent measurement.',
+  })
+})
+
 // ─── Pipeline control (manual trigger; the hourly cron calls this too) ──────
 app.post('/sqftlab/intelligence/run', async (c) => {
   // Recomputes and writes the whole intelligence layer (RPI, buildings, supply)
@@ -4966,21 +5181,20 @@ app.get('/sqftlab/stream/market', (c) =>
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Auth (Task C) — email magic link + Google OAuth handshake
+// Auth — email magic link · password · Google OAuth handshake
 //
 // PORT NOTE: the spec targets NextAuth v5, which is a Next.js library and cannot
 // run inside this Hono + Vite app. The behaviour is implemented natively here:
 // single-use tokens in `verification_tokens`, a `sessions` row per sign-in,
 // guest→user attribution, and Google as an optional OAuth provider.
 //
-// IDENTITY MODEL: `getUserId()` trusts a caller-supplied token. That IDENTIFIES
-// but does not AUTHENTICATE — the same caveat as every other endpoint. Swapping
-// in real session verification is a contained change to that one function.
+// IDENTITY MODEL: the cookie carries an opaque session token, and `getUserId()`
+// resolves it against `sessions`. Presenting a user id — in a cookie or a bearer
+// header — is no longer a way to become that user; see the note on `getUserId`.
+// Everything an account does therefore has a session row behind it.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// The cookie name `getUserId()` already reads, so the whole API accepts the
-// signed-in identity without touching a single existing handler.
-const SESSION_COOKIE = 'next-auth.session-token'
+// The cookie name `getUserId()` reads. (Declared with the resolver above.)
 const SESSION_TTL_DAYS = 30
 
 /** Send the sign-in link. Returns 'unconfigured' when no mail transport exists. */
@@ -5000,11 +5214,22 @@ async function sendMagicLinkEmail(to: string, link: string): Promise<'sent' | 'u
 }
 
 /** Exchange a validated magic-link token for a session cookie + Session row. */
+/** Issue the session cookie. The value is the opaque token, never a user id. */
+function setSessionCookie(c: Context, sessionToken: string): void {
+  // `Secure` is set on https only, because a Secure cookie is dropped outright on
+  // plain-http localhost and the sign-in would silently fail to stick there.
+  const secure = new URL(c.req.url).protocol === 'https:' ? '; Secure' : ''
+  c.header(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_DAYS * 24 * 3600}${secure}`,
+  )
+}
+
 async function establishSession(
   c: Context,
   user: { id: string; email: string },
-  opts: { registeredVia: string; name?: string | null; image?: string | null },
-) {
+  opts: { registeredVia: string; name?: string | null; image?: string | null; track?: boolean },
+): Promise<string> {
   const sessionToken = randomBytes(32).toString('hex')
   const expires = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 3600 * 1000)
 
@@ -5027,12 +5252,25 @@ async function establishSession(
     data: { lastLoginAt: new Date(), lastActiveAt: new Date(), registeredVia: opts.registeredVia },
   })
 
-  c.header(
-    'Set-Cookie',
-    `${SESSION_COOKIE}=${user.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_DAYS * 24 * 3600}`,
-  )
-  await trackEvent(c, 'sign_up', { via: opts.registeredVia })
+  // The cookie carries the OPAQUE TOKEN, never the user id. Putting the id here
+  // (as this did) is what made every account route impersonable: the value was
+  // handed straight back to `getUserId` as proof of identity.
+  setSessionCookie(c, sessionToken)
+
+  // The shared demo sign-in fires on the identity bootstrap, which every first
+  // page load hits — tracking it as a sign-up would drown the funnel in events
+  // from visitors who have not signed up for anything.
+  if (opts.track !== false) await trackEvent(c, 'sign_up', { via: opts.registeredVia })
+  return sessionToken
 }
+
+// One session for the shared demo account, reused rather than re-minted.
+//
+// Minting per request would write a `sessions` row for every cookieless client —
+// a crawler hitting `/me` would grow the table without bound. One long-lived row
+// is bounded and behaves identically, because the demo account is shared by
+// design: it is a preview of the product, not anybody's data.
+let demoSessionToken: string | null = null
 
 // Request a sign-in link.
 app.post('/sqftlab/auth/magic-link', async (c) => {
@@ -5196,7 +5434,7 @@ app.get('/sqftlab/auth/google/callback', async (c) => {
 
 // Who am I, according to the session cookie.
 app.get('/sqftlab/auth/session', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ authenticated: false, tier: 'guest' })
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -5213,7 +5451,7 @@ app.get('/sqftlab/auth/session', async (c) => {
 
 // Task C4 — onboarding: role + tracked areas + WhatsApp digest preference.
 app.post('/sqftlab/auth/onboard', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
@@ -5248,6 +5486,479 @@ app.post('/sqftlab/auth/onboard', async (c) => {
   return c.json({ ok: true, user })
 })
 
+// ─── Password sign-up / sign-in / sign-out ───────────────────────────────────
+//
+// The magic link and Google flows both prove control of an email address BEFORE
+// an account is usable, so there was no password anywhere in the system. Password
+// auth is what makes an admin login possible at all: a magic link lands in a
+// mailbox, which is useless for a credential the operator needs to hand over.
+
+/**
+ * Marker that the visitor explicitly signed out.
+ *
+ * Without it, `/me`'s demo auto-login would sign them straight back in on the
+ * next page load and "Sign out" would appear to do nothing.
+ */
+const SIGNED_OUT_COOKIE = 'sqftlab_signed_out'
+
+function clearCookie(c: Context, name: string): void {
+  c.header('Set-Cookie', `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`, { append: true })
+}
+
+function setSignedOut(c: Context, value: boolean): void {
+  const secure = new URL(c.req.url).protocol === 'https:' ? '; Secure' : ''
+  c.header(
+    'Set-Cookie',
+    value
+      ? `${SIGNED_OUT_COOKIE}=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_DAYS * 24 * 3600}${secure}`
+      : `${SIGNED_OUT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    { append: true },
+  )
+}
+
+/** The account shape the client consumes, shared by every sign-in path. */
+async function sessionPayload(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true, email: true, name: true, image: true, role: true,
+      subscriptionTier: true, subscriptionStatus: true,
+      onboardingCompleted: true, tourCompleted: true, tourSteps: true, guestId: true, isAdmin: true,
+    },
+  })
+  if (!user) return null
+  const { subscriptionTier, ...rest } = user
+  return { ...rest, tier: subscriptionTier, subscriptionTier }
+}
+
+app.post('/sqftlab/auth/signup', async (c) => {
+  const body = await readJsonBody(c)
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 120) : null
+
+  if (!isValidEmail(email)) return c.json({ error: 'Enter a valid email address.' }, 400)
+  const problem = passwordProblem(body.password)
+  if (problem) return c.json({ error: problem }, 400)
+
+  const existing = await prisma.user.findUnique({ where: { email } })
+
+  // An account that already exists WITH a password is a genuine conflict. One
+  // without (magic-link or Google) simply gains a password — refusing here would
+  // strand everyone who first arrived through the sign-in link.
+  if (existing?.passwordHash) {
+    return c.json({ error: 'An account with that email already exists. Sign in instead.' }, 409)
+  }
+
+  const passwordHash = await hashPassword(body.password as string)
+
+  const user = existing
+    ? await prisma.user.update({
+        where: { id: existing.id },
+        // Only fill a name in; never overwrite one the account already carries.
+        data: { passwordHash, ...(existing.name || !name ? {} : { name }) },
+      })
+    : await prisma.user.create({
+        data: {
+          email,
+          name,
+          passwordHash,
+          registeredVia: 'password',
+          ipAtRegistration: c.req.header('x-forwarded-for') ?? null,
+        },
+      })
+
+  const sessionToken = await establishSession(c, user, { registeredVia: 'password' })
+  setSignedOut(c, false)
+  noStore(c)
+
+  const payload = await sessionPayload(user.id)
+  // The token is returned in the body as well as the cookie: on an origin whose
+  // edge strips Set-Cookie (see SESSION_HEADER) this response is the only way the
+  // client can learn it. `noStore` above is what keeps it from being cached.
+  return c.json({ ok: true, user: payload, sessionToken }, 201)
+})
+
+app.post('/sqftlab/auth/signin', async (c) => {
+  const body = await readJsonBody(c)
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  const password = typeof body.password === 'string' ? body.password : ''
+
+  if (!isValidEmail(email) || password === '') {
+    return c.json({ error: 'Email and password are required.' }, 400)
+  }
+
+  const user = await prisma.user.findUnique({ where: { email } })
+
+  // Always run a verification, even for an unknown address, so the response time
+  // does not tell the caller which emails have accounts. The dummy digest is
+  // discarded; only the elapsed time matters.
+  const stored = user?.passwordHash ?? null
+  const ok = stored
+    ? await verifyPassword(password, stored)
+    : await verifyPassword(password, 'scrypt$16384$8$1$00$00')
+
+  if (!user || !stored || !ok) {
+    // One message for both cases, deliberately.
+    return c.json({ error: 'Incorrect email or password.' }, 401)
+  }
+
+  const sessionToken = await establishSession(c, user, { registeredVia: user.registeredVia ?? 'password' })
+  setSignedOut(c, false)
+  noStore(c)
+
+  const payload = await sessionPayload(user.id)
+  return c.json({ ok: true, user: payload, sessionToken })
+})
+
+app.post('/sqftlab/auth/signout', async (c) => {
+  const token = readSessionToken(c)
+  if (token) {
+    await prisma.session.deleteMany({ where: { sessionToken: token } }).catch(() => {})
+    // The resolver caches token→user for 30s; without this the deleted row would
+    // keep authenticating for the rest of the window.
+    invalidateSession(token)
+  }
+  clearCookie(c, SESSION_COOKIE)
+  setSignedOut(c, true)
+  return c.json({ ok: true })
+})
+
+// ─── Admin ───────────────────────────────────────────────────────────────────
+//
+// The bootstrap account is created on boot so the operator always has a way in.
+// This is the ONE place credentials enter the system from config rather than a
+// sign-up form.
+//
+// `ADMIN_PASSWORD` (plaintext) is the supported override. The committed fallback
+// is a scrypt DIGEST, never a plaintext password: a digest in a public repo costs
+// an attacker a brute-force, and the password behind it is long and random, so
+// that search does not finish. Rotating it means setting ADMIN_PASSWORD.
+const ADMIN_EMAIL_DEFAULT = 'admin@sqftlab.com'
+const ADMIN_PASSWORD_HASH_FALLBACK =
+  'scrypt$16384$8$1$12fe66dc841ccdaa806dd8289de7bd1e$' +
+  '0a2bf9021db57cc4a414a46c46f6f238ee90e80a5341b6ed1353db984a25366d' +
+  '55471938189af80423e256730ab35941be1c83e1c9b16c6aa4c4e19a761b817d'
+
+let adminReady: Promise<void> | null = null
+
+/** Idempotent, runs once per process. Never throws into a request. */
+function ensureAdminAccount(): Promise<void> {
+  if (!adminReady) adminReady = bootstrapAdmin().catch(() => {})
+  return adminReady
+}
+
+async function bootstrapAdmin(): Promise<void> {
+  const email = (process.env.ADMIN_EMAIL ?? ADMIN_EMAIL_DEFAULT).trim().toLowerCase()
+  const plaintext = process.env.ADMIN_PASSWORD
+
+  const existing = await prisma.user.findUnique({ where: { email } })
+
+  if (!existing) {
+    await prisma.user.create({
+      data: {
+        email,
+        name: 'Administrator',
+        passwordHash: plaintext ? await hashPassword(plaintext) : ADMIN_PASSWORD_HASH_FALLBACK,
+        isAdmin: true,
+        subscriptionTier: 'institutional',
+        onboardingCompleted: true,
+        tourCompleted: true,
+        registeredVia: 'password',
+      },
+    })
+    return
+  }
+
+  const data: Record<string, unknown> = { isAdmin: true }
+  // An env password always wins. Otherwise only fill a hash that is missing —
+  // resetting it unconditionally would undo any in-app password change on every
+  // deploy, which would also silently re-open the committed fallback.
+  if (plaintext) data.passwordHash = await hashPassword(plaintext)
+  else if (!existing.passwordHash) data.passwordHash = ADMIN_PASSWORD_HASH_FALLBACK
+
+  await prisma.user.update({ where: { email }, data })
+}
+
+/**
+ * Gate an admin route.
+ *
+ * Three independent checks, because this is the one surface where a single
+ * mistake exposes every user's data:
+ *   1. a live session row (not a value the caller typed),
+ *   2. `isAdmin` on that account — never the self-declared `role`,
+ *   3. a session token that still resolves, so a revoked one stops working now.
+ */
+async function requireAdmin(c: Context): Promise<{ userId: string } | Response> {
+  const token = readSessionToken(c)
+  if (!token) return c.json({ error: 'Sign in as an administrator to continue.', code: 'unauthenticated' }, 401)
+
+  const userId = await resolveSessionToken(token)
+  if (!userId) return c.json({ error: 'Your session has expired. Sign in again.', code: 'unauthenticated' }, 401)
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { isAdmin: true } })
+  if (!user?.isAdmin) return c.json({ error: 'This account is not an administrator.', code: 'forbidden' }, 403)
+
+  return { userId }
+}
+
+/** Is the CURRENT caller an admin? Drives the entry point in the UI. */
+app.get('/sqftlab/admin/session', async (c) => {
+  const userId = await getUserId(c)
+  if (!userId) return c.json({ authenticated: false, isAdmin: false })
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true, name: true, isAdmin: true },
+  })
+  return c.json({ authenticated: true, isAdmin: !!user?.isAdmin, email: user?.email ?? null, name: user?.name ?? null })
+})
+
+// ─── Admin: system status, page checks, accounts ─────────────────────────────
+//
+// The operator's console. Everything here is read-only and gated by
+// `requireAdmin`, which checks a live session row AND `isAdmin` — so the demo
+// account (which every anonymous visitor is signed into) can never reach it.
+
+/** When this process came up — the panel reports uptime from it. */
+const processStartedAt = Date.now()
+
+/** Deployment identity, so "is the live site stale?" is answerable from the panel. */
+function deploymentInfo() {
+  return {
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA ?? (process.env.SOURCE_COMMIT ?? 'unknown'),
+    environment: process.env.RAILWAY_ENVIRONMENT_NAME ?? process.env.NODE_ENV ?? 'development',
+    database: (process.env.DATABASE_URL ?? '').startsWith('postgres')
+      ? 'postgres'
+      : process.env.DATABASE_URL
+        ? 'sqlite'
+        : 'sqlite (default)',
+    node: process.version,
+    startedAt: processStartedAt,
+    uptimeSeconds: Math.round((Date.now() - processStartedAt) / 1000),
+  }
+}
+
+app.get('/sqftlab/admin/overview', async (c) => {
+  const auth = await requireAdmin(c)
+  if (auth instanceof Response) return auth
+
+  const [
+    users, admins, communities, listings, transactions, deals,
+    alerts, portfolios, watchlist, sessions, cronRuns, refs, projects,
+  ] = await Promise.all([
+    prisma.user.count(),
+    prisma.user.count({ where: { isAdmin: true } }),
+    prisma.community.count(),
+    prisma.listing.count(),
+    prisma.transaction.count(),
+    prisma.dealAlert.count(),
+    prisma.alert.count(),
+    prisma.portfolio.count(),
+    prisma.watchlist.count(),
+    prisma.session.count({ where: { expires: { gt: new Date() } } }),
+    prisma.cronRun.count(),
+    prisma.dldReference.count(),
+    // Projects live in the same register as areas, discriminated by `kind`.
+    prisma.dldReference.count({ where: { kind: 'project' } }),
+  ])
+
+  const communitiesByEmirate = await prisma.community.groupBy({
+    by: ['emirate'],
+    _count: { _all: true },
+  })
+
+  const [lastRun] = await recentCronRuns(1)
+  const env = auditEnv()
+
+  return c.json({
+    deployment: deploymentInfo(),
+    counts: {
+      users, admins, communities, listings, transactions, deals,
+      alerts, portfolios, watchlist, liveSessions: sessions, cronRuns,
+      dldReferences: refs, dldProjects: projects,
+    },
+    communitiesByEmirate: communitiesByEmirate.map((r) => ({ emirate: r.emirate, count: r._count._all })),
+    lastCronRun: lastRun ?? null,
+    // Which data sources are actually live, and what each unconfigured one costs.
+    // Reported from the same audit the boot log uses, so the panel and the deploy
+    // log cannot disagree about whether a source is connected.
+    dataSources: {
+      configured: env.present,
+      dormant: env.degraded.map((d) => ({ capability: d.capability, missing: d.missing, symptom: d.symptom })),
+    },
+  })
+})
+
+/**
+ * Per-page health check.
+ *
+ * Probes each page's backing endpoint over HTTP rather than querying the database
+ * directly: the point is to catch the failures that the database cannot see — a
+ * route that 404s, a 401 the UI would render as an empty state, a serialisation
+ * error. Each probe carries the admin's own cookie so account-scoped pages are
+ * exercised as a signed-in caller instead of as a guest.
+ *
+ * Streams (SSE) are deliberately excluded — they hold the connection open by
+ * design and would make the whole check hang.
+ */
+app.get('/sqftlab/admin/checks', async (c) => {
+  const auth = await requireAdmin(c)
+  if (auth instanceof Response) return auth
+
+  const origin = new URL(c.req.url).origin
+  // Forward BOTH credential forms. The probes must run as the caller, and on an
+  // origin whose edge strips cookies the caller's identity arrives in the header
+  // only — forwarding the cookie alone silently downgraded every probe to a guest,
+  // which reads as eight broken pages.
+  const cookie = c.req.header('Cookie') ?? ''
+  const incomingSession = c.req.header(SESSION_HEADER)
+  const probeHeaders: Record<string, string> = { cookie }
+  if (incomingSession) probeHeaders[SESSION_HEADER] = incomingSession
+
+  // Every path here was read off the route table and the component that calls it,
+  // not guessed. A check list full of invented URLs reports failures that are the
+  // list's fault rather than the app's, which is worse than no check at all.
+  const PAGES: Array<{ page: string; path: string; note: string; method?: string; body?: unknown; tolerate?: number[] }> = [
+    { page: 'Landing', path: '/api/sqftlab/stats', note: 'market headline numbers' },
+    { page: 'Heatmap', path: '/api/sqftlab/communities', note: 'the map pins' },
+    { page: 'Community', path: '/api/sqftlab/communities/dubai-marina', note: 'detail page: Dubai Marina' },
+    { page: 'Community Abu Dhabi', path: '/api/sqftlab/communities/al-reem-island', note: 'detail page: Al Reem Island' },
+    { page: 'Listings', path: '/api/sqftlab/listings?limit=5', note: 'the listings feed' },
+    { page: 'Markets', path: '/api/sqftlab/markets', note: 'market analytics tables' },
+    { page: 'Predictions', path: '/api/sqftlab/predictions', note: 'price forecast series' },
+    { page: 'Market Pulse', path: '/api/sqftlab/public/market-pulse', note: 'public pulse indicators' },
+    { page: 'Intelligence', path: '/api/sqftlab/intelligence', note: 'pro intelligence pipeline' },
+    { page: 'Portfolio', path: '/api/sqftlab/portfolio', note: 'account-scoped' },
+    { page: 'Watchlist', path: '/api/sqftlab/watchlist', note: 'account-scoped' },
+    { page: 'Deals', path: '/api/sqftlab/deals', note: 'the below-market feed' },
+    { page: 'Alerts', path: '/api/sqftlab/alerts', note: 'account-scoped' },
+    {
+      page: 'CMA', path: '/api/sqftlab/cma', method: 'POST', note: 'comparables engine (Enterprise)',
+      body: { buildingName: 'Marina Gate', community: 'Dubai Marina', bedrooms: 2, sizeSqft: 1200, listingPrice: 2_400_000 },
+      // A 422 here is "Insufficient comparable transactions" — the route answered
+      // correctly and the market simply has no transaction feed yet. Counting it as
+      // a failure would point at the code when the missing piece is a data key.
+      tolerate: [422],
+    },
+    { page: 'Yield', path: '/api/sqftlab/yield-curve?district=dubai-marina', note: 'rental yield curve' },
+    { page: 'Mortgage', path: '/api/sqftlab/mortgage/estimate?community=dubai-marina&bedrooms=2&sizeSqft=1200', note: 'mortgage estimate' },
+    { page: 'Buildings', path: '/api/sqftlab/buildings?limit=5', note: 'building scorecards' },
+    { page: 'Capital Flow', path: '/api/sqftlab/capital-flow/overview', note: 'foreign capital flows' },
+    { page: 'Deal Network', path: '/api/sqftlab/deal-briefs', note: 'deal origination network' },
+    { page: 'Macro', path: '/api/sqftlab/macro', note: 'macro indicators' },
+    { page: 'RPI', path: '/api/sqftlab/rpi', note: 'real price index' },
+    { page: 'Supply', path: '/api/sqftlab/supply', note: 'supply pipeline' },
+    { page: 'Auth', path: '/api/sqftlab/auth/session', note: 'the session endpoint the client reads' },
+    { page: 'API keys', path: '/api/sqftlab/api-keys', note: 'developer keys (Pro+)' },
+    { page: 'Methodology', path: '/api/sqftlab/sources', note: 'data provenance page' },
+    { page: 'Coverage', path: '/api/sqftlab/coverage', note: 'top districts per emirate' },
+    { page: 'Exports', path: '/api/sqftlab/export/history', note: 'export history' },
+    { page: 'Admin / Cron', path: '/api/sqftlab/cron/status', note: 'last hourly refresh' },
+  ]
+
+  const results = await Promise.all(
+    PAGES.map(async ({ page, path, note, method, body, tolerate }) => {
+      const started = Date.now()
+      try {
+        const init: RequestInit = { headers: probeHeaders, redirect: 'manual', method: method ?? 'GET' }
+        if (body !== undefined) {
+          init.headers = { ...probeHeaders, 'Content-Type': 'application/json' }
+          init.body = JSON.stringify(body)
+        }
+        const res = await fetch(origin + path, init)
+        const ms = Date.now() - started
+        const text = await res.text()
+        let rows: number | null = null
+        let error: string | null = null
+        try {
+          const parsed = JSON.parse(text) as unknown
+          if (Array.isArray(parsed)) rows = parsed.length
+          else if (parsed && typeof parsed === 'object') {
+            const obj = parsed as Record<string, unknown>
+            for (const key of ['communities', 'listings', 'results', 'items', 'data', 'deals', 'alerts', 'holdings', 'briefs', 'segments', 'comps']) {
+              if (Array.isArray(obj[key])) { rows = (obj[key] as unknown[]).length; break }
+            }
+            if (typeof obj.error === 'string') error = obj.error
+          }
+        } catch {
+          error = text.slice(0, 120) || null
+        }
+        const ok = res.status >= 200 && res.status < 300
+        // Three states, not two: `ok` (working), `degraded` (the route is fine but
+        // the data is not there), `failing` (a real problem). Collapsing the middle
+        // into either neighbour is how a missing API key starts to look like a bug,
+        // or a bug starts to look like missing data.
+        const degraded = !ok && (tolerate ?? []).includes(res.status)
+        return { page, path, note, ok, degraded, failing: !ok && !degraded, status: res.status, ms, rows, error: ok ? null : error }
+      } catch (e) {
+        return {
+          page, path, note, ok: false, degraded: false, failing: true, status: 0,
+          ms: Date.now() - started, rows: null,
+          error: e instanceof Error ? e.message : String(e),
+        }
+      }
+    }),
+  )
+
+  const failing = results.filter((r) => r.failing)
+  const degraded = results.filter((r) => r.degraded)
+  return c.json({
+    checkedAt: new Date().toISOString(),
+    summary: {
+      total: results.length,
+      ok: results.length - failing.length - degraded.length,
+      degraded: degraded.length,
+      failing: failing.length,
+    },
+    results,
+  })
+})
+
+/** Account list. Emails are personal data — this is the only route that returns them. */
+app.get('/sqftlab/admin/users', async (c) => {
+  const auth = await requireAdmin(c)
+  if (auth instanceof Response) return auth
+
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 100) || 100, 1), 500)
+  const rows = await prisma.user.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    select: {
+      id: true, email: true, name: true, image: true, role: true,
+      subscriptionTier: true, subscriptionStatus: true, isAdmin: true,
+      registeredVia: true, onboardingCompleted: true,
+      createdAt: true, lastLoginAt: true,
+      _count: { select: { portfolios: true, watchlists: true, alerts: true, sessions: true } },
+    },
+  })
+
+  return c.json({
+    total: await prisma.user.count(),
+    returned: rows.length,
+    users: rows.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      image: u.image,
+      role: u.role,
+      tier: u.subscriptionTier,
+      subscriptionStatus: u.subscriptionStatus,
+      isAdmin: u.isAdmin,
+      registeredVia: u.registeredVia,
+      onboardingCompleted: u.onboardingCompleted,
+      createdAt: u.createdAt,
+      lastLoginAt: u.lastLoginAt,
+      counts: {
+        portfolios: u._count.portfolios,
+        watchlists: u._count.watchlists,
+        alerts: u._count.alerts,
+        sessions: u._count.sessions,
+      },
+    })),
+  })
+})
+
+void ensureAdminAccount()
+
 // ─── Developer API keys (Task A: ApiKey model) ───────────────────────────────
 
 /**
@@ -5269,7 +5980,7 @@ function apiKeyDailyLimitFor(tier: string | undefined): number {
 app.get('/sqftlab/api-keys', async (c) => {
   const blocked = requireTier(c, 'pro', 'API keys')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'pro'
 
@@ -5347,7 +6058,7 @@ app.get('/sqftlab/api-keys', async (c) => {
 app.post('/sqftlab/api-keys', async (c) => {
   const blocked = requireTier(c, 'pro', 'API keys')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
@@ -5402,7 +6113,7 @@ app.post('/sqftlab/api-keys', async (c) => {
 app.delete('/sqftlab/api-keys/:id', async (c) => {
   const blocked = requireTier(c, 'pro', 'API keys')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
   const id = c.req.param('id')
   const existing = await prisma.apiKey.findFirst({ where: { id, userId } })
@@ -5536,7 +6247,7 @@ app.post('/sqftlab/white-label/config', async (c) => {
   const blocked = requireTier(c, 'institutional', 'White-Label API')
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const body = await readJsonBody(c)
@@ -5614,7 +6325,7 @@ app.get('/sqftlab/white-label/config', async (c) => {
   const blocked = requireTier(c, 'institutional', 'White-Label API')
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const config = await prisma.whiteLabelConfig.findUnique({ where: { userId } })
@@ -5638,7 +6349,7 @@ app.post('/sqftlab/white-label/verify-domain', async (c) => {
   const blocked = requireTier(c, 'institutional', 'White-Label API')
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const config = await prisma.whiteLabelConfig.findUnique({ where: { userId } })
@@ -6009,7 +6720,7 @@ function exportFiltersFrom(body: Record<string, unknown>): ExportFilters {
 async function handleExport(c: Context, mode: 'preview' | 'download') {
   const blocked = requireTier(c, 'pro', 'Data export')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const body = await readJsonBody(c)
@@ -6099,7 +6810,7 @@ app.post('/sqftlab/export/preview', (c) => handleExport(c, 'preview'))
 app.get('/sqftlab/export/history', async (c) => {
   const blocked = requireTier(c, 'pro', 'Data export')
   if (blocked) return blocked
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
   const events = await prisma.userEvent.findMany({
     where: { userId, eventType: 'export' },
@@ -6132,14 +6843,14 @@ function aiQuotaWindowStart(now = new Date()): Date {
   return start
 }
 
-function aiQuotaKeyFor(c: Context): string {
-  return getUserId(c) ?? readGuestId(c) ?? AI_QUOTA_ANON_KEY
+async function aiQuotaKeyFor(c: Context): Promise<string> {
+  return (await getUserId(c)) ?? readGuestId(c) ?? AI_QUOTA_ANON_KEY
 }
 
 app.post('/sqftlab/ai/chat', async (c) => {
-  const accountId = getUserId(c)
+  const accountId = await getUserId(c)
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
-  const quotaKey = aiQuotaKeyFor(c)
+  const quotaKey = await aiQuotaKeyFor(c)
   const limit = aiDailyLimitFor(tier)
   const unlimited = aiTierIsUnlimited(tier)
   const windowStart = aiQuotaWindowStart()
@@ -6233,7 +6944,7 @@ app.post('/sqftlab/ai/chat', async (c) => {
 // render "X remaining today" on open without having sent a message first.
 app.get('/sqftlab/ai/chat/history', async (c) => {
   const tier = (c.get('tier') as CallerTier | undefined) ?? 'guest'
-  const quotaKey = aiQuotaKeyFor(c)
+  const quotaKey = await aiQuotaKeyFor(c)
   const limit = aiDailyLimitFor(tier)
 
   const [rows, used] = await Promise.all([
@@ -6413,7 +7124,7 @@ function whatsappSubscriptionPayload(user: {
 }
 
 app.get('/sqftlab/whatsapp/subscribe', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   const user = await prisma.user.findUnique({
@@ -6430,7 +7141,7 @@ app.get('/sqftlab/whatsapp/subscribe', async (c) => {
 })
 
 app.post('/sqftlab/whatsapp/subscribe', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   // Identity before tier: a 403 to an anonymous caller implies a login alone unlocks an
@@ -6492,7 +7203,7 @@ app.post('/sqftlab/whatsapp/subscribe', async (c) => {
 })
 
 app.delete('/sqftlab/whatsapp/subscribe', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return c.json({ error: 'Unauthorized' }, 401)
 
   // Soft opt-out: the phone number is kept so a STOP can still be attributed, and so the
@@ -6653,7 +7364,7 @@ function stepsFromMask(mask: number): number[] {
 }
 
 app.get('/sqftlab/onboarding', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const user = await prisma.user.findUnique({
@@ -6670,7 +7381,7 @@ app.get('/sqftlab/onboarding', async (c) => {
 })
 
 app.post('/sqftlab/onboarding/step', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   let body: Record<string, unknown>
@@ -6711,7 +7422,7 @@ app.post('/sqftlab/onboarding/step', async (c) => {
 })
 
 app.post('/sqftlab/onboarding/complete', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   // Doubles as "dismiss": the only exit from the banner, so one flag governs both.
@@ -7060,7 +7771,7 @@ app.get('/sqftlab/deal-briefs/mine', async (c) => {
   const blocked = dealNetworkBlocked(c)
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const deals = await prisma.dealBrief.findMany({
@@ -7078,7 +7789,7 @@ app.post('/sqftlab/deal-briefs', async (c) => {
   const blocked = dealNetworkBlocked(c)
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const { body, error: bodyError } = await readDealJson(c)
@@ -7120,7 +7831,7 @@ app.get('/sqftlab/deal-briefs/:id', async (c) => {
   const blocked = dealNetworkBlocked(c)
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
 
   const deal = await prisma.dealBrief.findUnique({
     where: { id: c.req.param('id') },
@@ -7200,7 +7911,7 @@ app.get('/sqftlab/deal-briefs/:id', async (c) => {
 // ─── Update (owner only) ────────────────────────────────────────────────────
 
 app.patch('/sqftlab/deal-briefs/:id', async (c) => {
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const existing = await prisma.dealBrief.findFirst({
@@ -7267,7 +7978,7 @@ app.post('/sqftlab/deal-briefs/:id/express', async (c) => {
   const blocked = dealNetworkBlocked(c)
   if (blocked) return blocked
 
-  const userId = getUserId(c)
+  const userId = await getUserId(c)
   if (!userId) return upgradeRequired(c)
 
   const deal = await prisma.dealBrief.findUnique({

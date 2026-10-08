@@ -20,7 +20,31 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { prisma } from '../src/lib/db'
+
+// Sessions this run minted, deleted at the end. The accounts below are
+// long-lived only for the duration of the run, but a session row outlives them
+// unless it is removed or cascades.
+const mintedSessions: string[] = []
+
+/**
+ * A Cookie header carrying a REAL session for this account.
+ *
+ * These checks used to present `Authorization: Bearer <userId>`. The server no
+ * longer believes a caller-supplied id — that WAS the authentication bypass — so
+ * a request built that way is an anonymous guest and every tier assertion below
+ * would measure the wrong thing (a 401 from a guest instead of a 403 from a
+ * free user, for instance).
+ */
+async function cookieFor(userId: string): Promise<Record<string, string>> {
+  const sessionToken = randomBytes(32).toString('hex')
+  await prisma.session.create({
+    data: { sessionToken, userId, expires: new Date(Date.now() + 24 * 3600 * 1000) },
+  })
+  mintedSessions.push(sessionToken)
+  return { Cookie: `next-auth.session-token=${sessionToken}` }
+}
 
 const BASE = process.env.VERIFY_BASE ?? 'http://localhost:3101'
 
@@ -204,7 +228,7 @@ async function main() {
       for (const [method, path, requiredTier, feature] of gates) {
         const res = await fetch(`${BASE}${path}`, {
           method,
-          headers: { Authorization: `Bearer ${free.id}`, 'Content-Type': 'application/json' },
+          headers: { ...(await cookieFor(free.id)), 'Content-Type': 'application/json' },
           body: method === 'GET' ? undefined : '{}',
         })
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
@@ -238,14 +262,14 @@ async function main() {
       })
 
       const asOwner = await fetch(`${BASE}/api/sqftlab/alerts/${alert.id}/matches`, {
-        headers: { Authorization: `Bearer ${owner.id}` },
+        headers: await cookieFor(owner.id),
       })
       check('owner reads their own alert → 200', asOwner.status === 200, `got ${asOwner.status}`)
       const body = (await asOwner.json()) as Record<string, unknown>
       check('response carries the alert and its matches', !!body.alert && Array.isArray(body.matches))
 
       const asStranger = await fetch(`${BASE}/api/sqftlab/alerts/${alert.id}/matches`, {
-        headers: { Authorization: `Bearer ${stranger.id}` },
+        headers: await cookieFor(stranger.id),
       })
       check("another account → 404 (not 200, not 403)", asStranger.status === 404, `got ${asStranger.status}`)
       const leak = (await asStranger.json().catch(() => ({}))) as Record<string, unknown>
@@ -253,7 +277,7 @@ async function main() {
 
       // The pre-existing all-alerts route must remain an account-scoped list.
       const strangerAll = await fetch(`${BASE}/api/sqftlab/alerts/matches`, {
-        headers: { Authorization: `Bearer ${stranger.id}` },
+        headers: await cookieFor(stranger.id),
       })
       check('all-matches route still 200 for a signed-in user', strangerAll.status === 200, `got ${strangerAll.status}`)
     } finally {
@@ -320,6 +344,12 @@ try {
 } catch (e) {
   thrown = e
 } finally {
+  // Sessions minted for accounts that were already deleted have cascaded away;
+  // this catches the ones minted for accounts whose delete failed, so a run never
+  // leaves live sessions behind.
+  if (mintedSessions.length > 0) {
+    await prisma.session.deleteMany({ where: { sessionToken: { in: mintedSessions } } }).catch(() => {})
+  }
   await prisma.$disconnect()
 }
 

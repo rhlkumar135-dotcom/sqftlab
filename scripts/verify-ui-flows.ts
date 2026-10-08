@@ -18,6 +18,7 @@
  *   DATABASE_URL=file:$PWD/prisma/dev.db bun run scripts/verify-ui-flows.ts
  */
 import puppeteer, { type Browser, type Page as PPage } from 'puppeteer-core'
+import { randomBytes } from 'node:crypto'
 import { prisma } from '../src/lib/db'
 import { resolve } from 'node:path'
 
@@ -115,10 +116,32 @@ async function clickNav(page: PPage, label: string): Promise<boolean> {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// Sessions this run minted, deleted in the `finally` block. The demo account is
+// long-lived, so without this every run would leave a session row behind.
+const mintedSessions: string[] = []
+
+/**
+ * Create a real session row and return its opaque token.
+ *
+ * Identity is a session TOKEN now, not a user id. This helper used to set the
+ * cookie to `user.id`, which was exactly the authentication bypass that has been
+ * removed — the server no longer believes a caller-supplied id, so a page opened
+ * that way is an anonymous visitor and every writing flow fails.
+ */
+async function mintSession(userId: string): Promise<string> {
+  const sessionToken = randomBytes(32).toString('hex')
+  await prisma.session.create({
+    data: { sessionToken, userId, expires: new Date(Date.now() + 24 * 3600 * 1000) },
+  })
+  mintedSessions.push(sessionToken)
+  return sessionToken
+}
+
 async function open(browser: Browser, userId: string, width = 1440): Promise<PPage> {
   const page = await browser.newPage()
   await page.setViewport({ width, height: 900 })
-  await page.setCookie({ name: 'next-auth.session-token', value: userId, domain: 'localhost', path: '/' })
+  const sessionToken = await mintSession(userId)
+  await page.setCookie({ name: 'next-auth.session-token', value: sessionToken, domain: 'localhost', path: '/' })
   // Record what the page hands the browser to download, so "the button worked" means
   // bytes were produced rather than a request appeared.
   await page.evaluateOnNewDocument(() => {
@@ -509,7 +532,12 @@ async function main() {
       // to active) correctly hid it and the test reported a bug that did not exist.
       const seedRes = await fetch(`${BASE}/api/sqftlab/deal-briefs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${throwaway.id}` },
+        headers: {
+          'Content-Type': 'application/json',
+          // A real session for the throwaway account, not `Bearer <userId>` — the
+          // server no longer accepts a caller-supplied id as proof of identity.
+          Cookie: `next-auth.session-token=${await mintSession(throwaway.id)}`,
+        },
         body: JSON.stringify({
           title: 'Flow test — Marina floor',
           community: 'Dubai Marina',
@@ -662,6 +690,14 @@ async function main() {
     check('no uncaught page or console errors across all flows', errors.length === 0, errors.slice(0, 4).join(' | '))
   } finally {
     if (browser) await browser.close()
+    // Sessions minted for the long-lived demo account have no cascade to clean them
+    // up, so they are removed explicitly. The throwaway account's rows go with the
+    // `user.delete` below (Session cascades on the relation).
+    if (mintedSessions.length > 0) {
+      await prisma.session
+        .deleteMany({ where: { sessionToken: { in: mintedSessions } } })
+        .catch(() => {})
+    }
     // Clean up everything the run created, in FK-safe order.
     const u = await prisma.user.findUnique({ where: { email: 'verify-ui-flows@example.invalid' } })
     if (u) {
