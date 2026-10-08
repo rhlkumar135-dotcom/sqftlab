@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Info, Radio, Send, Sparkles, X } from 'lucide-react'
+import { Bot, Info, Radio, Send, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { authedFetch } from '@/lib/session'
 
 /**
@@ -47,7 +47,18 @@ interface ChatResponse {
   limit?: number
   unlimited?: boolean
   model?: string
+  /** Which engine wrote the reply: an LLM, or the database directly. */
+  mode?: 'model' | 'deterministic'
+  providerLabel?: string | null
   dataBacked?: boolean
+  /** True when every figure traced back to the evidence the server holds. */
+  verified?: boolean
+  unsupportedNumbers?: string[]
+  unsupportedPlaces?: string[]
+  /** True when the assistant declined to answer for want of data. */
+  refused?: boolean
+  /** Why a fallback happened, when one did. */
+  note?: string | null
   /** Which sources backed the answer: 'listings' and/or 'register'. */
   sources?: string[]
   /** When the listing inventory was collected. */
@@ -86,6 +97,8 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
   const [configured, setConfigured] = useState(true)
   const [dataBacked, setDataBacked] = useState<boolean | null>(null)
   const [grounded, setGrounded] = useState<{ asOf: string | null; focus: string | null } | null>(null)
+  const [engine, setEngine] = useState<{ mode: 'model' | 'deterministic'; label: string | null } | null>(null)
+  const [provenance, setProvenance] = useState<{ note: string | null; unsupported: string[] } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scroller = useRef<HTMLDivElement | null>(null)
@@ -166,6 +179,17 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
         setLimit(typeof body.limit === 'number' ? body.limit : null)
         setUnlimited(body.unlimited === true)
         setDataBacked(body.dataBacked === true)
+        setEngine({
+          mode: body.mode === 'deterministic' ? 'deterministic' : 'model',
+          label: typeof body.providerLabel === 'string' ? body.providerLabel : null,
+        })
+        setProvenance({
+          note: typeof body.note === 'string' && body.note !== '' ? body.note : null,
+          unsupported: [
+            ...(Array.isArray(body.unsupportedNumbers) ? body.unsupportedNumbers : []),
+            ...(Array.isArray(body.unsupportedPlaces) ? body.unsupportedPlaces : []),
+          ],
+        })
         if (body.dataBacked === true) {
           setGrounded({
             asOf: typeof body.asOf === 'string' ? body.asOf : null,
@@ -332,12 +356,43 @@ export default function AiChatWidget({ onNavigate }: { onNavigate?: (page: 'pric
             </div>
           )}
 
+          {/* Provenance. Which engine wrote the last answer, and whether its figures were
+              checked. A reader can tell a computed answer from a generated one, and an
+              unverifiable figure is surfaced rather than displayed as fact. */}
+          {engine !== null && (
+            <div
+              className="mx-4 mb-2 rounded-[10px] px-3 py-2 flex items-start gap-2 text-[11px] leading-relaxed shrink-0"
+              style={{
+                background: provenance !== null && provenance.unsupported.length > 0 ? 'var(--warn-bg)' : 'var(--g3)',
+                border: '1px solid var(--gb)',
+                color: 'var(--ink-4)',
+              }}
+            >
+              <ShieldCheck
+                size={13}
+                className="mt-[1px] shrink-0"
+                style={{ color: provenance !== null && provenance.unsupported.length > 0 ? 'var(--down)' : 'var(--up)' }}
+              />
+              <span>
+                {engine.mode === 'deterministic'
+                  ? `Computed from sqftLab's live database${engine.label === null ? '' : ` · ${engine.label}`}`
+                  : `Written by ${engine.label ?? 'a language model'}; every figure traced back to sqftLab data`}
+                {provenance?.note ? ` — ${provenance.note}` : ''}
+                {provenance !== null && provenance.unsupported.length > 0
+                  ? ` Unverified figures: ${provenance.unsupported.join(', ')}.`
+                  : ''}
+              </span>
+            </div>
+          )}
+
           {!configured && (
             <div
               className="mx-4 mb-2 rounded-[10px] px-3 py-2 text-[11px] leading-relaxed shrink-0"
               style={{ background: 'var(--warn-bg)', color: 'var(--ink-3)' }}
             >
-              The assistant is not configured on this deployment, so it cannot answer yet.
+              No language model is configured, so answers are computed directly from sqftLab's
+              live database — figures are exact, but the wording is not conversational. Set
+              GROQ_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY to enable a free model.
             </div>
           )}
 

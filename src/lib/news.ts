@@ -34,7 +34,8 @@ import {
   type NewsFeed,
   type Emirate,
 } from './news-sources'
-import { resolveAiCredential, AiUnavailableError, AI_MODEL } from './ai-chat'
+import { AiUnavailableError } from './ai-chat'
+import { callWithFallback, candidateProviders, selectProvider } from './llm-providers'
 import { cacheInvalidate } from './cache'
 
 /** The seven signal classes the brief defines. Kept as a const so the prompt, the
@@ -180,30 +181,38 @@ function normaliseSentiment(raw: unknown): Sentiment {
 
 // ─── model call ──────────────────────────────────────────────────────────────
 
+/**
+ * The analyser's model call, routed through the same free-first provider chain the
+ * assistant uses.
+ *
+ * The previous version reached only the platform gateway. That meant every news analysis —
+ * a batch job that runs on ingestion, so potentially hundreds of calls per cycle — went to
+ * a billed frontier model, and on a deployment without the gateway credential the analyser
+ * simply threw and left the feed unanalysed. The chain now prefers a free tier or a local
+ * runtime, and `aiConfigured` reports the provider so the panic warnings still work.
+ */
 async function callModel(prompt: string, maxOutputTokens: number): Promise<string> {
-  const credential = resolveAiCredential()
-  if (!credential) {
+  const primary = selectProvider()
+  if (primary === null) {
     throw new AiUnavailableError(
-      'No AI credential configured (AI_PROXY_TOKENS or SHOGO_API_KEY). News is ingested but not analysed.',
+      'No model provider configured. Set GROQ_API_KEY, OPENROUTER_API_KEY or GEMINI_API_KEY ' +
+        '(all free tiers), point AI_BASE_URL at a local runtime, or use AI_PROVIDER=offline to ' +
+        'skip analysis. News is ingested but not analysed.',
     )
   }
-  let createShogoLlmProvider: typeof import('@shogo-ai/sdk').createShogoLlmProvider
-  let generateText: typeof import('ai').generateText
-  try {
-    ;({ createShogoLlmProvider } = await import('@shogo-ai/sdk'))
-    ;({ generateText } = await import('ai'))
-  } catch (err) {
-    throw new AiUnavailableError(`AI SDK not installed: ${err instanceof Error ? err.message : String(err)}`)
-  }
-  const provider = createShogoLlmProvider({ apiKey: credential.token })
-  const result = await generateText({ model: provider(AI_MODEL), prompt, maxOutputTokens })
+  const providers = [primary, ...candidateProviders().filter((p) => p.id !== primary.id)]
+  const result = await callWithFallback(providers, [{ role: 'user', content: prompt }], {
+    maxTokens: maxOutputTokens,
+  })
   return result.text
 }
 
-/** True when the AI layer can run at all. The routes use this to answer honestly
- *  instead of showing an empty feed as though there were no news. */
+/**
+ * True when the AI layer can run at all. The routes use this to answer honestly
+ * instead of showing an empty feed as though there were no news.
+ */
 export function aiConfigured(): boolean {
-  return resolveAiCredential() !== null
+  return selectProvider() !== null
 }
 
 // ─── ingestion ───────────────────────────────────────────────────────────────

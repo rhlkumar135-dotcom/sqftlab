@@ -61,11 +61,11 @@ import {
   type ExportFilters, type ExportFormat,
 } from './src/lib/export-data'
 import {
-  AI_HISTORY_PAGE, AI_MAX_MESSAGE_CHARS, AI_MODEL, MARKET_CONTEXT_DAYS,
+  AI_HISTORY_PAGE, AI_MAX_MESSAGE_CHARS, MARKET_CONTEXT_DAYS,
   aiDailyLimitFor, aiTierIsUnlimited,
-  buildLiveContext, buildSystemPrompt, generateAssistantReply,
-  normalizeHistory, resolveAiCredential,
+  answerMarketQuestion, normalizeHistory,
 } from './src/lib/ai-chat'
+import { candidateProviders, selectProvider } from './src/lib/llm-providers'
 
 // Hono needs the context variables declared for `c.set`/`c.get` to type-check.
 // `guestId` is the anonymous-visitor cookie value; `tier` is resolved once per
@@ -7135,46 +7135,15 @@ app.post('/sqftlab/ai/chat', async (c) => {
   // Rebuilt from validated turns rather than trusted — see normalizeHistory.
   const history = normalizeHistory(body.history)
 
-  const credential = resolveAiCredential()
-  if (!credential) {
-    return c.json(
-      {
-        error: 'The AI assistant is not configured on this deployment.',
-        code: 'ai_unavailable',
-        configured: false,
-        detail: 'No model credential found. Expected AI_PROXY_TOKENS (pod) or SHOGO_API_KEY.',
-      },
-      503,
-    )
-  }
-
-  // The question decides the context: when it names a district, that district's live block
-  // is what the model answers from, rather than the UAE-wide aggregate.
-  const ctx = await buildLiveContext(message)
-  const dataBacked = ctx.listingsAvailable || ctx.register.available
-
-  let reply: string
-  let tokensUsed: number
-  try {
-    ;({ reply, tokensUsed } = await generateAssistantReply({
-      credential,
-      system: buildSystemPrompt(ctx),
-      history,
-      message,
-    }))
-  } catch (err) {
-    // Quota is deliberately NOT consumed. A call that produced no answer cost nothing,
-    // and charging for it would lock a caller out of a feature that never replied.
-    return c.json(
-      {
-        error: 'The AI assistant could not answer just now.',
-        code: 'ai_error',
-        configured: true,
-        detail: (err instanceof Error ? err.message : String(err)).slice(0, 300),
-      },
-      502,
-    )
-  }
+  // The assistant answers under a grounding guarantee — see answerMarketQuestion, which
+  // refuses when the reader names a district we hold nothing for and computes the answer
+  // from the database when no model is configured. There is deliberately no "not
+  // configured" branch: a 503 told the reader nothing, and the figures it would have
+  // quoted are ones we already hold.
+  const answer = await answerMarketQuestion({ message, history })
+  const reply = answer.reply
+  const tokensUsed = answer.tokensUsed
+  const dataBacked = answer.dataBacked
 
   // Both rows written together and only once a reply exists, so the counter can never
   // exceed the number of answers actually delivered. The brief writes fire-and-forget
@@ -7189,11 +7158,15 @@ app.post('/sqftlab/ai/chat', async (c) => {
 
   await trackEvent(c, 'ai_chat', {
     tier,
-    model: AI_MODEL,
+    mode: answer.mode,
+    provider: answer.providerId,
+    model: answer.model,
     tokensUsed,
     dataBacked,
-    sources: ctx.listingsAvailable ? (ctx.register.available ? 'listings+register' : 'listings') : 'register',
-    focus: ctx.focus?.name ?? null,
+    verified: answer.verified,
+    refused: answer.refused,
+    sources: answer.sources.join('+') === '' ? 'none' : answer.sources.join('+'),
+    focus: answer.focus,
   })
 
   return c.json({
@@ -7201,18 +7174,33 @@ app.post('/sqftlab/ai/chat', async (c) => {
     remaining: Math.max(0, limit - used - 1),
     limit,
     unlimited,
-    model: AI_MODEL,
+    /** Which engine wrote this: an LLM, or the database directly. */
+    mode: answer.mode,
+    /** Which provider answered, and its human label. */
+    provider: answer.providerId,
+    providerLabel: answer.providerLabel,
+    model: answer.model,
     /** True when live data stood behind this answer, so the UI can say it is grounded. */
     dataBacked,
+    /**
+     * True when every figure in the reply traced back to the evidence block. A model answer
+     * that could not be verified is replaced rather than flagged, so `verified: false` only
+     * appears when strict grounding has been switched off.
+     */
+    verified: answer.verified,
+    /** Figures the validator could not trace. Normally empty — see ai-grounding.ts. */
+    unsupportedNumbers: answer.unsupportedNumbers,
+    unsupportedPlaces: answer.unsupportedPlaces,
+    /** True when the assistant declined to answer for want of data. */
+    refused: answer.refused,
+    /** Why a fallback happened, when one did. Rendered as a caveat, never swallowed. */
+    note: answer.note,
     /** Which sources backed the answer. */
-    sources: [
-      ...(ctx.listingsAvailable ? ['listings'] : []),
-      ...(ctx.register.available ? ['register'] : []),
-    ],
+    sources: answer.sources,
     /** When the listing inventory was collected, so the UI can state its age. */
-    asOf: ctx.asOf,
+    asOf: answer.asOf,
     /** The district the question named, when one was recognised. */
-    focus: ctx.focus?.name ?? null,
+    focus: answer.focus,
     resetAt,
   })
 })
@@ -7236,13 +7224,24 @@ app.get('/sqftlab/ai/chat/history', async (c) => {
     }),
   ])
 
+  // `configured` now means "a model is reachable", and the assistant answers either way —
+  // with no provider it computes the reply from the database. `providers` is reported so
+  // "why is it answering without a model" is answerable from the API rather than by
+  // reading the environment.
+  const active = selectProvider()
   return c.json({
     messages: rows.reverse(),
     used,
     remaining: Math.max(0, limit - used),
     limit,
     unlimited: aiTierIsUnlimited(tier),
-    configured: resolveAiCredential() !== null,
+    configured: active !== null,
+    provider: active?.id ?? null,
+    providerLabel: active?.label ?? null,
+    model: active?.model ?? null,
+    availableProviders: candidateProviders().map((p) => ({ id: p.id, label: p.label, free: p.free })),
+    /** True when the assistant answers from the database without a model. */
+    deterministicFallback: true,
   })
 })
 

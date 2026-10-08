@@ -1,5 +1,22 @@
 import { prisma } from './db'
 import { SALE_TXN_TYPES } from './deals'
+import {
+  buildEvidence,
+  renderEvidenceBlock,
+  validateAnswer,
+  deterministicAnswer,
+  type EvidenceItem,
+  type GroundingReport,
+  type DeterministicAnswer,
+} from './ai-grounding'
+import {
+  callProvider,
+  callWithFallback,
+  candidateProviders,
+  selectProvider,
+  type LlmMessage,
+  type LlmProvider,
+} from './llm-providers'
 
 /**
  * Day 13 — AI market assistant: credential resolution, the per-tier daily quota, and
@@ -190,6 +207,16 @@ export interface AssistantContext {
   topDistricts: DistrictStat[]
   /** The district the question named, if any — the model answers from this block. */
   focus: DistrictStat | null
+  /**
+   * Every community name in the registry.
+   *
+   * Two jobs beyond display. The answer validator uses it to catch the model naming a
+   * district the evidence did not cover — the most convincing kind of wrong answer,
+   * because the surrounding prose is correct. And the deterministic engine uses it to
+   * tell "the reader named a district we hold nothing for" from "the reader asked a
+   * general question", which decides whether to refuse or to answer.
+   */
+  knownPlaces: string[]
   /** Registered government sales, when the register holds any. */
   register: { available: boolean; days: number; transactions: number; avgPsfAed: number | null }
 }
@@ -437,6 +464,7 @@ export async function buildLiveContext(message = ''): Promise<AssistantContext> 
     overallRentAnnualAed: positiveOrNull(rentAgg._avg.priceAed),
     topDistricts,
     focus,
+    knownPlaces: communities.map((c) => c.nameEn),
     register: {
       available: registerCount > 0,
       days: MARKET_CONTEXT_DAYS,
@@ -457,7 +485,10 @@ export async function buildLiveContext(message = ''): Promise<AssistantContext> 
  * product that reports the first as the second is wrong in the way that matters most to an
  * investor. The register block is kept separate for the same reason.
  */
-export function buildSystemPrompt(ctx: AssistantContext): string {
+export function buildSystemPrompt(
+  ctx: AssistantContext,
+  evidence: EvidenceItem[] = buildEvidence(ctx),
+): string {
   const rules = [
     "You are sqftLab's AI market assistant for UAE real estate — Dubai and Abu Dhabi.",
     'You help investors, brokers and developers understand the property market.',
@@ -469,6 +500,17 @@ export function buildSystemPrompt(ctx: AssistantContext): string {
     '  the data below, say you do not have it and suggest what the reader could check instead.',
     '- When you quote a figure, say which kind it is: an asking price from a current listing,',
     '  or a registered sale. Never present an asking price as a completed transaction.',
+    '',
+    'GROUNDING CONTRACT — your answer is checked against the EVIDENCE block below after you',
+    'write it, and figures that do not come from it are rejected:',
+    '- Quote a figure ONLY if it appears in the EVIDENCE block. You may round it to fewer',
+    '  significant figures, and you may not change it in any other way.',
+    '- Do NOT compute new figures. No sums, differences, growth rates, per-year conversions',
+    '  or percentage changes, even from numbers that are present. If the reader asks for a',
+    '  figure that is not listed, say it is not available and say what is.',
+    '- Do NOT name a district that is not in the EVIDENCE block. If the reader asks about a',
+    '  district that is absent, say sqftLab has no coverage for it — do not describe it.',
+    '- Every figure you state must be traceable to the block. When in doubt, omit it.',
   ]
 
   if (!ctx.listingsAvailable && !ctx.register.available) {
@@ -562,6 +604,11 @@ export function buildSystemPrompt(ctx: AssistantContext): string {
     )
   }
 
+  // The evidence block is the machine-checked part of the prompt. The validator compares
+  // the finished answer against these exact values, so a figure that is not listed here is
+  // reported as unsupported rather than reaching the reader as fact.
+  lines.push('', 'EVIDENCE — the only figures and districts you may use:', renderEvidenceBlock(evidence))
+
   return lines.join('\n')
 }
 
@@ -573,37 +620,335 @@ export class AiUnavailableError extends Error {
 }
 
 /**
- * Call the model.
+ * Call one provider.
  *
- * Both imports are dynamic so that a deployment without `ai` installed still boots and
- * serves every other route — this module is imported by the route table, and a static
- * import of a missing optional peer would take the whole API down.
+ * The AI SDK is no longer on the critical path — the provider chain speaks plain HTTP — so
+ * a deployment without `ai` installed still answers. `AiUnavailableError` is retained
+ * because news.ts imports it.
  */
 export async function generateAssistantReply(opts: {
-  credential: AiCredential
+  provider: LlmProvider
   system: string
   history: AiTurn[]
   message: string
-}): Promise<{ reply: string; tokensUsed: number }> {
-  let createShogoLlmProvider: typeof import('@shogo-ai/sdk').createShogoLlmProvider
-  let generateText: typeof import('ai').generateText
-  try {
-    ;({ createShogoLlmProvider } = await import('@shogo-ai/sdk'))
-    ;({ generateText } = await import('ai'))
-  } catch (err) {
-    throw new AiUnavailableError(
-      `AI SDK not installed: ${err instanceof Error ? err.message : String(err)}`,
+}): Promise<{ reply: string; tokensUsed: number; model: string; providerLabel: string }> {
+  const messages: LlmMessage[] = [
+    { role: 'system', content: opts.system },
+    ...opts.history.map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content })),
+    { role: 'user', content: opts.message },
+  ]
+  const result = await callProvider(opts.provider, messages, { maxTokens: AI_MAX_OUTPUT_TOKENS })
+  return {
+    reply: result.text,
+    tokensUsed: result.tokensUsed,
+    model: result.model,
+    providerLabel: result.providerLabel,
+  }
+}
+
+// ─── Untrusted-place detection ─────────────────────────────────────────────────
+
+/**
+ * Words that never make a capitalised phrase a place name.
+ *
+ * Question words, field vocabulary and the emirate names themselves. The emirates are
+ * included because "Dubai" and "Abu Dhabi" are scopes rather than districts — a question
+ * about them is answered from the aggregate, so refusing it would be wrong.
+ */
+const NON_PLACE_WORDS = new Set([
+  'what', 'whats', 'which', 'where', 'when', 'how', 'why', 'who', 'whose',
+  'is', 'are', 'was', 'were', 'be', 'the', 'a', 'an', 'and', 'or', 'but', 'for', 'from',
+  'in', 'on', 'at', 'to', 'of', 'with', 'do', 'does', 'did', 'can', 'could', 'should',
+  'would', 'will', 'tell', 'show', 'give', 'me', 'my', 'you', 'your', 'i', 'we', 'us',
+  'please', 'compare', 'vs', 'versus', 'best', 'worst', 'top', 'average', 'mean', 'median',
+  'total', 'price', 'prices', 'rent', 'rents', 'yield', 'yields', 'market', 'markets',
+  'district', 'districts', 'area', 'areas', 'community', 'communities', 'listing',
+  'listings', 'property', 'properties', 'sqft', 'sqm', 'psf', 'aed', 'usd', 'data',
+  'report', 'trend', 'trends', 'investment', 'investor', 'investors', 'return', 'returns',
+  'abu', 'dhabi', 'dubai', 'uae', 'emirates', 'united', 'arab', 'gulf', 'gcc', 'middle',
+  'east', 'about', 'summary', 'summarise', 'summarize', 'overview', 'any', 'there', 'this',
+  'that', 'these', 'those', 'new', 'old', 'sale', 'sales', 'sold', 'buy', 'buyer', 'buyers',
+  'island', 'city', 'park', 'tower', 'towers', 'residence', 'residences',
+])
+
+/**
+ * Find a place the reader named that we hold nothing for.
+ *
+ * This is the highest-value refusal in the module, because it is the case a model gets
+ * wrong most convincingly: the reader names a real district, our context has no block for
+ * it, and the model — which does know the place — answers from training data in fluent
+ * prose. Refusing before the model is called removes the opportunity entirely.
+ *
+ * Deliberately narrow. Only 2-3 word capitalised phrases qualify, since a single
+ * capitalised word is as likely to be "What" or "Which" as a place; and any phrase
+ * containing a district we do cover is skipped, so "Dubai Marina Walk" is not treated as
+ * an unknown place. The cost of a miss here is a model answer that the numeric and place
+ * validators still check; the cost of a false positive would be refusing a question we can
+ * answer, which is why the check is conservative.
+ */
+export function detectUncoveredPlace(message: string, knownPlaces: string[]): string | null {
+  const known = knownPlaces.map((p) => p.toLowerCase())
+  const phrases = message.match(/\b[A-Z][a-zA-Z'’-]*(?:\s+[A-Z][a-zA-Z'’-]*){1,2}\b/g) ?? []
+  for (const phrase of phrases) {
+    const normalised = phrase.trim().toLowerCase()
+    if (normalised === '') continue
+    if (known.includes(normalised)) continue
+    const words = normalised.split(/\s+/)
+    if (words.some((w) => NON_PLACE_WORDS.has(w))) continue
+
+    const covered = known.find((k) => k.length >= 4 && normalised.includes(k))
+    if (covered !== undefined) {
+      // A covered district followed by a sub-district qualifier is a different place.
+      // "Al Barsha South" is not "Al Barsha", and our registry holds the parent only — so
+      // answering with the parent's numbers would be a confident answer about the wrong
+      // address. This mirrors `findFocus`, which drops exactly this match, and keeps the two
+      // layers agreeing instead of one covering for the other.
+      const after = normalised.slice(normalised.indexOf(covered) + covered.length).trim().split(/\s+/)[0] ?? ''
+      if (!SUBDISTRICT_QUALIFIERS.has(after)) continue
+    }
+    return phrase.trim()
+  }
+  return null
+}
+
+// ─── Orchestration ─────────────────────────────────────────────────────────────
+
+export interface AssistantReply {
+  reply: string
+  /** `model` when an LLM produced the text; `deterministic` when the database did. */
+  mode: 'model' | 'deterministic'
+  providerId: string | null
+  providerLabel: string | null
+  model: string | null
+  tokensUsed: number
+  /** True when every figure in the reply traced back to the evidence block. */
+  verified: boolean
+  unsupportedNumbers: string[]
+  unsupportedPlaces: string[]
+  /** Evidence ids the reply drew on — real server-side sources, not model self-report. */
+  evidenceIds: string[]
+  /** True when the assistant declined to answer for want of data. */
+  refused: boolean
+  dataBacked: boolean
+  focus: string | null
+  asOf: string | null
+  /** Why a fallback happened, when one did. Shown as a caveat, never hidden. */
+  note: string | null
+  /** Which live sources stood behind the answer: 'listings' and/or 'register'. */
+  sources: string[]
+}
+
+/** Which live sources are in play, derived from what the context actually holds. */
+function sourcesFor(ctx: AssistantContext): string[] {
+  return [
+    ...(ctx.listingsAvailable ? ['listings'] : []),
+    ...(ctx.register.available ? ['register'] : []),
+  ]
+}
+
+function repairInstruction(report: GroundingReport): string {
+  const parts = [
+    'That answer was rejected: it stated figures that do not appear in the EVIDENCE block.',
+  ]
+  if (report.unsupportedNumbers.length > 0) {
+    parts.push(`Remove or correct these figures: ${report.unsupportedNumbers.join(', ')}.`)
+  }
+  if (report.unsupportedPlaces.length > 0) {
+    parts.push(`Remove these districts, which are not in the evidence: ${report.unsupportedPlaces.join(', ')}.`)
+  }
+  parts.push(
+    'Rewrite it using only values that appear in the EVIDENCE block. Do not compute new figures. If a requested figure is not there, say it is not available.',
+  )
+  return parts.join(' ')
+}
+
+function fromDeterministic(
+  det: DeterministicAnswer,
+  ctx: AssistantContext,
+  note: string | null,
+): AssistantReply {
+  return {
+    reply: det.reply,
+    mode: 'deterministic',
+    providerId: null,
+    providerLabel: 'Computed from the live database',
+    model: null,
+    tokensUsed: 0,
+    // Nothing is unverified in this path: every figure was formatted by the same code that
+    // read it, so there is no step at which one could be invented.
+    verified: true,
+    unsupportedNumbers: [],
+    unsupportedPlaces: [],
+    evidenceIds: det.evidenceIds,
+    refused: det.refused,
+    dataBacked: ctx.listingsAvailable || ctx.register.available,
+    focus: ctx.focus?.name ?? null,
+    asOf: ctx.asOf,
+    note,
+    sources: sourcesFor(ctx),
+  }
+}
+
+/**
+ * Answer a market question under a grounding guarantee.
+ *
+ * The order of the gates is the design. Cheap, certain checks run first and the model runs
+ * last, so the ways a confident wrong answer can be produced are closed before anything is
+ * asked to generate text:
+ *
+ *   1. The reader named a district we hold nothing for  → refuse, no model call.
+ *   2. There is no data at all to ground on             → refuse, no model call.
+ *   3. No provider is configured                        → answer from the database.
+ *   4. A provider failed                                → answer from the database.
+ *   5. The model's answer quoted figures we do not have → repair once, then replace it
+ *                                                         with the computed answer.
+ *
+ * Only step 5 involves trust, and it is checked rather than assumed.
+ */
+export async function answerMarketQuestion(opts: {
+  message: string
+  history?: AiTurn[]
+  env?: NodeJS.ProcessEnv
+}): Promise<AssistantReply> {
+  const env = opts.env ?? process.env
+  const message = opts.message
+
+  const ctx = await buildLiveContext(message)
+  const evidence = buildEvidence(ctx)
+  const dataBacked = ctx.listingsAvailable || ctx.register.available
+
+  if (dataBacked && ctx.focus === null) {
+    const uncovered = detectUncoveredPlace(message, ctx.knownPlaces)
+    if (uncovered !== null) {
+      return {
+        reply:
+          `I have no listing coverage for **${uncovered}**, so I cannot give you prices for it — and I will not estimate them. ` +
+          `sqftLab currently holds asking prices for ${ctx.districtsCovered} districts across Dubai and Abu Dhabi. ` +
+          `Ask me about one of those, or ask which districts are covered.`,
+        mode: 'deterministic',
+        providerId: null,
+        providerLabel: 'Computed from the live database',
+        model: null,
+        tokensUsed: 0,
+        verified: true,
+        unsupportedNumbers: [],
+        unsupportedPlaces: [],
+        evidenceIds: ['listings.districts'],
+        refused: true,
+        dataBacked,
+        focus: null,
+        asOf: ctx.asOf,
+        note: null,
+        sources: sourcesFor(ctx),
+      }
+    }
+  }
+
+  if (!dataBacked) {
+    return fromDeterministic(deterministicAnswer(message, ctx, ctx.knownPlaces), ctx, null)
+  }
+
+  const primary = selectProvider(env)
+  if (primary === null) {
+    return fromDeterministic(
+      deterministicAnswer(message, ctx, ctx.knownPlaces),
+      ctx,
+      'No model is configured (AI_PROVIDER=offline or no provider key), so this answer was computed directly from the live database.',
     )
   }
 
-  const provider = createShogoLlmProvider({ apiKey: opts.credential.token })
+  // Free tiers first, then any other configured provider — so a rate-limited free tier
+  // degrades to the next provider rather than to an error.
+  const rest = candidateProviders(env).filter((p) => p.id !== primary.id)
+  const providers = [primary, ...rest]
 
-  const result = await generateText({
-    model: provider(AI_MODEL),
-    system: opts.system,
-    messages: [...opts.history, { role: 'user' as const, content: opts.message }],
-    maxOutputTokens: AI_MAX_OUTPUT_TOKENS,
-  })
+  const system = buildSystemPrompt(ctx, evidence)
+  const base: LlmMessage[] = [
+    { role: 'system', content: system },
+    ...(opts.history ?? []).map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content })),
+    { role: 'user', content: message },
+  ]
 
-  return { reply: result.text, tokensUsed: result.usage.totalTokens ?? 0 }
+  const strict = (env.AI_STRICT_GROUNDING ?? 'true').toLowerCase() !== 'false'
+
+  try {
+    const first = await callWithFallback(providers, base, { maxTokens: AI_MAX_OUTPUT_TOKENS })
+    const firstReport = validateAnswer(first.text, evidence, ctx.knownPlaces)
+
+    if (firstReport.verified || !strict) {
+      return {
+        reply: first.text,
+        mode: 'model',
+        providerId: first.providerId,
+        providerLabel: first.providerLabel,
+        model: first.model,
+        tokensUsed: first.tokensUsed,
+        verified: firstReport.verified,
+        unsupportedNumbers: firstReport.unsupportedNumbers,
+        unsupportedPlaces: firstReport.unsupportedPlaces,
+        evidenceIds: [],
+        refused: false,
+        dataBacked,
+        focus: ctx.focus?.name ?? null,
+        asOf: ctx.asOf,
+        note: null,
+        sources: sourcesFor(ctx),
+      }
+    }
+
+    // One repair attempt, told exactly what failed. Models correct a named figure far more
+    // reliably than they obey a general instruction not to invent.
+    const repaired = await callWithFallback(
+      providers,
+      [
+        ...base,
+        { role: 'assistant', content: first.text },
+        { role: 'user', content: repairInstruction(firstReport) },
+      ],
+      { maxTokens: AI_MAX_OUTPUT_TOKENS },
+    )
+    const repairedReport = validateAnswer(repaired.text, evidence, ctx.knownPlaces)
+
+    if (repairedReport.verified) {
+      return {
+        reply: repaired.text,
+        mode: 'model',
+        providerId: repaired.providerId,
+        providerLabel: repaired.providerLabel,
+        model: repaired.model,
+        tokensUsed: first.tokensUsed + repaired.tokensUsed,
+        verified: true,
+        unsupportedNumbers: [],
+        unsupportedPlaces: [],
+        evidenceIds: [],
+        refused: false,
+        dataBacked,
+        focus: ctx.focus?.name ?? null,
+        asOf: ctx.asOf,
+        note: 'The first draft quoted figures not held in the data; it was corrected against the evidence before being shown.',
+        sources: sourcesFor(ctx),
+      }
+    }
+
+    // Two ungrounded drafts. Serve figures computed from the database instead of text that
+    // cannot be traced — a slightly plainer answer is a better outcome than a plausible
+    // invented number.
+    const replaced = [
+      ...repairedReport.unsupportedNumbers,
+      ...repairedReport.unsupportedPlaces,
+    ].slice(0, 6)
+    return fromDeterministic(
+      deterministicAnswer(message, ctx, ctx.knownPlaces),
+      ctx,
+      `The model's draft quoted figures sqftLab does not hold (${replaced.join(', ')}), so it was discarded and this answer was computed directly from the live database.`,
+    )
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    return fromDeterministic(
+      deterministicAnswer(message, ctx, ctx.knownPlaces),
+      ctx,
+      `The model could not be reached (${detail.slice(0, 160)}), so this answer was computed directly from the live database.`,
+    )
+  }
 }
+
