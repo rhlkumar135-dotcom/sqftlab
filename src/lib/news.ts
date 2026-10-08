@@ -676,3 +676,72 @@ export async function runNewsIngest(processBatch = 30): Promise<NewsCronResult> 
     durationMs: Date.now() - startedAt,
   }
 }
+
+// ─── corpus maintenance ──────────────────────────────────────────────────────
+
+export interface ReclassifyResult {
+  scanned: number
+  retagged: number
+  purged: number
+  before: Record<string, number>
+  after: Record<string, number>
+  purgeSamples: string[]
+}
+
+/**
+ * Re-apply the classifier and the relevance filter to everything already stored.
+ *
+ * Needed because both are applied *at ingest*: a fix to either never reaches rows already
+ * in the table, since the ingest only sees what the feeds currently return and skips
+ * hashes it has seen before. Without this, an improved rule only affects articles published
+ * after deploy, and the existing corpus keeps serving the misclassification until it ages
+ * out of the 30-day window.
+ *
+ * Two operations, and the second is a deletion, so it is stated plainly:
+ *
+ *  - RETAG: recompute `emirate` from the article's own text.
+ *  - PURGE: delete items that no longer satisfy `isRelevant` for the feed that produced
+ *    them. These are articles that should never have been stored — car-rental listings on
+ *    a rental feed, an AI-funding story on a property feed. Items whose `source` is not a
+ *    known feed are left alone rather than judged against the wrong rules.
+ *
+ * Bounded by `limit` so it can be driven from a request without holding a connection for
+ * the whole table.
+ */
+export async function reclassifyNewsCorpus(limit = 500): Promise<ReclassifyResult> {
+  const items = await prisma.newsItem.findMany({
+    take: limit,
+    orderBy: { publishedAt: 'desc' },
+    select: { id: true, headline: true, rawExcerpt: true, source: true, emirate: true },
+  })
+
+  const before: Record<string, number> = {}
+  const after: Record<string, number> = {}
+  const purgeSamples: string[] = []
+  let retagged = 0
+  let purged = 0
+
+  const feedById = new Map(NEWS_FEEDS.map((f) => [f.id, f]))
+
+  for (const it of items) {
+    before[it.emirate] = (before[it.emirate] ?? 0) + 1
+
+    const feed = feedById.get(it.source)
+    if (feed && !isRelevant(feed, it.headline, it.rawExcerpt)) {
+      await prisma.newsItem.delete({ where: { id: it.id } })
+      purged++
+      if (purgeSamples.length < 15) purgeSamples.push(it.headline.slice(0, 88))
+      continue
+    }
+
+    const next = classifyEmirate(it.headline, it.rawExcerpt)
+    after[next] = (after[next] ?? 0) + 1
+    if (next !== it.emirate) {
+      await prisma.newsItem.update({ where: { id: it.id }, data: { emirate: next } })
+      retagged++
+    }
+  }
+
+  cacheInvalidate('news:')
+  return { scanned: items.length, retagged, purged, before, after, purgeSamples }
+}

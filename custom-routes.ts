@@ -22,7 +22,7 @@ import { computeInvestmentScore, computeAllInvestmentScores, latestInvestmentSco
 import { cacheRead, cacheWrite, cacheInvalidate, CACHE_TTL } from './src/lib/cache'
 import {
   runNewsIngest, generateDailyDigest, aiConfigured, SIGNAL_TYPES,
-  decodeKeyFigures, decodeTopSignals, decodeStringArray,
+  decodeKeyFigures, decodeTopSignals, decodeStringArray, reclassifyNewsCorpus,
 } from './src/lib/news'
 import { NEWS_FEEDS, EMIRATES } from './src/lib/news-sources'
 import { buildNewsAnalytics } from './src/lib/news-analytics'
@@ -895,6 +895,37 @@ app.get('/sqftlab/communities/:slug/trend', async (c) => {
         }
       : {}),
   })
+})
+
+// POST /sqftlab/news/reclassify — re-apply the emirate classifier and the relevance
+// filter to the stored corpus. Cron-secret gated, same as the other maintenance routes.
+//
+// This exists because both rules are applied at ingest, so a fix to either only affects
+// articles published after the deploy: the ingest skips content hashes it has already
+// stored. Without this route the existing 30-day corpus keeps serving the old
+// classification until it ages out, on every environment.
+//
+// It deletes rows — specifically, items that no longer satisfy `isRelevant` for the feed
+// that produced them. That is the point (they are off-topic articles that should never
+// have been stored), but it is a deletion, so the route reports exactly what it removed.
+app.post('/sqftlab/news/reclassify', async (c) => {
+  const expected = process.env.CRON_SECRET
+  const provided =
+    c.req.query('secret') ??
+    c.req.header('x-cron-secret') ??
+    (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '')
+  const authorised =
+    (!!expected && provided === expected) ||
+    provided === LEGACY_CRON_SECRET
+
+  if (!authorised) {
+    return c.json({ error: 'Not authorised', hint: 'Pass ?secret= or x-cron-secret' }, 401)
+  }
+
+  const limitRaw = Number.parseInt(c.req.query('limit') ?? '1000', 10)
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 5000) : 1000
+  const result = await reclassifyNewsCorpus(limit)
+  return c.json({ ok: true, ...result })
 })
 
 // ─── Market History ──────────────────────────────────────────────────────────

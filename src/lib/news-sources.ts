@@ -202,10 +202,15 @@ const EMIRATE_SIGNALS: Record<'dubai' | 'abu_dhabi', string[]> = {
   dubai: [
     'dubai', 'jvc', 'jlt', 'jumeirah village', 'dubai marina', 'downtown dubai',
     'business bay', 'palm jumeirah', 'difc', 'dubai hills', 'creek harbour',
-    'meydan', 'damac', 'emaar', 'dld', 'rera', 'expo city', 'dubai south',
+    'meydan', 'damac', 'emaar', 'expo city', 'dubai south',
     'arabian ranches', 'town square', 'discovery gardens', 'sobha', 'dubailand',
     'world islands', 'the palm', 'deira', 'bur dubai', 'dubai creek', 'maritime city',
   ],
+  // 'rera' and 'dld' are deliberately NOT Dubai signals despite being Dubai regulators.
+  // "RERA" is also India's real-estate regulator, and a browser pass caught Indian
+  // regulatory stories — "UP RERA approves 12 realty projects", "Telangana RERA fines a
+  // builder" — filed under Dubai on the strength of that acronym alone. A real Dubai story
+  // names Dubai, and these still match through it.
 }
 
 /**
@@ -244,6 +249,11 @@ const FOREIGN_MARKETS = [
   'houston', 'texas', 'california', 'los angeles', 'san francisco', 'washington',
   'atlanta', 'canada', 'toronto', 'vancouver', 'montreal', 'brazil', 'mexico',
   'india', 'mumbai', 'delhi', 'pakistan', 'karachi', 'bangladesh', 'sri lanka', 'nepal',
+  // Indian states and cities: the corpus carried Indian RERA rulings ("UP RERA", "Telangana
+  // RERA", "MahaRERA", NCLT Mumbai) that read as UAE regulatory news without them.
+  'mohali', 'uttar pradesh', 'telangana', 'hyderabad', 'karnataka', 'bengaluru',
+  'bangalore', 'maharashtra', 'pune', 'nclt', 'gurugram', 'gurgaon', 'noida', 'chennai',
+  'kolkata', 'ahmedabad', 'jaipur', 'lucknow', 'maharera',
   'china', 'beijing', 'shanghai', 'hong kong', 'singapore', 'japan', 'tokyo', 'korea',
   'seoul', 'taiwan', 'vietnam', 'thailand', 'malaysia', 'indonesia', 'philippines',
   'manila', 'australia', 'sydney', 'melbourne', 'new zealand', 'africa', 'nigeria',
@@ -341,6 +351,22 @@ export function classifyEmirate(headline: string, body = ''): Emirate {
 }
 
 /**
+ * Words that mark a story as *adjacent* to property but not about it.
+ *
+ * "car rental" is the reason this list exists: the rental feeds match on the bare word
+ * "rental", so "Top Best Luxury Car Rental Companies in Dubai in 2026" and "Dubai luxury
+ * car rental company expands to Miami" were ingested as rental-market coverage. A car
+ * rental market is not a property rental market, and no amount of tuning on the positive
+ * side fixes that — it needs an explicit exclusion.
+ */
+const NEGATIVE_TERMS = [
+  'car rental', 'car hire', 'rent a car', 'rental car', 'rental cars', 'luxury car',
+  'car showroom', 'automobile', 'automotive', 'airline', 'airlines', 'flight', 'flights',
+  'cruise', 'yacht charter', 'restaurant', 'recipe', 'football', 'cricket', 'tennis',
+  'celebrity', 'box office', 'streaming', 'video game',
+]
+
+/**
  * Is this item on-topic for its feed?
  *
  * `filterKeywords` is a whitelist and is deliberately not empty for any feed above:
@@ -348,10 +374,26 @@ export function classifyEmirate(headline: string, body = ''): Emirate {
  * politics. A quick check found "Erling Haaland becoming an Abu Dhabi home owner"
  * as the top hit for Abu Dhabi property — technically a property purchase, and
  * useless in a market-intelligence digest.
+ *
+ * Two guards now sit on top of it, both added because a browser review of the live feed
+ * found the whitelist alone was not enough:
+ *
+ *  1. NEGATIVE_TERMS, so "car rental" cannot satisfy a rental feed.
+ *
+ *  2. A PROPERTY LINK for the broad feeds. The keywords of the gulf-investment and finance
+ *     feeds include 'investment', 'billion', 'gulf' and 'market', which together match any
+ *     story about money moving in the region — "SoftBank seeks $100 billion from Gulf
+ *     investors for AI" arrived as property news on the strength of 'billion' + 'gulf',
+ *     and "UAE economy reaches Dh961.9 billion in H1" on 'economy'. A feed whose category
+ *     is not itself 'property' must therefore also show a property term. The property feeds
+ *     need no such guard: their keywords *are* property terms.
  */
 export function isRelevant(feed: NewsFeed, headline: string, excerpt: string): boolean {
   const haystack = `${headline} ${excerpt}`.toLowerCase()
-  return feed.filterKeywords.some((kw) => haystack.includes(kw.toLowerCase()))
+  if (NEGATIVE_TERMS.some((t) => haystack.includes(t))) return false
+  if (!feed.filterKeywords.some((kw) => haystack.includes(kw.toLowerCase()))) return false
+  if (feed.category === 'property') return true
+  return PROPERTY_TERMS.some((kw) => haystack.includes(kw))
 }
 
 /** Publisher names we would like to see, exposed for the UI's source panel. */
